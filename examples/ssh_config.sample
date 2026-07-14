@@ -1,0 +1,32 @@
+# Sample ~/.ssh/config demonstrating Wireline metadata.
+# Copy interesting blocks into your own ~/.ssh/config, or point Wireline at
+# this file for a demo (see README).
+
+Host *
+    ServerAliveInterval 60
+    AddKeysToAgent yes
+
+Host bastion-hk
+    # wireline: group=Hong Kong; desc=Jump host; auth=key
+    HostName 203.0.113.10
+    User ops
+    IdentityFile ~/.ssh/id_ed25519
+
+Host web-hk-1
+    # wireline: group=Hong Kong; desc=Web frontend 1; auth=key
+    HostName 10.10.0.11
+    User deploy
+    IdentityFile ~/.ssh/id_ed25519
+    ProxyJump bastion-hk
+
+Host db-sg-1
+    # wireline: group=Singapore; desc=Primary Postgres; auth=password; autosudo=true
+    HostName 10.20.0.5
+    User root
+    Port 2222
+
+Host lab
+    # wireline: desc=Personal test box; auth=key
+    HostName 192.168.1.50
+    User tao
+    IdentityFile ~/.ssh/id_rsa

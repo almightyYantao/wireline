@@ -1,0 +1,21 @@
+# SwiftPM / Xcode build output
+.build/
+build/
+DerivedData/
+*.xcodeproj
+*.xcworkspace
+.swiftpm/
+xcuserdata/
+
+# macOS
+.DS_Store
+
+# App artifacts
+*.app
+*.icns
+*.wlbk
+
+# Editor / local
+.vscode/
+.idea/
+*.swp
