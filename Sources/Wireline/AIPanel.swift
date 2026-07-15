@@ -9,6 +9,7 @@ struct AIPanelView: View {
     @Environment(Localizer.self) private var loc
     @Environment(HostStore.self) private var store
     @Environment(SnippetStore.self) private var snippets
+    @Environment(ForwardStore.self) private var forwards
     @State private var ai = AIConfig.shared
     let session: TerminalSession?
     let host: Host?
@@ -170,11 +171,12 @@ struct AIPanelView: View {
                     }
                     ForEach(messages) { msg in
                         MessageBubble(message: msg, session: session, loc: loc,
-                                      fontSize: ai.fontSize, onSave: saveAsSnippet)
+                                      fontSize: ai.fontSize, onSave: saveAsSnippet, onAction: executeAction)
                     }
                     if isStreaming || !streaming.isEmpty {
                         MessageBubble(message: AIMessage(role: .assistant, content: streaming.isEmpty ? "…" : streaming),
-                                      session: session, loc: loc, fontSize: ai.fontSize, onSave: saveAsSnippet)
+                                      session: session, loc: loc, fontSize: ai.fontSize,
+                                      onSave: saveAsSnippet, onAction: { _ in })
                             .id("streaming")
                     }
                     if let errorText {
@@ -378,6 +380,23 @@ struct AIPanelView: View {
         messages.append(AIMessage(role: .system, content: loc("已存为片段：\(name)", "Saved snippet: \(name)")))
     }
 
+    /// Execute a confirmed app action (create tunnel / add host).
+    private func executeAction(_ action: WLAction) {
+        switch action {
+        case let .portForward(host, lp, rh, rp):
+            let f = PortForward(hostAlias: host, localPort: lp, remoteHost: rh, remotePort: rp,
+                                bindAddress: "127.0.0.1", label: "AI")
+            forwards.add(f)
+            forwards.toggle(f, host: store.hosts.first { $0.alias == host })   // start it
+            messages.append(AIMessage(role: .system, content: loc("✓ 已创建并启动转发：本地 \(lp) → \(host):\(rh):\(rp)",
+                                                                   "✓ Tunnel started: local \(lp) → \(host):\(rh):\(rp)")))
+        case let .addHost(alias, hostname, user, port, group):
+            let h = Host(alias: alias, hostname: hostname, user: user, port: port, group: group)
+            store.upsert(h, password: nil)
+            messages.append(AIMessage(role: .system, content: loc("✓ 已新增主机：\(alias)", "✓ Host added: \(alias)")))
+        }
+    }
+
     private func contextOutput() -> String {
         let raw = session?.recentOutput ?? ""
         let trimmed = String(raw.suffix(4000))
@@ -512,6 +531,10 @@ struct AIPanelView: View {
             ctx += "所有可直接执行的 shell 命令必须放在 ```bash 代码块里，一行一条；解释放在代码块外。"
             ctx += "遇到高危操作（rm -rf、dd、mkfs、chmod -R 777、drop database 等）必须用 ⚠️ 明确警告。"
         }
+        // App-action capability (works in any mode).
+        ctx += "\n你还能操作本客户端：当用户想【建立端口转发/隧道】或【新增主机】时，输出一个 ```wl-action 代码块（内容为 JSON），用户确认后才执行。"
+        ctx += "端口转发：{\"action\":\"port_forward\",\"host\":\"<主机别名>\",\"localPort\":15432,\"remoteHost\":\"127.0.0.1\",\"remotePort\":5432}。"
+        ctx += "新增主机：{\"action\":\"add_host\",\"alias\":\"web1\",\"hostname\":\"1.2.3.4\",\"user\":\"root\",\"port\":22,\"group\":\"IAI\"}。每次仅一个 wl-action 块，并附一句简短说明。"
         if let host {
             ctx += "\n当前主机：alias=\(host.alias)"
             if let h = host.hostname { ctx += ", host=\(h)" }
@@ -532,6 +555,7 @@ private struct MessageBubble: View {
     let loc: Localizer
     let fontSize: Double
     var onSave: (String) -> Void = { _ in }
+    var onAction: (WLAction) -> Void = { _ in }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -553,7 +577,14 @@ private struct MessageBubble: View {
                     .overlay(alignment: .leading) { Rectangle().fill(WL.green.opacity(0.5)).frame(width: 2) }
             case .assistant:
                 ForEach(Array(segments(message.content).enumerated()), id: \.offset) { _, seg in
-                    if seg.isCode { codeBlock(seg.text) } else { prose(seg.text) }
+                    if seg.isCode {
+                        if !isActionJSON(seg.text) { codeBlock(seg.text) }   // card handles wl-action
+                    } else {
+                        prose(seg.text)
+                    }
+                }
+                if let action = WLAction.parse(from: message.content) {
+                    ActionCardView(action: action, loc: loc, onConfirm: onAction)
                 }
             }
         }
@@ -591,6 +622,12 @@ private struct MessageBubble: View {
         .padding(9)
         .background(WL.surface.opacity(0.6), in: RoundedRectangle(cornerRadius: 6))
         .overlay(RoundedRectangle(cornerRadius: 6).stroke(WL.border, lineWidth: 1))
+    }
+
+    /// Whether a code segment is a wl-action JSON payload (rendered as a card).
+    private func isActionJSON(_ text: String) -> Bool {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return t.hasPrefix("{") && t.contains("\"action\"")
     }
 
     /// Split content on ``` fences into prose/code segments (code strips an
