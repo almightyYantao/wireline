@@ -18,6 +18,13 @@ Your host data **always lives in the standard `~/.ssh/config` as the single sour
 
 A terminal-hacker look (monospace · green-on-black · themeable), a real built-in PTY terminal, a visual SFTP browser, graphical port forwarding, and even an app-wide animated wallpaper.
 
+## 📸 Screenshots
+
+<p align="center"><img src="docs/image/wallpaper.png" width="90%" alt="App-wide wallpaper & themes"></p>
+<p align="center">
+  <img src="docs/image/files.png" width="90%" alt="Dual-pane SFTP browser">
+</p>
+
 ---
 
 ## 🤖 AI Copilot
