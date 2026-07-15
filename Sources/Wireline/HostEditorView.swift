@@ -18,6 +18,7 @@ struct HostEditorView: View {
     @State private var group = ""
     @State private var descriptionText = ""
     @State private var autoSudo = false
+    @State private var launchArgs = ""
 
     private var isEditing: Bool { context.host != nil }
     private var originalAlias: String? { context.host?.alias }
@@ -42,6 +43,10 @@ struct HostEditorView: View {
                         field(loc("端口", "Port")) { input("22", $portText) }
                         field(loc("跳板机 (ProxyJump)", "Jump Host (ProxyJump)")) {
                             input(loc("可选", "optional bastion alias"), $proxyJump)
+                        }
+                        field(loc("启动参数", "Launch args")) {
+                            input(loc("可选，如 -o HostKeyAlgorithms=+ssh-rsa",
+                                      "optional, e.g. -o HostKeyAlgorithms=+ssh-rsa"), $launchArgs)
                         }
                     }
                     section(loc("认证", "Authentication")) {
@@ -139,6 +144,7 @@ struct HostEditorView: View {
         group = h.group ?? ""
         descriptionText = h.descriptionText ?? ""
         autoSudo = h.autoSudo
+        launchArgs = h.launchArgs ?? ""
         if authMethod == .password {
             password = (try? store.keychain.password(for: h.alias)) ?? ""
         }
@@ -153,6 +159,7 @@ struct HostEditorView: View {
         host.proxyJump = proxyJump.isEmpty ? nil : proxyJump
         host.group = group.isEmpty ? nil : group
         host.descriptionText = descriptionText.isEmpty ? nil : descriptionText
+        host.launchArgs = launchArgs.trimmingCharacters(in: .whitespaces).isEmpty ? nil : launchArgs.trimmingCharacters(in: .whitespaces)
         host.authMethod = authMethod
         if authMethod == .key {
             host.identityFile = identityFile.isEmpty ? nil : identityFile

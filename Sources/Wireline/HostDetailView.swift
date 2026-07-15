@@ -39,7 +39,7 @@ struct HostDetailView: View {
             }
             .padding(24)
         }
-        .background(WL.bg)
+        .background(.clear)
     }
 
     private var header: some View {

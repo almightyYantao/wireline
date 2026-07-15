@@ -7,7 +7,9 @@ struct QuickConnectView: View {
     @Environment(SessionStore.self) private var sessions
     @Environment(Localizer.self) private var loc
     @Environment(\.openWindow) private var openWindow
-    @Environment(\.dismiss) private var dismiss
+    /// Called to close the palette (it's an in-window overlay, not a sheet, so no
+    /// AppKit sheet machinery resets the custom title bar).
+    var onClose: () -> Void
     @State private var query = ""
     @State private var highlighted = 0
     @State private var results: [Host] = []
@@ -68,7 +70,7 @@ struct QuickConnectView: View {
         .background(WL.bg)
         .preferredColorScheme(.dark)
         .onAppear { focused = true; recompute() }
-        .onExitCommand { dismiss() }
+        .onExitCommand { onClose() }
     }
 
     private func connectHighlighted() {
@@ -78,7 +80,7 @@ struct QuickConnectView: View {
 
     private func connect(_ host: Host) {
         connectHost(host, store: store, sessions: sessions, openWindow: openWindow)
-        dismiss()
+        onClose()
     }
 }
 

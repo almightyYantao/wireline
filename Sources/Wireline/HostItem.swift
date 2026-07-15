@@ -28,7 +28,10 @@ struct HostItem: View {
     }
     private var authSymbol: String { host.resolvedAuthMethod == .key ? "key.fill" : "lock.fill" }
     private var rowBackground: Color {
-        (isActive || isSelected) ? WL.surface : (hover ? WL.surface.opacity(0.5) : Color.clear)
+        // Keep the selected/active highlight translucent so the app wallpaper
+        // shows through it, matching the rest of the chrome.
+        (isActive || isSelected) ? WL.surface.opacity(0.55)
+                                  : (hover ? WL.surface.opacity(0.3) : Color.clear)
     }
 
     var body: some View {

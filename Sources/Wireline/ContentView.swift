@@ -5,6 +5,11 @@ import WirelineCore
 extension Notification.Name {
     static let focusSearch = Notification.Name("wireline.focusSearch")
     static let showQuickConnect = Notification.Name("wireline.showQuickConnect")
+    static let toggleSidebar = Notification.Name("wireline.toggleSidebar")
+    static let editHost = Notification.Name("wireline.editHost")
+    static let newConnection = Notification.Name("wireline.newConnection")
+    static let selectTab = Notification.Name("wireline.selectTab")
+    static let toggleAI = Notification.Name("wireline.toggleAI")
 }
 
 /// Right-panel mode. `nil` = SSH (terminal sessions).
@@ -31,42 +36,63 @@ struct ContentView: View {
     @ObserveInjection var inject
 
     var body: some View {
-        HStack(spacing: 0) {
-            if sidebarCollapsed {
-                collapsedSidebarStrip
-            } else {
-                LeftPanel(query: $query, operation: $operation, selectedAlias: $selectedAlias,
-                          onAdd: { editing = HostEditContext(host: nil, defaultGroup: $0) },
-                          onEdit: { editing = HostEditContext(host: $0) },
-                          onBackup: { showBackup = true },
-                          onOpenFiles: { fileHost = $0; operation = .files },
-                          onCollapse: toggleSidebar)
-                    .frame(width: 340)
-                    .transition(.move(edge: .leading))
+        ZStack {
+            // App-wide wallpaper: the bottom-most layer, filling the entire window
+            // (including under the transparent title bar) so every translucent
+            // panel above composites over it uniformly.
+            WallpaperView(path: store.terminalBgImagePath)
+                .ignoresSafeArea()
+            HStack(spacing: 0) {
+                if sidebarCollapsed {
+                    collapsedSidebarStrip
+                } else {
+                    LeftPanel(query: $query, operation: $operation, selectedAlias: $selectedAlias,
+                              onAdd: { editing = HostEditContext(host: nil, defaultGroup: $0) },
+                              onEdit: { editing = HostEditContext(host: $0) },
+                              onBackup: { showBackup = true },
+                              onOpenFiles: { fileHost = $0; operation = .files },
+                              onCollapse: toggleSidebar)
+                        .frame(width: 340)
+                }
+                Rectangle().fill(WL.border).frame(width: 1)
+                RightPanel(operation: $operation, fileHost: $fileHost, selectedAlias: $selectedAlias,
+                           onEditHost: { editing = HostEditContext(host: $0) },
+                           sidebarCollapsed: sidebarCollapsed)
             }
-            Rectangle().fill(WL.border).frame(width: 1)
-            RightPanel(operation: $operation, fileHost: $fileHost, selectedAlias: $selectedAlias,
-                       onEditHost: { editing = HostEditContext(host: $0) })
+            .ignoresSafeArea()
+
+            if showQuickConnect {
+                quickConnectOverlay
+            }
         }
-        .animation(.easeInOut(duration: 0.22), value: sidebarCollapsed)
-        .background(WL.bg)
         .wlMenuHost()
         .background(WindowAccessor { w in chrome.attach(to: w) })
         .id(palette.version)   // rebuild the tree when the theme recolors the UI
         .preferredColorScheme(.dark)
         .onChange(of: sessions.sessions.count) { old, new in
-            // A new session opened (⌘T / menu bar / quick connect / host click):
-            // jump to the terminal view so it's visible and focused.
-            if new > old { operation = nil }
+            // A new session opened (⌘T / quick connect / host connect): jump to
+            // the terminal view and auto-collapse the sidebar for more room.
+            if new > old {
+                operation = nil
+                sidebarCollapsed = true
+                UserDefaults.standard.set(true, forKey: "sidebarCollapsed")
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .toggleSidebar)) { _ in toggleSidebar() }
+        .onReceive(NotificationCenter.default.publisher(for: .editHost)) { _ in
+            if let host = currentHost { editing = HostEditContext(host: host) }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .newConnection)) { _ in
+            editing = HostEditContext(host: nil)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .selectTab)) { note in
+            if let n = note.object as? Int { sessions.selectIndex(n) }
         }
         .sheet(item: $editing) { ctx in
             HostEditorView(context: ctx).environment(store)
         }
         .sheet(isPresented: $showBackup) {
             BackupView().environment(store)
-        }
-        .sheet(isPresented: $showQuickConnect) {
-            QuickConnectView().frame(width: 620, height: 420)
         }
         .onReceive(NotificationCenter.default.publisher(for: .showQuickConnect)) { _ in
             showQuickConnect = true
@@ -79,8 +105,31 @@ struct ContentView: View {
         .enableInjection()
     }
 
+    /// The host currently in focus — the selected one, else the active session's.
+    private var currentHost: Host? {
+        let alias = selectedAlias ?? sessions.activeSession?.alias
+        return alias.flatMap { a in store.hosts.first { $0.alias == a } }
+    }
+
+    /// The ⌘K quick-connect palette, as an in-window overlay (not a sheet) so it
+    /// never triggers the AppKit title-bar reset / flash.
+    private var quickConnectOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.4)
+                .ignoresSafeArea()
+                .onTapGesture { showQuickConnect = false }
+            QuickConnectView(onClose: { showQuickConnect = false })
+                .frame(width: 620, height: 420)
+                .background(WL.bg, in: RoundedRectangle(cornerRadius: 12))
+                .overlay(RoundedRectangle(cornerRadius: 12).stroke(WL.border, lineWidth: 1))
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .shadow(color: .black.opacity(0.5), radius: 24, y: 8)
+        }
+        .transition(.opacity)
+    }
+
     private func toggleSidebar() {
-        withAnimation(.easeInOut(duration: 0.22)) { sidebarCollapsed.toggle() }
+        sidebarCollapsed.toggle()
         UserDefaults.standard.set(sidebarCollapsed, forKey: "sidebarCollapsed")
     }
 
@@ -97,7 +146,7 @@ struct ContentView: View {
         }
         .frame(width: 34)
         .frame(maxHeight: .infinity)
-        .background(WL.bg)
+        .background(WL.bg.opacity(store.terminalOpacity))
     }
 }
 
@@ -156,7 +205,7 @@ struct LeftPanel: View {
             Rectangle().fill(WL.border).frame(height: 1)
             bottomBar
         }
-        .background(WL.bg)
+        .background(WL.bg.opacity(store.terminalOpacity))
         .sheet(isPresented: $showNewGroup) {
             NewGroupSheet { name in store.createGroup(name) }
         }
@@ -323,7 +372,7 @@ struct LeftPanel: View {
                 Text(loc("$ 新建连接", "$ new host")).font(WL.body).foregroundStyle(WL.green)
             }.buttonStyle(.plain)
             Spacer()
-            SettingsLink {
+            Button { openWindow(id: "settings") } label: {
                 Text("[\(loc("设置", "Settings"))]").font(WL.small).foregroundStyle(WL.textDim)
             }.buttonStyle(.plain)
         }

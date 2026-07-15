@@ -14,6 +14,9 @@ struct SnippetsSheet: View {
     @State private var draftName = ""
     @State private var draftCommand = ""
     @State private var isEditorOpen = false
+    /// The snippet awaiting placeholder input, plus the values typed so far.
+    @State private var filling: Snippet?
+    @State private var fillValues: [String: String] = [:]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -26,13 +29,15 @@ struct SnippetsSheet: View {
             .padding(.horizontal, 20).padding(.top, 22).padding(.bottom, 14)
             Rectangle().fill(WL.border).frame(height: 1)
 
-            if isEditorOpen {
+            if let snippet = filling {
+                fillForm(snippet)
+            } else if isEditorOpen {
                 editorForm
             } else {
                 list
             }
         }
-        .frame(width: 460, height: 420)
+        .frame(width: 460, height: 480)
         .background(WL.bg)
         .preferredColorScheme(.dark)
     }
@@ -42,7 +47,7 @@ struct SnippetsSheet: View {
             LazyVStack(spacing: 0) {
                 ForEach(store.snippets) { snippet in
                     SnippetRow(snippet: snippet,
-                               onRun: { onRun(snippet.command); dismiss() },
+                               onRun: { run(snippet) },
                                onEdit: { openEditor(snippet) },
                                onDelete: { store.remove(snippet) })
                     Rectangle().fill(WL.border.opacity(0.5)).frame(height: 1)
@@ -56,14 +61,65 @@ struct SnippetsSheet: View {
         }
     }
 
+    /// Run a snippet — straight through if it has no placeholders, otherwise open
+    /// the fill-in form first.
+    private func run(_ snippet: Snippet) {
+        let names = snippet.placeholders
+        if names.isEmpty {
+            onRun(snippet.command); dismiss()
+        } else {
+            fillValues = Dictionary(uniqueKeysWithValues: names.map { ($0, "") })
+            filling = snippet
+        }
+    }
+
+    @ViewBuilder
+    private func fillForm(_ snippet: Snippet) -> some View {
+        let names = snippet.placeholders
+        VStack(alignment: .leading, spacing: 14) {
+            Text(loc("填写参数", "Fill in parameters"))
+                .font(WL.small).foregroundStyle(WL.textDim)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    ForEach(names, id: \.self) { name in
+                        field(name) {
+                            multilineInput(Binding(
+                                get: { fillValues[name] ?? "" },
+                                set: { fillValues[name] = $0 }
+                            ), height: 60)
+                        }
+                    }
+                }
+            }
+            Text(snippet.filled(with: fillValues))
+                .font(WL.mono(11)).foregroundStyle(WL.green.opacity(0.8))
+                .padding(8).frame(maxWidth: .infinity, alignment: .leading)
+                .background(WL.surface.opacity(0.5), in: RoundedRectangle(cornerRadius: 5))
+                .textSelection(.enabled)
+            HStack(spacing: 18) {
+                Spacer()
+                BracketButton(loc("取消", "Cancel")) { filling = nil }
+                Button {
+                    onRun(snippet.filled(with: fillValues)); dismiss()
+                } label: {
+                    Text("[\(loc("运行", "Run"))]").font(WL.small).foregroundStyle(WL.green)
+                }.buttonStyle(.plain)
+            }
+        }
+        .padding(20)
+    }
+
     private var editorForm: some View {
         VStack(alignment: .leading, spacing: 14) {
             field(loc("名称", "Name")) {
                 input(loc("如 查看磁盘", "e.g. Disk usage"), $draftName)
             }
-            field(loc("命令", "Command")) {
-                input("df -h", $draftCommand)
+            field(loc("命令（可多行）", "Command (multi-line)")) {
+                multilineInput($draftCommand)
             }
+            Text(loc("每行一条命令，按顺序执行。用 {{参数名}} 作为占位符，运行时会弹窗让你填写。",
+                     "One command per line, run in order. Use {{name}} as a placeholder — you'll be prompted to fill it in."))
+                .font(WL.caption).foregroundStyle(WL.textDim)
             Spacer()
             HStack(spacing: 18) {
                 Spacer()
@@ -110,6 +166,18 @@ struct SnippetsSheet: View {
         TextField("", text: text, prompt: Text(prompt).foregroundStyle(WL.textDim))
             .textFieldStyle(.plain).font(WL.body).foregroundStyle(WL.textPrimary)
             .padding(.horizontal, 10).padding(.vertical, 7)
+            .background(WL.surface, in: RoundedRectangle(cornerRadius: 5))
+            .overlay(RoundedRectangle(cornerRadius: 5).stroke(WL.border, lineWidth: 1))
+    }
+
+    private func multilineInput(_ text: Binding<String>, height: CGFloat = 130) -> some View {
+        TextEditor(text: text)
+            .textEditorStyle(.plain)
+            .font(WL.mono(12))
+            .foregroundStyle(WL.textPrimary)
+            .scrollContentBackground(.hidden)
+            .padding(.horizontal, 6).padding(.vertical, 5)
+            .frame(height: height)
             .background(WL.surface, in: RoundedRectangle(cornerRadius: 5))
             .overlay(RoundedRectangle(cornerRadius: 5).stroke(WL.border, lineWidth: 1))
     }

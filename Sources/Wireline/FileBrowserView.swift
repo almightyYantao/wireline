@@ -19,6 +19,7 @@ struct FileBrowserView: View {
     @State private var newName = ""
     @State private var renaming: SFTPEntry?
     @State private var renameText = ""
+    @State private var aiEditEntry: SFTPEntry?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -50,6 +51,12 @@ struct FileBrowserView: View {
             TextField(loc("新名称", "New name"), text: $renameText)
             Button(loc("确定", "OK")) { if let e = renaming { model?.rename(e, to: renameText) }; renaming = nil }
             Button(loc("取消", "Cancel"), role: .cancel) { renaming = nil }
+        }
+        .sheet(item: $aiEditEntry) { entry in
+            if let m = model {
+                AIFileEditView(model: m, entry: entry, hostName: host.alias) { aiEditEntry = nil }
+                    .environment(loc)
+            }
         }
     }
 
@@ -106,6 +113,9 @@ struct FileBrowserView: View {
                 entry.isDir
                     ? .item(loc("打开", "Open"), systemImage: "folder") { model.open(entry) }
                     : .item(loc("下载到本地 →", "Download →"), systemImage: "arrow.down.circle") { model.download(entry, toDirectory: local.url) },
+                entry.isDir
+                    ? .divider
+                    : .item(loc("AI 改…", "AI edit…"), systemImage: "sparkles") { aiEditEntry = entry },
                 .item(loc("重命名…", "Rename…"), systemImage: "pencil") { renameText = entry.name; renaming = entry },
                 .divider,
                 .item(loc("删除", "Delete"), systemImage: "trash", destructive: true) { model.delete(entry) }

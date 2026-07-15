@@ -290,6 +290,24 @@ final class FileBrowserModel {
         }
     }
 
+    /// Read a remote text file into a string (for AI editing).
+    func readRemoteText(_ e: SFTPEntry) async -> String? {
+        guard !e.isDir else { return nil }
+        do { return String(data: try await conn.download(join(path, e.name)), encoding: .utf8) }
+        catch { status = "读取失败：\(friendly(error))"; return nil }
+    }
+
+    /// Overwrite a remote file with new text (AI edit apply), then refresh.
+    @discardableResult
+    func writeRemoteText(_ e: SFTPEntry, _ text: String) async -> Bool {
+        do {
+            try await conn.upload(join(path, e.name), data: Data(text.utf8))
+            await load(path)
+            status = "已写回：\(e.name)"
+            return true
+        } catch { status = "写回失败：\(friendly(error))"; return false }
+    }
+
     func disconnect() {
         connected = false
         Task { await conn.close() }

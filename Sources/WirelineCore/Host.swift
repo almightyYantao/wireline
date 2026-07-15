@@ -36,6 +36,9 @@ public struct Host: Identifiable, Codable, Sendable, Equatable {
     public var authMethod: AuthMethod
     /// Run `sudo -i` automatically after login, reusing the stored password.
     public var autoSudo: Bool
+    /// Extra `ssh` command-line arguments prepended before the alias, e.g.
+    /// `-o HostKeyAlgorithms=+ssh-rsa`. Some legacy hosts need these to connect.
+    public var launchArgs: String?
 
     public var id: String { alias }
 
@@ -50,7 +53,8 @@ public struct Host: Identifiable, Codable, Sendable, Equatable {
         group: String? = nil,
         descriptionText: String? = nil,
         authMethod: AuthMethod = .unknown,
-        autoSudo: Bool = false
+        autoSudo: Bool = false,
+        launchArgs: String? = nil
     ) {
         self.alias = alias
         self.hostname = hostname
@@ -63,6 +67,12 @@ public struct Host: Identifiable, Codable, Sendable, Equatable {
         self.descriptionText = descriptionText
         self.authMethod = authMethod
         self.autoSudo = autoSudo
+        self.launchArgs = launchArgs
+    }
+
+    /// `launchArgs` split into individual command-line tokens.
+    public var launchArgTokens: [String] {
+        (launchArgs ?? "").split(whereSeparator: { $0 == " " || $0 == "\t" }).map(String.init)
     }
 
     /// Effective port, defaulting to the SSH standard 22.
@@ -81,7 +91,7 @@ public struct Host: Identifiable, Codable, Sendable, Equatable {
     // Codable: tuples aren't Codable, so flatten extraOptions. --------------
     private enum CodingKeys: String, CodingKey {
         case alias, hostname, user, port, identityFile, proxyJump
-        case extraOptions, group, descriptionText, authMethod, autoSudo
+        case extraOptions, group, descriptionText, authMethod, autoSudo, launchArgs
     }
 
     private struct Option: Codable { var keyword: String; var value: String }
@@ -100,6 +110,7 @@ public struct Host: Identifiable, Codable, Sendable, Equatable {
         descriptionText = try c.decodeIfPresent(String.self, forKey: .descriptionText)
         authMethod = try c.decodeIfPresent(AuthMethod.self, forKey: .authMethod) ?? .unknown
         autoSudo = try c.decodeIfPresent(Bool.self, forKey: .autoSudo) ?? false
+        launchArgs = try c.decodeIfPresent(String.self, forKey: .launchArgs)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -116,6 +127,7 @@ public struct Host: Identifiable, Codable, Sendable, Equatable {
         try c.encodeIfPresent(descriptionText, forKey: .descriptionText)
         try c.encode(authMethod, forKey: .authMethod)
         try c.encode(autoSudo, forKey: .autoSudo)
+        try c.encodeIfPresent(launchArgs, forKey: .launchArgs)
     }
 
     public static func == (lhs: Host, rhs: Host) -> Bool {
@@ -129,6 +141,7 @@ public struct Host: Identifiable, Codable, Sendable, Equatable {
         lhs.descriptionText == rhs.descriptionText &&
         lhs.authMethod == rhs.authMethod &&
         lhs.autoSudo == rhs.autoSudo &&
+        lhs.launchArgs == rhs.launchArgs &&
         lhs.extraOptions.map(\.keyword) == rhs.extraOptions.map(\.keyword) &&
         lhs.extraOptions.map(\.value) == rhs.extraOptions.map(\.value)
     }

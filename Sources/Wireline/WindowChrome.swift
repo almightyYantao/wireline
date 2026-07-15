@@ -22,16 +22,21 @@ struct WindowAccessor: NSViewRepresentable {
 @MainActor
 final class WindowChromeController {
     private var monitor: Any?
+    private weak var window: NSWindow?
 
     func attach(to window: NSWindow) {
-        window.titleVisibility = .hidden
-        window.titlebarAppearsTransparent = true
-        window.styleMask.insert(.fullSizeContentView)
-        window.isMovableByWindowBackground = false
+        self.window = window
+        // The title bar itself is hidden via SwiftUI's `.windowStyle(.hiddenTitleBar)`
+        // (persistent across sheets / window switches). Here we only tint the
+        // window background (a fallback behind the wallpaper) and remove the
+        // separator; these don't get clobbered.
         window.titlebarSeparatorStyle = .none
         window.backgroundColor = NSColor(Palette.shared.bg)
         installZoomMonitor(window)
     }
+
+    /// No-op kept for call sites; the hidden title bar is now SwiftUI-managed.
+    func reapply() {}
 
     private func installZoomMonitor(_ window: NSWindow) {
         guard monitor == nil else { return }

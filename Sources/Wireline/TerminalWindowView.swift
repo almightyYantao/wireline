@@ -48,20 +48,18 @@ struct TerminalHostView: NSViewRepresentable {
             term.font = f
         }
 
-        // Background: image if set, else the theme background color.
-        if let path = store.terminalBgImagePath, let image = NSImage(contentsOfFile: path) {
-            container.layer?.contents = image
-            container.layer?.contentsGravity = .resizeAspectFill
-            container.layer?.backgroundColor = NSColor.black.cgColor
-        } else {
-            container.layer?.contents = nil
-            container.layer?.backgroundColor = theme.backgroundNS.cgColor
-        }
-
-        // Terminal background alpha lets the background show through when < 1.
+        // The app-wide wallpaper sits behind everything. The terminal itself adds
+        // NO background tint — it stays fully clear so the single translucent
+        // `WL.bg.opacity(opacity)` layer painted by the enclosing RightPanel shows
+        // through, exactly matching the sidebar's shade (no double-tinting).
+        _ = opacity
+        container.layer?.contents = nil
+        container.layer?.backgroundColor = NSColor.clear.cgColor
+        container.layer?.isOpaque = false
         term.wantsLayer = true
-        term.layer?.isOpaque = opacity >= 1.0
-        term.nativeBackgroundColor = theme.backgroundNS.withAlphaComponent(opacity)
+        term.layer?.isOpaque = false
+        term.nativeBackgroundColor = .clear
+        term.layer?.backgroundColor = NSColor.clear.cgColor
         DispatchQueue.main.async { container.window?.makeFirstResponder(term) }
     }
 }

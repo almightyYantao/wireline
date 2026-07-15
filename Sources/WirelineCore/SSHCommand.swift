@@ -13,7 +13,7 @@ public enum SSHCommand {
     /// prompt instead of stopping on an interactive yes/no question — which also
     /// lets the built-in terminal auto-fill the stored password reliably.
     public static func interactiveArguments(for host: Host) -> [String] {
-        ["-o", "StrictHostKeyChecking=accept-new", host.alias]
+        ["-o", "StrictHostKeyChecking=accept-new"] + host.launchArgTokens + [host.alias]
     }
 
     /// Arguments for running a single non-interactive command on a host.

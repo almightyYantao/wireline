@@ -160,6 +160,7 @@ public enum SSHConfig {
             case "desc": host.descriptionText = value.isEmpty ? nil : value
             case "auth": host.authMethod = AuthMethod(rawValue: value) ?? .unknown
             case "autosudo": host.autoSudo = (value == "true" || value == "1")
+            case "args": host.launchArgs = value.isEmpty ? nil : value
             default: break
             }
         }
@@ -202,6 +203,7 @@ public enum SSHConfig {
         if let d = host.descriptionText, !d.isEmpty { parts.append("desc=\(metaEscape(d))") }
         if host.authMethod != .unknown { parts.append("auth=\(host.authMethod.rawValue)") }
         if host.autoSudo { parts.append("autosudo=true") }
+        if let a = host.launchArgs, !a.isEmpty { parts.append("args=\(metaEscape(a))") }
         guard !parts.isEmpty else { return nil }
         return "\(metadataPrefix) \(parts.joined(separator: "; "))"
     }

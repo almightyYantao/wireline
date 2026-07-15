@@ -1,0 +1,612 @@
+import SwiftUI
+import WirelineCore
+
+/// The AI assistant panel: a context-aware chat with quick actions for the four
+/// MVP capabilities (NL→command, diagnose error, explain, summarize). Runnable
+/// commands come back in fenced code blocks, each with an "insert into terminal"
+/// button — nothing ever auto-runs.
+struct AIPanelView: View {
+    @Environment(Localizer.self) private var loc
+    @Environment(HostStore.self) private var store
+    @Environment(SnippetStore.self) private var snippets
+    @State private var ai = AIConfig.shared
+    let session: TerminalSession?
+    let host: Host?
+    var onClose: () -> Void
+
+    @State private var messages: [AIMessage] = []      // shown in the transcript
+    @State private var modelMessages: [AIMessage] = []  // what the model actually sees
+    @State private var input = ""
+    @State private var streaming = ""
+    @State private var isStreaming = false
+    @State private var errorText: String?
+    @State private var task: Task<Void, Never>?
+    @State private var agentSteps = 0
+    @State private var chats = AIChatStore.shared
+    @State private var loadedKey: String?
+    @State private var sessionTokens = 0
+    @State private var lastPromptTokens = 0
+    @State private var useFast = false
+    @State private var pendingDanger: String?           // command awaiting confirmation
+    @FocusState private var inputFocused: Bool
+
+    private let maxAgentSteps = 8
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+            Rectangle().fill(WL.border).frame(height: 1)
+            quickActions
+            Rectangle().fill(WL.border).frame(height: 1)
+            conversation
+            Rectangle().fill(WL.border).frame(height: 1)
+            inputBar
+        }
+        .frame(width: 380)
+        .frame(maxHeight: .infinity)
+        .background(WL.bg.opacity(store.terminalOpacity))
+        .overlay(Rectangle().stroke(WL.border, lineWidth: 1))
+        .onAppear { inputFocused = true; loadConvo() }
+        .onChange(of: conversationKey) { _, _ in loadConvo() }
+        .onChange(of: messages) { persistConvo() }
+        .onDisappear { task?.cancel(); persistConvo() }
+        .alert(loc("确认执行高危命令？", "Run this risky command?"),
+               isPresented: Binding(get: { pendingDanger != nil },
+                                    set: { if !$0 { pendingDanger = nil } })) {
+            Button(loc("取消", "Cancel"), role: .cancel) { declineDanger() }
+            Button(loc("仍然执行", "Run anyway"), role: .destructive) {
+                if let c = pendingDanger { pendingDanger = nil; executeAndContinue(c) }
+            }
+        } message: {
+            Text(pendingDanger ?? "")
+        }
+    }
+
+    private func declineDanger() {
+        pendingDanger = nil
+        messages.append(AIMessage(role: .system, content: loc("已取消执行。", "Execution cancelled.")))
+        isStreaming = false
+        agentSteps = 0
+    }
+
+    // MARK: header
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 10) {
+                Image(systemName: "sparkles").font(.system(size: 13)).foregroundStyle(WL.green)
+                Text(loc("AI 助手", "AI Assistant")).font(WL.body.weight(.semibold)).foregroundStyle(WL.textPrimary)
+                Spacer()
+                if ai.hasFastModel {
+                    Button { useFast.toggle() } label: {
+                        Text("\(useFast ? "[x]" : "[ ]") \(loc("快速", "Fast"))")
+                            .font(WL.small).foregroundStyle(useFast ? WL.green : WL.textDim)
+                    }
+                    .buttonStyle(.plain)
+                    .help(loc("用便宜/快速模型跑这条", "Use the fast/cheap model"))
+                }
+                // Bracket checkbox — matches the app's [button] motif, clearly clickable.
+                Button { ai.agentMode.toggle() } label: {
+                    Text("\(ai.agentMode ? "[x]" : "[ ]") \(loc("自动执行", "Agent"))")
+                        .font(WL.small)
+                        .foregroundStyle(ai.agentMode ? WL.green : WL.textDim)
+                }
+                .buttonStyle(.plain)
+                .help(loc("开启后 AI 会自动执行命令并根据输出继续", "Let AI run commands and continue from their output"))
+                if !messages.isEmpty {
+                    BracketButton(loc("清空", "Clear")) {
+                        messages.removeAll(); modelMessages.removeAll(); errorText = nil
+                        sessionTokens = 0; chats.clear(conversationKey)
+                    }
+                }
+                Button(action: onClose) {
+                    Image(systemName: "xmark").font(.system(size: 11, weight: .bold)).foregroundStyle(WL.textDim)
+                }.buttonStyle(.plain)
+            }
+            if sessionTokens > 0 {
+                Text(usageText).font(WL.caption).foregroundStyle(WL.textDim)
+            }
+        }
+        .padding(.horizontal, 14).padding(.top, 32).padding(.bottom, 10)
+    }
+
+    private var usageText: String {
+        let tokStr = sessionTokens >= 1000 ? String(format: "%.1fk", Double(sessionTokens) / 1000) : "\(sessionTokens)"
+        var s = "≈ \(tokStr) tokens"
+        if ai.pricePer1k > 0 {
+            let cost = Double(sessionTokens) / 1000 * ai.pricePer1k
+            s += String(format: " · ≈ %.4f", cost)
+        }
+        return s
+    }
+
+    // MARK: quick actions
+
+    private var quickActions: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                chip(loc("生成命令", "Command"), "terminal") { generateCommand() }
+                chip(loc("诊断报错", "Diagnose"), "stethoscope") { diagnose() }
+                chip(loc("解释", "Explain"), "text.magnifyingglass") { explain() }
+                chip(loc("总结", "Summarize"), "list.bullet.rectangle") { summarize() }
+                chip(loc("找命令", "History"), "clock.arrow.circlepath") {
+                    input = "@历史 "; inputFocused = true
+                }
+                chip(loc("存脚本", "To script"), "square.and.arrow.down") { saveScript() }
+            }
+            .padding(.horizontal, 12).padding(.vertical, 8)
+        }
+    }
+
+    private func chip(_ title: String, _ symbol: String, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                Image(systemName: symbol).font(.system(size: 9))
+                Text(title).font(WL.caption)
+            }
+            .foregroundStyle(WL.textPrimary)
+            .padding(.horizontal, 8).padding(.vertical, 5)
+            .background(WL.surface.opacity(0.6), in: RoundedRectangle(cornerRadius: 5))
+            .overlay(RoundedRectangle(cornerRadius: 5).stroke(WL.border, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .disabled(isStreaming)
+    }
+
+    // MARK: conversation
+
+    private var conversation: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 12) {
+                    if messages.isEmpty && streaming.isEmpty {
+                        emptyState
+                    }
+                    ForEach(messages) { msg in
+                        MessageBubble(message: msg, session: session, loc: loc,
+                                      fontSize: ai.fontSize, onSave: saveAsSnippet)
+                    }
+                    if isStreaming || !streaming.isEmpty {
+                        MessageBubble(message: AIMessage(role: .assistant, content: streaming.isEmpty ? "…" : streaming),
+                                      session: session, loc: loc, fontSize: ai.fontSize, onSave: saveAsSnippet)
+                            .id("streaming")
+                    }
+                    if let errorText {
+                        Text(errorText).font(WL.caption).foregroundStyle(WL.red)
+                            .padding(10)
+                            .background(WL.red.opacity(0.1), in: RoundedRectangle(cornerRadius: 6))
+                    }
+                    // Invisible bottom anchor: scrolling to it always sticks the
+                    // view to the very bottom as content streams in / grows.
+                    Color.clear.frame(height: 1).id("bottom")
+                }
+                .padding(12)
+            }
+            .onChange(of: streaming) { stickToBottom(proxy) }
+            .onChange(of: messages.count) { stickToBottom(proxy) }
+            .onChange(of: errorText) { stickToBottom(proxy) }
+            .onAppear { stickToBottom(proxy) }
+        }
+    }
+
+    private func stickToBottom(_ proxy: ScrollViewProxy) {
+        withAnimation(.easeOut(duration: 0.12)) { proxy.scrollTo("bottom", anchor: .bottom) }
+    }
+
+    private var emptyState: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if !ai.isConfigured {
+                Text(loc("尚未配置 AI。请到 设置 → AI 填写服务地址与 API Key。",
+                        "AI isn't configured. Open Settings → AI to set the endpoint & API key."))
+                    .font(WL.caption).foregroundStyle(WL.amber)
+            } else {
+                Text(loc("问我任何终端 / 运维问题，或用上面的快捷动作。",
+                        "Ask me anything about the terminal, or use the quick actions above."))
+                    .font(WL.caption).foregroundStyle(WL.textDim)
+                Text(loc("生成的命令会以代码块给出，点「插入 / 运行」由你决定执行。",
+                        "Commands come as code blocks — Insert or Run as you decide."))
+                    .font(WL.caption).foregroundStyle(WL.textDim)
+                Text(loc("可用 @输出 引用终端输出、@主机 引用主机信息、@历史 引用命令历史。",
+                        "Use @output, @host, or @history to inject that context."))
+                    .font(WL.caption).foregroundStyle(WL.textDim)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    // MARK: input
+
+    private var inputBar: some View {
+        HStack(spacing: 8) {
+            TextField(loc("输入问题…", "Ask…"), text: $input, axis: .vertical)
+                .textFieldStyle(.plain).font(WL.body).foregroundStyle(WL.textPrimary)
+                .lineLimit(1...4)
+                .focused($inputFocused)
+                .onSubmit { sendFreeform() }
+            if isStreaming {
+                Button { task?.cancel(); isStreaming = false; agentSteps = 0 } label: {
+                    Image(systemName: "stop.fill").font(.system(size: 12)).foregroundStyle(WL.red)
+                }.buttonStyle(.plain)
+            } else {
+                Button(action: sendFreeform) {
+                    Image(systemName: "arrow.up.circle.fill").font(.system(size: 16))
+                        .foregroundStyle(input.trimmingCharacters(in: .whitespaces).isEmpty ? WL.textDim : WL.green)
+                }
+                .buttonStyle(.plain)
+                .disabled(input.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        }
+        .padding(.horizontal, 12).padding(.vertical, 10)
+    }
+
+    // MARK: actions
+
+    // MARK: per-host persistence
+
+    /// Conversation key: each host keeps its own history; local shells share one.
+    private var conversationKey: String { host?.alias ?? "__local__" }
+
+    private func loadConvo() {
+        // Save the previous conversation before switching.
+        if let loadedKey, loadedKey != conversationKey {
+            chats.save(loadedKey, display: messages, model: modelMessages)
+        }
+        let convo = chats.load(conversationKey)
+        messages = convo.display
+        modelMessages = convo.model
+        loadedKey = conversationKey
+        errorText = nil
+    }
+
+    private func persistConvo() {
+        chats.save(conversationKey, display: messages, model: modelMessages)
+    }
+
+    // MARK: @-references
+
+    /// Expand `@输出/@output` and `@主机/@host` mentions into real context so the
+    /// user can precisely control what the model sees.
+    private func expandReferences(_ text: String) -> String {
+        var out = text
+        if out.range(of: #"@(输出|output)"#, options: .regularExpression) != nil {
+            out = out.replacingOccurrences(of: #"@(输出|output)"#,
+                                           with: "\n\n[终端最近输出]\n" + contextOutput(),
+                                           options: .regularExpression)
+        }
+        if out.range(of: #"@(主机|host)"#, options: .regularExpression) != nil {
+            var info = "(本地 shell)"
+            if let host {
+                info = "alias=\(host.alias), host=\(host.connectHostname), user=\(host.user ?? "-"), port=\(host.effectivePort)"
+            }
+            out = out.replacingOccurrences(of: #"@(主机|host)"#,
+                                           with: "\n\n[当前主机] " + info,
+                                           options: .regularExpression)
+        }
+        return out
+    }
+
+    private func sendFreeform() {
+        let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, !isStreaming else { return }
+        input = ""
+        beginUserTurn(text)
+        isStreaming = true; streaming = ""
+        task = Task {
+            let prompt = await expandReferencesAsync(text)
+            await MainActor.run {
+                modelMessages.append(AIMessage(role: .user, content: prompt))
+                startTurn()
+            }
+        }
+    }
+
+    /// Async reference expansion — `@历史/@history` fetches the host's shell
+    /// history out-of-band so the model can recall past commands semantically.
+    private func expandReferencesAsync(_ text: String) async -> String {
+        var out = expandReferences(text)
+        if out.range(of: #"@(历史|history)"#, options: .regularExpression) != nil {
+            let hist = await fetchHistory()
+            out = out.replacingOccurrences(of: #"@(历史|history)"#,
+                                           with: "\n\n[命令历史]\n" + hist,
+                                           options: .regularExpression)
+        }
+        return out
+    }
+
+    private func fetchHistory() async -> String {
+        guard let session else { return "(无会话)" }
+        let cmd = "tail -n 300 ~/.zsh_history 2>/dev/null || tail -n 300 ~/.bash_history 2>/dev/null || fc -l 1 2>/dev/null | tail -n 300"
+        let out = await session.runCapturing(cmd)   // out-of-band: don't spam the terminal
+        let trimmed = String(out.suffix(6000))
+        return ai.redact ? AIRedactor.redact(trimmed) : trimmed
+    }
+
+    private func generateCommand() {
+        let req = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !req.isEmpty else { inputFocused = true; return }
+        input = ""
+        send(userVisible: loc("生成命令：", "Command: ") + req,
+             promptForModel: "把下面的需求转成可在当前主机执行的 shell 命令：\n\(req)")
+    }
+
+    private func diagnose() {
+        let out = contextOutput()
+        send(userVisible: loc("诊断最近的报错", "Diagnose the recent error"),
+             promptForModel: "下面是终端最近的输出，分析其中的错误原因并给出修复命令：\n\n\(out)")
+    }
+
+    private func explain() {
+        let target = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        let subject = target.isEmpty ? lastCommandLine() : target
+        guard !subject.isEmpty else { inputFocused = true; return }
+        input = ""
+        send(userVisible: loc("解释：", "Explain: ") + subject,
+             promptForModel: "解释这段命令的作用；如果包含危险操作，用 ⚠️ 开头明确警告（不要执行它）：\n\(subject)")
+    }
+
+    private func summarize() {
+        let out = contextOutput()
+        send(userVisible: loc("总结输出", "Summarize output"),
+             promptForModel: "简明总结下面的终端输出，突出关键结果和异常：\n\n\(out)")
+    }
+
+    private func saveScript() {
+        let out = contextOutput()
+        send(userVisible: loc("把本次操作整理成脚本", "Turn this session into a script"),
+             promptForModel: "根据下面的终端历史，把我执行过的关键命令整理成一个可复用的 shell 脚本；把其中可变的部分（路径 / IP / 主机名 / 参数）替换成 {{参数名}} 占位符；只输出一个 ```bash 代码块，脚本第一行写注释 `# name: <简短名称>`。然后点代码块的「存片段」即可保存：\n\n\(out)")
+    }
+
+    /// Save an AI-produced code block as a reusable snippet. A leading
+    /// `# name: …` comment becomes the snippet name.
+    private func saveAsSnippet(_ code: String) {
+        var name = loc("AI 脚本", "AI script")
+        var body = code
+        let lines = code.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        if let first = lines.first,
+           let r = first.range(of: #"^#\s*name\s*[:：]\s*"#, options: .regularExpression) {
+            let n = String(first[r.upperBound...]).trimmingCharacters(in: .whitespaces)
+            if !n.isEmpty { name = n }
+            body = lines.dropFirst().joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        snippets.add(Snippet(name: name, command: body))
+        messages.append(AIMessage(role: .system, content: loc("已存为片段：\(name)", "Saved snippet: \(name)")))
+    }
+
+    private func contextOutput() -> String {
+        let raw = session?.recentOutput ?? ""
+        let trimmed = String(raw.suffix(4000))
+        return ai.redact ? AIRedactor.redact(trimmed) : trimmed
+    }
+
+    private func lastCommandLine() -> String {
+        let lines = (session?.recentOutput ?? "").split(whereSeparator: { $0 == "\n" || $0 == "\r" })
+        return lines.reversed().first { !$0.trimmingCharacters(in: .whitespaces).isEmpty }.map(String.init) ?? ""
+    }
+
+    // MARK: conversation loop
+
+    private func send(userVisible: String, promptForModel: String) {
+        guard !isStreaming else { return }
+        beginUserTurn(userVisible)
+        modelMessages.append(AIMessage(role: .user, content: promptForModel))
+        startTurn()
+    }
+
+    private func beginUserTurn(_ userVisible: String) {
+        errorText = nil
+        agentSteps = 0
+        messages.append(AIMessage(role: .user, content: userVisible))
+    }
+
+    private func startTurn() {
+        isStreaming = true
+        streaming = ""
+        let client = AIClient(config: ai)
+        let system = systemPrompt()
+        let history = modelMessages
+        let model = (useFast && ai.hasFastModel) ? ai.activeModelFast : nil
+        // Estimate the prompt tokens sent this turn (system + full history).
+        lastPromptTokens = AITokenEstimator.estimate(system + history.map(\.content).joined(separator: "\n"))
+        task = Task {
+            var text = ""
+            do {
+                for try await delta in client.stream(system: system, messages: history, model: model) {
+                    text += delta
+                    await MainActor.run { streaming = text }
+                }
+            } catch is CancellationError {
+            } catch {
+                await MainActor.run { errorText = error.localizedDescription }
+            }
+            await MainActor.run { finishTurn(text) }
+        }
+    }
+
+    private func finishTurn(_ text: String) {
+        streaming = ""
+        sessionTokens += lastPromptTokens + AITokenEstimator.estimate(text)
+        lastPromptTokens = 0
+        if !text.isEmpty {
+            messages.append(AIMessage(role: .assistant, content: text))
+            modelMessages.append(AIMessage(role: .assistant, content: text))
+        }
+        // Agent mode: if the model proposed a command, run it and feed back.
+        if ai.agentMode, agentSteps < maxAgentSteps, let cmd = firstRunnableCommand(text) {
+            if ai.agentReadOnly && !AICommandSafety.isReadOnly(cmd) {
+                refuseSandbox(cmd)           // read-only sandbox: bounce it back
+            } else if AICommandSafety.isDangerous(cmd) {
+                pendingDanger = cmd          // ask before running
+                isStreaming = false
+            } else {
+                executeAndContinue(cmd)
+            }
+        } else {
+            isStreaming = false
+            agentSteps = 0
+        }
+    }
+
+    /// In read-only sandbox mode, reject a mutating command and let the model try
+    /// a read-only alternative (or tell the user to run it manually).
+    private func refuseSandbox(_ cmd: String) {
+        agentSteps += 1
+        messages.append(AIMessage(role: .system, content: loc("⛔ 只读沙盒拦截：\(cmd)", "⛔ Blocked by read-only sandbox: \(cmd)")))
+        modelMessages.append(AIMessage(role: .user, content: "命令 `\(cmd)` 被只读沙盒拒绝（当前只允许只读/查询命令）。请改用只读命令获取所需信息；若必须执行写操作，请停止并用自然语言告诉用户需要手动执行什么，不要再尝试。"))
+        startTurn()
+    }
+
+    private func executeAndContinue(_ cmd: String) {
+        guard let session else {
+            messages.append(AIMessage(role: .system, content: loc("无可用会话，无法执行。", "No session to run in.")))
+            isStreaming = false; return
+        }
+        agentSteps += 1
+        isStreaming = true
+        messages.append(AIMessage(role: .system, content: "▶︎ \(cmd)"))
+        task = Task {
+            let output = ai.agentInTerminal
+                ? await session.runInTerminalCapturing(cmd)
+                : await session.runCapturing(cmd)
+            let shown = String(output.suffix(4000))
+            await MainActor.run {
+                messages.append(AIMessage(role: .system, content: shown))
+                let forModel = ai.redact ? AIRedactor.redact(shown) : shown
+                modelMessages.append(AIMessage(role: .user, content: "命令 `\(cmd)` 的输出：\n\(forModel)\n请根据输出继续（执行下一条命令，或给出最终结论）。"))
+                startTurn()
+            }
+        }
+    }
+
+    /// The first shell command inside a fenced code block, if any.
+    private func firstRunnableCommand(_ text: String) -> String? {
+        let parts = text.components(separatedBy: "```")
+        guard parts.count >= 3 else { return nil }
+        var body = parts[1]
+        if let nl = body.firstIndex(of: "\n") {
+            let first = body[body.startIndex..<nl].trimmingCharacters(in: .whitespaces)
+            if first.range(of: #"^[A-Za-z0-9_+-]{1,15}$"#, options: .regularExpression) != nil {
+                body = String(body[body.index(after: nl)...])
+            }
+        }
+        let cmd = body.trimmingCharacters(in: .whitespacesAndNewlines)
+        return cmd.isEmpty ? nil : cmd
+    }
+
+    private func systemPrompt() -> String {
+        var ctx = "你是 Wireline SSH 客户端里的终端运维助手。回答简洁、可操作，用中文。"
+        if ai.agentMode {
+            ctx += "【重要】你处于自动执行模式：你**有能力**执行命令——把要执行的**一条**命令放在 ```bash 代码块里，本客户端会真实执行并把输出返回给你。"
+            ctx += "严禁回答“我无法执行/我不能直接运行”之类的话；需要信息就直接给出命令让系统执行。"
+            ctx += "拿到输出后，继续给下一条命令，或在任务完成时用自然语言给出最终结论（结论里不要再放代码块）。"
+            ctx += "优先使用只读/幂等命令；高危操作会由系统弹窗让用户二次确认，你照常给出即可。"
+            if ai.agentReadOnly {
+                ctx += "【只读沙盒已开启】只能执行只读/查询命令（ls、cat、ps、df、systemctl status、docker ps 等），任何写操作/删除/重启都会被系统拒绝，不要尝试。"
+            }
+        } else {
+            ctx += "所有可直接执行的 shell 命令必须放在 ```bash 代码块里，一行一条；解释放在代码块外。"
+            ctx += "遇到高危操作（rm -rf、dd、mkfs、chmod -R 777、drop database 等）必须用 ⚠️ 明确警告。"
+        }
+        if let host {
+            ctx += "\n当前主机：alias=\(host.alias)"
+            if let h = host.hostname { ctx += ", host=\(h)" }
+            if let u = host.user { ctx += ", user=\(u)" }
+            ctx += "。若无法确定系统，默认 Linux。"
+        } else {
+            ctx += "\n当前是本地 shell（macOS）。"
+        }
+        return ctx
+    }
+}
+
+/// One chat message. Assistant messages are split into prose + fenced code
+/// blocks; each code block gets an "insert into terminal" button.
+private struct MessageBubble: View {
+    let message: AIMessage
+    let session: TerminalSession?
+    let loc: Localizer
+    let fontSize: Double
+    var onSave: (String) -> Void = { _ in }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            switch message.role {
+            case .user:
+                Text(message.content)
+                    .font(WL.mono(fontSize)).foregroundStyle(WL.textPrimary)
+                    .padding(8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(WL.green.opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
+            case .system:
+                // Agent execution trace: the run command (▶︎ …) and its output.
+                Text(message.content)
+                    .font(WL.mono(fontSize - 1)).foregroundStyle(WL.textDim)
+                    .textSelection(.enabled)
+                    .padding(8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(WL.surface.opacity(0.4), in: RoundedRectangle(cornerRadius: 6))
+                    .overlay(alignment: .leading) { Rectangle().fill(WL.green.opacity(0.5)).frame(width: 2) }
+            case .assistant:
+                ForEach(Array(segments(message.content).enumerated()), id: \.offset) { _, seg in
+                    if seg.isCode { codeBlock(seg.text) } else { prose(seg.text) }
+                }
+            }
+        }
+    }
+
+    private func prose(_ text: String) -> some View {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return Group {
+            if trimmed.isEmpty { EmptyView() }
+            else {
+                Text(.init(trimmed))   // basic markdown (bold/inline code)
+                    .font(WL.mono(fontSize)).foregroundStyle(WL.textPrimary)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+
+    private func codeBlock(_ code: String) -> some View {
+        let cmd = code.trimmingCharacters(in: .whitespacesAndNewlines)
+        return VStack(alignment: .leading, spacing: 6) {
+            Text(cmd)
+                .font(WL.mono(fontSize)).foregroundStyle(WL.green)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            HStack(spacing: 12) {
+                Spacer()
+                BracketButton(loc.t("存片段", "Save")) { onSave(cmd) }
+                if session != nil {
+                    BracketButton(loc.t("插入", "Insert")) { session?.insertIntoTerminal(cmd) }
+                    BracketButton(loc.t("运行", "Run")) { session?.runInTerminal(cmd) }
+                }
+            }
+        }
+        .padding(9)
+        .background(WL.surface.opacity(0.6), in: RoundedRectangle(cornerRadius: 6))
+        .overlay(RoundedRectangle(cornerRadius: 6).stroke(WL.border, lineWidth: 1))
+    }
+
+    /// Split content on ``` fences into prose/code segments (code strips an
+    /// optional leading language hint like `bash`).
+    private func segments(_ s: String) -> [(isCode: Bool, text: String)] {
+        let parts = s.components(separatedBy: "```")
+        var result: [(Bool, String)] = []
+        for (i, part) in parts.enumerated() {
+            let isCode = i % 2 == 1
+            if isCode {
+                var body = part
+                if let nl = body.firstIndex(of: "\n") {
+                    let firstLine = body[body.startIndex..<nl].trimmingCharacters(in: .whitespaces)
+                    if firstLine.range(of: #"^[A-Za-z0-9_+-]{1,15}$"#, options: .regularExpression) != nil {
+                        body = String(body[body.index(after: nl)...])
+                    }
+                }
+                result.append((true, body))
+            } else {
+                result.append((false, part))
+            }
+        }
+        return result
+    }
+}

@@ -13,6 +13,11 @@ struct RightPanel: View {
     @Binding var fileHost: Host?
     @Binding var selectedAlias: String?
     var onEditHost: (Host) -> Void = { _ in }
+    /// When the sidebar is collapsed the tab bar sits near the window's left edge;
+    /// inset it so the first tab clears the traffic-light buttons.
+    var sidebarCollapsed: Bool = false
+    @State private var ai = AIConfig.shared
+    @State private var showAI = false
 
     var body: some View {
         Group {
@@ -32,7 +37,10 @@ struct RightPanel: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(WL.bg)
+        .background(WL.bg.opacity(store.terminalOpacity))
+        .onReceive(NotificationCenter.default.publisher(for: .toggleAI)) { _ in
+            if ai.enabled { showAI.toggle() }
+        }
     }
 
     private var detailHost: Host? {
@@ -41,15 +49,50 @@ struct RightPanel: View {
 
     @ViewBuilder
     private var sessionArea: some View {
+        // AI panel sits BESIDE the terminal (a real column that shrinks the
+        // terminal), not on top of it — so its translucent background reveals the
+        // wallpaper, never the terminal underneath. No width animation, so the
+        // terminal reflows exactly once (no garbling).
+        HStack(spacing: 0) {
+            terminalColumn
+            if showAI {
+                Rectangle().fill(WL.border).frame(width: 1)
+                AIPanelView(session: sessions.activeSession,
+                            host: activeHost,
+                            onClose: { showAI = false })
+            }
+        }
+        .overlay(alignment: .bottomTrailing) {
+            if ai.enabled && !showAI {
+                Button { showAI = true } label: {
+                    Image(systemName: "sparkles")
+                        .font(.system(size: 14)).foregroundStyle(WL.green)
+                        .frame(width: 36, height: 36)
+                        .background(WL.surface.opacity(0.9), in: RoundedRectangle(cornerRadius: 8))
+                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(WL.green.opacity(0.5), lineWidth: 1))
+                }
+                .buttonStyle(.plain)
+                .padding(14)
+                .help(loc("AI 助手", "AI Assistant"))
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var terminalColumn: some View {
         VStack(spacing: 0) {
             if !sessions.sessions.isEmpty {
                 SessionTabBar()
+                    .padding(.leading, sidebarCollapsed ? 52 : 0)
                 Rectangle().fill(WL.border).frame(height: 1)
             }
             if let session = sessions.activeSession {
                 ConnectionInfoBar(session: session)
                 Rectangle().fill(WL.border).frame(height: 1)
                 TerminalHostView(session: session).id(session.id)
+                    .overlay(alignment: .topTrailing) {
+                        if session.activeEditor == "vim" { VimHintView() }
+                    }
                 StatusBar(session: session)
             } else if let host = detailHost {
                 HostDetailView(host: host, onEdit: onEditHost)
@@ -57,6 +100,13 @@ struct RightPanel: View {
                 IdleConsole()
             }
         }
+        .frame(maxWidth: .infinity)
+    }
+
+    /// The host backing the active session, for AI context.
+    private var activeHost: Host? {
+        guard let alias = sessions.activeSession?.alias, !alias.isEmpty else { return nil }
+        return store.hosts.first { $0.alias == alias }
     }
 }
 
@@ -152,7 +202,7 @@ struct ConnectionInfoBar: View {
     }
 
     private var endpoint: String {
-        guard case .ssh(let alias, _, _) = session.kind else { return session.title }
+        guard case .ssh(let alias, _, _, _) = session.kind else { return session.title }
         if let host { return "\(host.user ?? "root")@\(host.connectHostname)" }
         return alias
     }
@@ -226,7 +276,7 @@ struct IdleConsole: View {
                 .font(WL.body).foregroundStyle(WL.textDim)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-        .background(WL.bg)
+        .background(.clear)
     }
 }
 
