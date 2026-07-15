@@ -20,6 +20,10 @@ A terminal-hacker look (monospace · green-on-black · themeable), a real built-
 
 ## 📸 Screenshots
 
+<p align="center">
+  <video src="https://github.com/almightyYantao/wireline/raw/main/docs/ai-demo.mp4" controls muted width="90%"></video>
+</p>
+
 <p align="center"><img src="docs/image/wallpaper.png" width="90%" alt="App-wide wallpaper & themes"></p>
 <p align="center">
   <img src="docs/image/files.png" width="90%" alt="Dual-pane SFTP browser">
