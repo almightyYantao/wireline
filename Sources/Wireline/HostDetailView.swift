@@ -9,6 +9,7 @@ struct HostDetailView: View {
     @Environment(\.openWindow) private var openWindow
     let host: Host
     var onEdit: (Host) -> Void
+    @State private var mem = HostMemoryStore.shared
 
     private var status: HostStatus { store.statuses[host.alias] ?? .unknown }
 
@@ -33,6 +34,7 @@ struct HostDetailView: View {
                     (loc("描述", "Description"), host.descriptionText ?? "—"),
                     (loc("自动 sudo", "Auto-sudo"), host.autoSudo ? loc("开", "On") : loc("关", "Off"))
                 ])
+                memorySection
                 Text(loc("别名走标准 ~/.ssh/config —— 终端里的 ssh \(host.alias) / scp / VS Code Remote 同样生效。",
                          "Resolves via ~/.ssh/config — `ssh \(host.alias)`, scp, and VS Code Remote all work too."))
                     .font(WL.caption).foregroundStyle(WL.textDim)
@@ -54,6 +56,37 @@ struct HostDetailView: View {
             } label: {
                 Text("[\(loc("连接", "Connect"))]").font(WL.body).foregroundStyle(WL.green)
             }.buttonStyle(.plain)
+        }
+    }
+
+    @ViewBuilder
+    private var memorySection: some View {
+        let facts = mem.facts(for: host.alias)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(loc("AI 记忆", "AI Memory")).font(WL.small.weight(.semibold))
+                    .foregroundStyle(WL.green).textCase(.uppercase)
+                Spacer()
+                if !facts.isEmpty {
+                    BracketButton(loc("清空", "Clear")) { mem.clear(host.alias) }
+                }
+            }
+            if facts.isEmpty {
+                Text(loc("AI 在对话中了解到该主机的稳定信息后会记在这里，用于让回答更贴合本机。",
+                         "The AI records durable facts about this host here to tailor its answers."))
+                    .font(WL.caption).foregroundStyle(WL.textDim)
+            } else {
+                ForEach(facts, id: \.self) { fact in
+                    HStack(alignment: .top, spacing: 8) {
+                        Text("•").foregroundStyle(WL.green)
+                        Text(fact).font(WL.small).foregroundStyle(WL.textPrimary).textSelection(.enabled)
+                        Spacer()
+                        Button { mem.remove(fact, for: host.alias) } label: {
+                            Image(systemName: "xmark").font(.system(size: 8)).foregroundStyle(WL.textDim)
+                        }.buttonStyle(.plain)
+                    }
+                }
+            }
         }
     }
 

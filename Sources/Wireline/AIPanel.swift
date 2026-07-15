@@ -409,6 +409,9 @@ struct AIPanelView: View {
             } else {
                 messages.append(AIMessage(role: .system, content: loc("未找到片段：\(name)", "Snippet not found: \(name)")))
             }
+        case let .remember(note):
+            HostMemoryStore.shared.add(note, for: conversationKey)
+            messages.append(AIMessage(role: .system, content: loc("🧠 已记住：\(note)", "🧠 Remembered: \(note)")))
         }
     }
 
@@ -552,7 +555,12 @@ struct AIPanelView: View {
         ctx += "新增主机 {\"action\":\"add_host\",\"alias\":\"web1\",\"hostname\":\"1.2.3.4\",\"user\":\"root\",\"port\":22,\"group\":\"IAI\"}；"
         ctx += "连接主机 {\"action\":\"connect\",\"host\":\"别名\"}；"
         ctx += "打开文件浏览器 {\"action\":\"open_files\",\"host\":\"别名\"}；"
-        ctx += "运行片段 {\"action\":\"run_snippet\",\"name\":\"片段名\"}。每次仅一个 wl-action 块，并附一句简短说明。"
+        ctx += "运行片段 {\"action\":\"run_snippet\",\"name\":\"片段名\"}；"
+        ctx += "记住本主机的持久事实(仅在确认了解到稳定信息时) {\"action\":\"remember\",\"note\":\"该机用 systemd / nginx 配置在 /etc/nginx\"}。每次仅一个 wl-action 块，并附一句简短说明。"
+        let mem = HostMemoryStore.shared.facts(for: conversationKey)
+        if !mem.isEmpty {
+            ctx += "\n关于该主机的已知记忆（供参考，可据此更精准回答）：\n- " + mem.joined(separator: "\n- ")
+        }
         if let host {
             ctx += "\n当前主机：alias=\(host.alias)"
             if let h = host.hostname { ctx += ", host=\(h)" }

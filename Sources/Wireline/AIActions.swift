@@ -10,6 +10,7 @@ enum WLAction: Equatable {
     case connect(host: String)
     case openFiles(host: String)
     case runSnippet(name: String)
+    case remember(note: String)
 
     @MainActor
     func summary(_ loc: Localizer) -> String {
@@ -29,6 +30,8 @@ enum WLAction: Equatable {
             return loc.t("打开文件浏览器：\(host)", "Open file browser: \(host)")
         case let .runSnippet(name):
             return loc.t("运行片段：\(name)", "Run snippet: \(name)")
+        case let .remember(note):
+            return loc.t("记住关于本主机：\(note)", "Remember about this host: \(note)")
         }
     }
 
@@ -66,6 +69,9 @@ enum WLAction: Equatable {
             case "run_snippet":
                 guard let name = obj["name"] as? String else { return nil }
                 return .runSnippet(name: name)
+            case "remember":
+                guard let note = obj["note"] as? String else { return nil }
+                return .remember(note: note)
             default: return nil
             }
         }
