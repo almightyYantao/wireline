@@ -32,6 +32,7 @@ final class HostStore {
         didSet { UserDefaults.standard.set(monitorInterval, forKey: "monitorInterval") }
     }
     private var monitorTask: Task<Void, Never>?
+    private var autoBackupTask: Task<Void, Never>?
     /// Use the app's built-in terminal (default), or hand off to Terminal.app/iTerm2.
     var useBuiltInTerminal: Bool {
         didSet { UserDefaults.standard.set(useBuiltInTerminal, forKey: "useBuiltInTerminal") }
@@ -234,6 +235,34 @@ final class HostStore {
     func stopMonitoring() {
         monitorTask?.cancel()
         monitorTask = nil
+    }
+
+    // MARK: - Scheduled WebDAV backup
+
+    /// (Re)start the auto-backup timer. Only runs when WebDAV is configured and
+    /// a passphrase has been saved. Call after toggling the setting.
+    func startAutoBackup() {
+        autoBackupTask?.cancel()
+        autoBackupTask = nil
+        let cfg = WebDAVConfig.shared
+        guard cfg.autoBackup, cfg.isConfigured, !cfg.savedPassphrase.isEmpty else { return }
+        autoBackupTask = Task { [weak self] in
+            while !Task.isCancelled {
+                let hours = max(1, WebDAVConfig.shared.autoIntervalHours)
+                try? await Task.sleep(for: .seconds(hours * 3600))
+                if Task.isCancelled { break }
+                await self?.runAutoBackup()
+            }
+        }
+    }
+
+    func runAutoBackup() async {
+        let cfg = WebDAVConfig.shared
+        guard cfg.autoBackup, cfg.isConfigured, !cfg.savedPassphrase.isEmpty,
+              let data = try? exportBackup(passphrase: cfg.savedPassphrase) else { return }
+        let client = WebDAVClient(config: cfg)
+        await client.ensureCollection()
+        try? await client.upload(data)
     }
 
     /// Re-check all hosts and notify on online↔offline transitions.

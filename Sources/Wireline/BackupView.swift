@@ -43,6 +43,22 @@ struct BackupView: View {
                     Text(loc("将写入：", "Will write to: ") + davTargetPreview)
                         .font(WL.caption).foregroundStyle(WL.textDim)
                         .lineLimit(2).textSelection(.enabled)
+
+                    Toggle(isOn: $dav.autoBackup) {
+                        Text(loc("定时自动备份", "Scheduled auto-backup")).font(WL.body).foregroundStyle(WL.textPrimary)
+                    }.toggleStyle(.checkbox).tint(WL.green)
+                    if dav.autoBackup {
+                        HStack {
+                            Text(loc("每", "Every")).font(WL.small).foregroundStyle(WL.textDim)
+                            Stepper(value: $dav.autoIntervalHours, in: 1...168, step: 1) {
+                                Text(loc("\(Int(dav.autoIntervalHours)) 小时", "\(Int(dav.autoIntervalHours)) h"))
+                                    .font(WL.body).foregroundStyle(WL.textPrimary)
+                            }.fixedSize()
+                        }
+                    }
+                    Text(loc("定时备份需填好上面的地址/账号/加密口令；开启后加密口令会存入 Keychain 以便无人值守上传。",
+                            "Auto-backup needs the URL/account/passphrase above; the passphrase is saved to the Keychain so uploads can run unattended."))
+                        .font(WL.caption).foregroundStyle(WL.textDim)
                 }
 
                 secure(loc("加密口令", "Encryption passphrase"), $passphrase)
@@ -83,6 +99,9 @@ struct BackupView: View {
         .preferredColorScheme(.dark)
         .onAppear { davPassword = dav.password }
         .onChange(of: davPassword) { dav.password = davPassword }
+        .onChange(of: dav.autoBackup) { applyAuto() }
+        .onChange(of: dav.autoIntervalHours) { applyAuto() }
+        .onChange(of: passphrase) { if dav.autoBackup { applyAuto() } }
     }
 
     private var descriptionText: String {
@@ -94,6 +113,12 @@ struct BackupView: View {
         case .webdav: return loc("把加密备份上传到你的 WebDAV，或从中恢复。密文才上传，服务器看不到明文。",
                                  "Upload the encrypted backup to your WebDAV, or restore from it. Only ciphertext leaves your machine.")
         }
+    }
+
+    /// Persist the passphrase for unattended backup and (re)start the scheduler.
+    private func applyAuto() {
+        dav.savedPassphrase = dav.autoBackup ? passphrase : ""
+        store.startAutoBackup()
     }
 
     /// Live preview of the exact URL the backup will be written to / read from.

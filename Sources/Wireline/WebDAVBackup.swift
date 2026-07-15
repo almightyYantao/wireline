@@ -12,10 +12,14 @@ final class WebDAVConfig: @unchecked Sendable {
     var baseURL: String { didSet { d.set(baseURL, forKey: "webdav.base") } }
     var username: String { didSet { d.set(username, forKey: "webdav.user") } }
     var filename: String { didSet { d.set(filename, forKey: "webdav.file") } }
+    /// Automatically upload an encrypted backup on a timer.
+    var autoBackup: Bool { didSet { d.set(autoBackup, forKey: "webdav.auto") } }
+    var autoIntervalHours: Double { didSet { d.set(autoIntervalHours, forKey: "webdav.autoHours") } }
 
     private let d = UserDefaults.standard
     private let keychain = KeychainService()
     private let account = "__wireline_webdav__"
+    private let passAccount = "__wireline_backup_pass__"
 
     var password: String {
         get { ((try? keychain.password(for: account)) ?? nil) ?? "" }
@@ -25,10 +29,22 @@ final class WebDAVConfig: @unchecked Sendable {
         }
     }
 
+    /// Encryption passphrase saved (in Keychain) so auto-backup can run unattended.
+    /// Only set when the user opts into scheduled backups.
+    var savedPassphrase: String {
+        get { ((try? keychain.password(for: passAccount)) ?? nil) ?? "" }
+        set {
+            if newValue.isEmpty { try? keychain.deletePassword(for: passAccount) }
+            else { try? keychain.setPassword(newValue, for: passAccount) }
+        }
+    }
+
     init() {
         baseURL = d.string(forKey: "webdav.base") ?? ""
         username = d.string(forKey: "webdav.user") ?? ""
         filename = d.string(forKey: "webdav.file") ?? "wireline-backup.wlbk"
+        autoBackup = d.bool(forKey: "webdav.auto")
+        autoIntervalHours = (d.object(forKey: "webdav.autoHours") as? Double) ?? 24
     }
 
     var isConfigured: Bool { !baseURL.isEmpty }

@@ -33,6 +33,7 @@ struct WirelineApp: App {
                 .task {
                     if store.autoCheckOnLaunch { await store.checkAll() }
                     store.startMonitoring()
+                    store.startAutoBackup()
                 }
         }
         .windowStyle(.hiddenTitleBar)   // SwiftUI-managed, so it survives sheets & window switches

@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="360" viewBox="0 0 1280 360" role="img" aria-label="Wireline — native macOS SSH client with a built-in AI copilot">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0a0e0a"/>
+      <stop offset="1" stop-color="#0f150f"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="50%" cy="0%" r="70%">
+      <stop offset="0" stop-color="#35d07f" stop-opacity="0.16"/>
+      <stop offset="1" stop-color="#35d07f" stop-opacity="0"/>
+    </radialGradient>
+    <style>
+      text{font-family:'SF Mono','JetBrains Mono',Menlo,Consolas,monospace}
+    </style>
+  </defs>
+
+  <rect width="1280" height="360" fill="url(#bg)"/>
+  <rect width="1280" height="360" fill="url(#glow)"/>
+  <rect x="0.5" y="0.5" width="1279" height="359" fill="none" stroke="#1b241b"/>
+
+  <!-- window dots -->
+  <circle cx="44" cy="46" r="7" fill="#ff5f57"/>
+  <circle cx="68" cy="46" r="7" fill="#febc2e"/>
+  <circle cx="92" cy="46" r="7" fill="#28c840"/>
+
+  <!-- wordmark -->
+  <text x="60" y="176" font-size="82" font-weight="700" fill="#c8d3c8">&gt; <tspan fill="#35d07f">wireline</tspan></text>
+  <text x="66" y="224" font-size="26" fill="#63755f">native macOS SSH client · built-in AI copilot</text>
+
+  <!-- feature chips -->
+  <g font-size="20" fill="#63755f">
+    <rect x="66" y="262" width="196" height="40" rx="20" fill="#0f150f" stroke="#1b241b"/>
+    <text x="88" y="288">✦ 内置终端 + AI</text>
+    <rect x="278" y="262" width="150" height="40" rx="20" fill="#0f150f" stroke="#1b241b"/>
+    <text x="300" y="288" fill="#35d07f">舰队群跑</text>
+    <rect x="444" y="262" width="176" height="40" rx="20" fill="#0f150f" stroke="#1b241b"/>
+    <text x="466" y="288">~/.ssh/config</text>
+  </g>
+
+  <!-- faux prompt on the right -->
+  <g font-size="22">
+    <text x="720" y="120" fill="#b084f0">你 ›</text>
+    <text x="770" y="120" fill="#c8d3c8">查一下磁盘占用并汇总</text>
+    <text x="720" y="164" fill="#63755f">▶︎ df -h | sort -k5 -rn</text>
+    <text x="720" y="212" fill="#35d07f">AI ›</text>
+    <text x="772" y="212" fill="#c8d3c8">/ 已 82%，</text>
+    <text x="900" y="212" fill="#ff6b6b">建议清理日志</text>
+    <text x="720" y="270" fill="#63755f">$ ⌘; 说人话 → 生成命令 → 执行</text>
+  </g>
+</svg>
