@@ -30,6 +30,7 @@ struct AIPanelView: View {
     @State private var useFast = false
     @State private var showFleet = false
     @State private var pendingDanger: String?           // command awaiting confirmation
+    @State private var dangerReview = ""                 // AI impact assessment for it
     @FocusState private var inputFocused: Bool
 
     private let maxAgentSteps = 8
@@ -64,7 +65,22 @@ struct AIPanelView: View {
                 if let c = pendingDanger { pendingDanger = nil; executeAndContinue(c) }
             }
         } message: {
-            Text(pendingDanger ?? "")
+            Text((pendingDanger ?? "") + (dangerReview.isEmpty ? "" : "\n\n" + dangerReview))
+        }
+    }
+
+    /// Quick AI impact assessment shown in the dangerous-command dialog.
+    private func fetchDangerReview(_ cmd: String) {
+        dangerReview = loc("正在评估影响…", "Assessing impact…")
+        let client = AIClient(config: ai)
+        let model = ai.hasFastModel ? ai.activeModelFast : nil
+        let sys = "你是命令安全评审员。用中文一两句话说明这条命令的影响面和主要风险，非常简短，不要客套、不要重复命令本身。"
+        Task {
+            var text = ""
+            do { for try await d in client.stream(system: sys, messages: [AIMessage(role: .user, content: cmd)], model: model) { text += d } }
+            catch { return }
+            let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            await MainActor.run { if pendingDanger == cmd, !t.isEmpty { dangerReview = t } }
         }
     }
 
@@ -486,6 +502,7 @@ struct AIPanelView: View {
                 refuseSandbox(cmd)           // read-only sandbox: bounce it back
             } else if AICommandSafety.isDangerous(cmd) {
                 pendingDanger = cmd          // ask before running
+                fetchDangerReview(cmd)       // AI impact assessment for the dialog
                 isStreaming = false
             } else {
                 executeAndContinue(cmd)

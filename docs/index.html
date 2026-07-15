@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wireline · 原生 macOS SSH 客户端 · 内置 AI 副驾</title>
+<meta name="description" content="Wireline 是一款原生 macOS SSH 客户端，内置 AI 副驾：自然语言生成/执行命令、跨主机群跑、诊断报错，标准 ~/.ssh/config 单一数据源。">
+<style>
+  :root{
+    --bg:#0a0e0a; --surface:#0f150f; --border:#1b241b;
+    --green:#35d07f; --green-bright:#5cf0a2; --amber:#e3b341;
+    --text:#c8d3c8; --dim:#63755f; --purple:#b084f0;
+    --mono:"SF Mono",ui-monospace,"JetBrains Mono","Menlo",monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth}
+  body{background:var(--bg);color:var(--text);font-family:var(--mono);line-height:1.65;
+    -webkit-font-smoothing:antialiased;overflow-x:hidden}
+  a{color:var(--green);text-decoration:none}
+  .wrap{max-width:1020px;margin:0 auto;padding:0 22px}
+
+  /* nav */
+  nav{position:sticky;top:0;z-index:10;background:rgba(10,14,10,.82);
+    backdrop-filter:blur(10px);border-bottom:1px solid var(--border)}
+  nav .wrap{display:flex;align-items:center;gap:18px;height:56px}
+  .brand{font-weight:700;color:var(--green);font-size:16px}
+  .brand span{color:var(--dim);font-weight:400}
+  nav .sp{flex:1}
+  nav a.link{color:var(--dim);font-size:13px}
+  nav a.link:hover{color:var(--text)}
+  .btn{display:inline-block;padding:8px 16px;border:1px solid var(--green);
+    border-radius:7px;color:var(--green);font-size:13px;transition:.15s}
+  .btn:hover{background:var(--green);color:var(--bg)}
+  .btn.solid{background:var(--green);color:var(--bg)}
+  .btn.solid:hover{background:var(--green-bright);border-color:var(--green-bright)}
+
+  /* hero */
+  header{padding:84px 0 54px;text-align:center;position:relative}
+  header::before{content:"";position:absolute;inset:0;
+    background:radial-gradient(ellipse 60% 50% at 50% 0%,rgba(53,208,127,.10),transparent 70%);
+    pointer-events:none}
+  .tag{display:inline-block;font-size:12px;color:var(--green);border:1px solid var(--border);
+    border-radius:20px;padding:4px 14px;margin-bottom:22px;background:var(--surface)}
+  h1{font-size:44px;line-height:1.15;letter-spacing:-.5px;margin-bottom:16px}
+  h1 .g{color:var(--green)}
+  .sub{color:var(--dim);font-size:17px;max-width:620px;margin:0 auto 30px}
+  .cta{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
+
+  /* terminal mock */
+  .term{max-width:760px;margin:52px auto 0;text-align:left;background:#070a07;
+    border:1px solid var(--border);border-radius:12px;overflow:hidden;
+    box-shadow:0 24px 70px rgba(0,0,0,.55)}
+  .term .bar{display:flex;align-items:center;gap:7px;padding:11px 14px;border-bottom:1px solid var(--border)}
+  .dot{width:11px;height:11px;border-radius:50%}
+  .dot.r{background:#ff5f57}.dot.y{background:#febc2e}.dot.g{background:#28c840}
+  .term .body{padding:18px 20px;font-size:13.5px;line-height:1.9}
+  .term .p{color:var(--green)} .term .c{color:var(--text)} .term .o{color:var(--dim)}
+  .term .ai{color:var(--purple)}
+  .term .box{border:1px solid var(--border);border-radius:7px;padding:10px 12px;margin:10px 0;background:var(--surface)}
+
+  /* sections */
+  section{padding:64px 0;border-top:1px solid var(--border)}
+  h2{font-size:26px;margin-bottom:8px}
+  h2 .g{color:var(--green)}
+  .lead{color:var(--dim);margin-bottom:34px;font-size:15px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:11px;padding:22px}
+  .card .ic{font-size:22px;margin-bottom:12px}
+  .card h3{font-size:16px;margin-bottom:7px;color:var(--text)}
+  .card p{color:var(--dim);font-size:13.5px}
+  .card .k{color:var(--green)}
+
+  ul.feat{list-style:none;display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:10px 26px}
+  ul.feat li{color:var(--dim);font-size:14px;padding-left:20px;position:relative}
+  ul.feat li::before{content:"›";position:absolute;left:0;color:var(--green)}
+  ul.feat li b{color:var(--text);font-weight:600}
+
+  .note{background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--amber);
+    border-radius:8px;padding:16px 18px;color:var(--dim);font-size:13.5px}
+  .note b{color:var(--amber)}
+
+  footer{border-top:1px solid var(--border);padding:40px 0;text-align:center;color:var(--dim);font-size:13px}
+  footer a{color:var(--dim);text-decoration:underline}
+  @media(max-width:640px){h1{font-size:32px}.sub{font-size:15px}}
+</style>
+</head>
+<body>
+
+<nav><div class="wrap">
+  <div class="brand">&gt; wireline <span>/ ssh + ai</span></div>
+  <div class="sp"></div>
+  <a class="link" href="#ai">AI</a>
+  <a class="link" href="#features">功能</a>
+  <a class="link" href="#security">安全</a>
+  <a class="link" href="https://github.com/almightyYantao/wireline">GitHub</a>
+</div></nav>
+
+<header><div class="wrap">
+  <div class="tag">✦ 原生 macOS · SwiftUI · 无服务端</div>
+  <h1>原生 macOS SSH 客户端<br><span class="g">内置 AI 副驾</span></h1>
+  <p class="sub">把命令行时代验证过的高效范式，装进一个真正能动手的图形客户端：一句话生成并执行命令、跨主机群跑、诊断报错——而所有主机数据始终以标准 <code>~/.ssh/config</code> 为唯一来源，绝不锁定。</p>
+  <div class="cta">
+    <a class="btn solid" href="https://github.com/almightyYantao/wireline/releases/latest">下载 macOS 版</a>
+    <a class="btn" href="https://github.com/almightyYantao/wireline">在 GitHub 查看</a>
+  </div>
+
+  <div class="term">
+    <div class="bar"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span></div>
+    <div class="body">
+      <div class="o"># 在 AI 面板里说人话，它来动手</div>
+      <div><span class="ai">你 ›</span> <span class="c">帮我看下现在 docker 跑了哪些容器并汇总</span></div>
+      <div class="box">
+        <div class="o">▶︎ docker ps --format '{{.Names}}\t{{.Status}}'</div>
+        <div class="c">web        Up 6 days</div>
+        <div class="c">redis      Up 6 days</div>
+        <div class="c">worker     Restarting (1) 12s ago</div>
+      </div>
+      <div><span class="ai">AI ›</span> <span class="c">共 3 个容器：web / redis 正常；</span><span style="color:#ff6b6b">worker 在反复重启</span><span class="c">，建议 </span><span class="p">docker logs worker</span><span class="c"> 排查。</span></div>
+    </div>
+  </div>
+</div></header>
+
+<section id="ai"><div class="wrap">
+  <h2><span class="g">AI</span> 副驾</h2>
+  <p class="lead">接 OpenAI 兼容服务(中转站/直连)或本地 Ollama。数据可脱敏、命令永不自动执行。</p>
+  <div class="grid">
+    <div class="card"><div class="ic">⌨️</div><h3>自然语言 → 命令</h3><p>说需求，生成命令，<span class="k">[插入]</span> 或 <span class="k">[运行]</span>；命令栏 <span class="k">⌘;</span> 更快。</p></div>
+    <div class="card"><div class="ic">🤖</div><h3>Agent 自动执行</h3><p>给命令 → 真实执行 → 拿输出 → 继续，直到出结论。可见/旁路、危险确认、只读沙盒。</p></div>
+    <div class="card"><div class="ic">🛰</div><h3>舰队群跑</h3><p>多选主机 → 一句话 → 并发执行 → AI 汇总成结论/表格。单终端做不到。</p></div>
+    <div class="card"><div class="ic">🩺</div><h3>诊断 · 解释 · 总结</h3><p>一键分析报错、解释命令(高危警告)、总结长日志。</p></div>
+    <div class="card"><div class="ic">🧠</div><h3>主机记忆</h3><p>记住每台机器的稳定信息，之后回答自动结合，越用越懂你的环境。</p></div>
+    <div class="card"><div class="ic">🪄</div><h3>AI 副驾操作客户端</h3><p>一句话建隧道、加主机、连接、开文件、跑片段——均需确认。</p></div>
+    <div class="card"><div class="ic">📄</div><h3>SFTP AI 改文件 · 变更评审</h3><p>右键远程文件说改动 → 预览 → 影响/风险评审 → 写回。</p></div>
+    <div class="card"><div class="ic">📓</div><h3>会话复盘 → Runbook</h3><p>把本次操作整理成带步骤/命令/回滚的 Markdown 手册。</p></div>
+  </div>
+</div></section>
+
+<section id="features"><div class="wrap">
+  <h2>不只是<span class="g"> AI</span></h2>
+  <p class="lead">一个完整、好用的原生 SSH 客户端。</p>
+  <ul class="feat">
+    <li><b>内置真实终端</b>(PTY)，多标签、⌘1–9 切换、密码/密钥自动登录</li>
+    <li><b>全局快捷连接</b> ⌘K，模糊搜索别名/描述/分组，回车即连</li>
+    <li><b>可视化 SFTP</b> 双栏拖拽传输，右键 AI 改文件</li>
+    <li><b>图形化端口转发</b>(ssh -L，支持跳板机，一键启停)</li>
+    <li><b>状态栏实时</b> 远端 CPU / 内存 / 时间</li>
+    <li><b>命令片段库</b> 多行命令、<code>{{占位符}}</code> 运行时填参</li>
+    <li><b>整窗壁纸</b> 图片或循环 mp4，面板半透明叠加</li>
+    <li><b>多款配色</b> Dracula / Nord / Tokyo Night… 或导入 iTerm2</li>
+    <li><b>可自定义快捷键</b> 录制式设置、冲突检测</li>
+    <li><b>加密备份</b> 到文件或 <b>WebDAV</b>，一键迁移</li>
+    <li><b>后台巡检</b> + 掉线通知，AI 自动归因</li>
+    <li><b>中文 / English</b> 运行时切换</li>
+  </ul>
+</div></section>
+
+<section id="security"><div class="wrap">
+  <h2><span class="g">安全</span>与隐私</h2>
+  <p class="lead">无服务端、无中心数据库，所有状态都在本机。</p>
+  <div class="grid">
+    <div class="card"><div class="ic">🔑</div><h3>密码只进 Keychain</h3><p>主机密码与 AI Key 仅存 macOS 钥匙串，配置文件不落明文。</p></div>
+    <div class="card"><div class="ic">🧾</div><h3>标准配置单一来源</h3><p>始终读写标准 <code>~/.ssh/config</code>；卸载后 ssh/scp/VS Code Remote 照常可用。</p></div>
+    <div class="card"><div class="ic">🛡</div><h3>AI 可控</h3><p>发送前脱敏；生成命令永不自动执行；高危命令强制确认，可开只读沙盒。</p></div>
+  </div>
+  <div style="height:16px"></div>
+  <div class="note"><b>分发说明</b>：当前为 ad-hoc 签名，首次打开请右键 → 打开(或 <code>xattr -cr /Applications/Wireline.app</code>)。</div>
+</div></section>
+
+<footer><div class="wrap">
+  Wireline · MIT License · <a href="https://github.com/almightyYantao/wireline">github.com/almightyYantao/wireline</a>
+</div></footer>
+
+</body>
+</html>

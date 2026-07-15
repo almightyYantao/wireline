@@ -18,6 +18,8 @@ struct AIFileEditView: View {
     @State private var generating = false
     @State private var error: String?
     @State private var task: Task<Void, Never>?
+    @State private var reviewText = ""
+    @State private var reviewing = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -79,17 +81,58 @@ struct AIFileEditView: View {
                 .background(WL.surface.opacity(0.5), in: RoundedRectangle(cornerRadius: 6))
                 .overlay(RoundedRectangle(cornerRadius: 6).stroke(WL.border, lineWidth: 1))
 
+            if reviewing || !reviewText.isEmpty {
+                Text(loc("变更评审（影响与风险）", "Change review (impact & risks)"))
+                    .font(WL.small).foregroundStyle(WL.amber)
+                ScrollView {
+                    Text(reviewText.isEmpty ? loc("评审中…", "Reviewing…") : .init(reviewText))
+                        .font(WL.small).foregroundStyle(WL.textPrimary)
+                        .frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled)
+                }
+                .frame(maxHeight: 120)
+                .padding(8)
+                .background(WL.amber.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
+                .overlay(RoundedRectangle(cornerRadius: 6).stroke(WL.amber.opacity(0.4), lineWidth: 1))
+            }
+
             HStack {
                 Spacer()
                 BracketButton(loc("取消", "Cancel")) { onClose() }
                 if !edited.isEmpty {
-                    Button(action: writeBack) {
-                        Text("[\(loc("写回远程", "Write back"))]").font(WL.small).foregroundStyle(WL.green)
-                    }.buttonStyle(.plain)
+                    if reviewText.isEmpty {
+                        // First step: review the change before writing.
+                        BracketButton(reviewing ? loc("评审中", "…") : loc("评审并写回", "Review & write")) { reviewChange() }
+                    } else {
+                        Button(action: writeBack) {
+                            Text("[\(loc("确认写回", "Confirm write"))]").font(WL.small).foregroundStyle(WL.green)
+                        }.buttonStyle(.plain)
+                    }
                 }
             }
         }
         .padding(18)
+    }
+
+    /// Ask the AI to assess the diff (impact + risks) before writing it back.
+    private func reviewChange() {
+        guard !reviewing else { return }
+        reviewing = true
+        reviewText = ""
+        let client = AIClient(config: ai)
+        let model = ai.hasFastModel ? ai.activeModelFast : nil
+        let sys = "你是配置变更评审员。对比原文件与修改后的文件，用中文简要给出：① 实际改了什么 ② 影响面/需要重启或重载的服务 ③ 风险点或需注意的地方。要精炼，分条列出。"
+        let msg = AIMessage(role: .user, content: "文件：\(entry.name)\n\n原内容：\n```\n\(original)\n```\n\n修改后：\n```\n\(edited)\n```")
+        task = Task {
+            var text = ""
+            do {
+                for try await d in client.stream(system: sys, messages: [msg], model: model) { text += d }
+            } catch {
+                let m = error.localizedDescription
+                await MainActor.run { reviewing = false; self.error = m }
+                return
+            }
+            await MainActor.run { reviewText = text.trimmingCharacters(in: .whitespacesAndNewlines); reviewing = false }
+        }
     }
 
     private func notice(_ text: String) -> some View {

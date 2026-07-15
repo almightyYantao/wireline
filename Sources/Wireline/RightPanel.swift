@@ -18,6 +18,11 @@ struct RightPanel: View {
     var sidebarCollapsed: Bool = false
     @State private var ai = AIConfig.shared
     @State private var showAI = false
+    // Draggable position of the floating AI button (persisted; offset from the
+    // bottom-right corner so it never has to block the command bar).
+    @AppStorage("aiButtonX") private var aiBtnX = 0.0
+    @AppStorage("aiButtonY") private var aiBtnY = 0.0
+    @State private var aiDrag = CGSize.zero
 
     var body: some View {
         Group {
@@ -64,16 +69,23 @@ struct RightPanel: View {
         }
         .overlay(alignment: .bottomTrailing) {
             if ai.enabled && !showAI {
-                Button { showAI = true } label: {
-                    Image(systemName: "sparkles")
-                        .font(.system(size: 14)).foregroundStyle(WL.green)
-                        .frame(width: 36, height: 36)
-                        .background(WL.surface.opacity(0.9), in: RoundedRectangle(cornerRadius: 8))
-                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(WL.green.opacity(0.5), lineWidth: 1))
-                }
-                .buttonStyle(.plain)
-                .padding(14)
-                .help(loc("AI 助手", "AI Assistant"))
+                Image(systemName: "sparkles")
+                    .font(.system(size: 14)).foregroundStyle(WL.green)
+                    .frame(width: 36, height: 36)
+                    .background(WL.surface.opacity(0.9), in: RoundedRectangle(cornerRadius: 8))
+                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(WL.green.opacity(0.5), lineWidth: 1))
+                    .contentShape(RoundedRectangle(cornerRadius: 8))
+                    .padding(14)
+                    .offset(x: aiBtnX + aiDrag.width, y: aiBtnY + aiDrag.height)
+                    // Drag follows the cursor live (minimumDistance 1 so a plain
+                    // click still opens the panel); tap opens.
+                    .highPriorityGesture(
+                        DragGesture(minimumDistance: 1)
+                            .onChanged { aiDrag = $0.translation }
+                            .onEnded { aiBtnX += $0.translation.width; aiBtnY += $0.translation.height; aiDrag = .zero }
+                    )
+                    .onTapGesture { showAI = true }
+                    .help(loc("AI 助手（可拖动）", "AI Assistant (drag to move)"))
             }
         }
     }
