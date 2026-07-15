@@ -11,6 +11,8 @@ extension Notification.Name {
     static let selectTab = Notification.Name("wireline.selectTab")
     static let toggleAI = Notification.Name("wireline.toggleAI")
     static let suggestCommand = Notification.Name("wireline.suggestCommand")
+    static let aiConnect = Notification.Name("wireline.aiConnect")
+    static let aiOpenFiles = Notification.Name("wireline.aiOpenFiles")
 }
 
 /// Right-panel mode. `nil` = SSH (terminal sessions).
@@ -88,6 +90,16 @@ struct ContentView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .selectTab)) { note in
             if let n = note.object as? Int { sessions.selectIndex(n) }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .aiConnect)) { note in
+            if let alias = note.object as? String, let host = store.hosts.first(where: { $0.alias == alias }) {
+                connectHost(host, store: store, sessions: sessions, openWindow: openWindow)
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .aiOpenFiles)) { note in
+            if let alias = note.object as? String, let host = store.hosts.first(where: { $0.alias == alias }) {
+                fileHost = host; operation = .files
+            }
         }
         .sheet(item: $editing) { ctx in
             HostEditorView(context: ctx).environment(store)

@@ -14,7 +14,7 @@ cd "$(dirname "$0")/.."
 export DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
 
 APP_NAME="Wireline"
-BUNDLE_ID="com.longbridge.wireline"
+BUNDLE_ID="com.wireline.app"
 CONFIG="${CONFIG:-release}"
 OUT="build/${APP_NAME}.app"
 
@@ -59,7 +59,7 @@ cat > "${OUT}/Contents/Info.plist" <<PLIST
     <key>LSMinimumSystemVersion</key><string>14.0</string>
     <key>NSPrincipalClass</key><string>NSApplication</string>
     <key>NSHighResolutionCapable</key><true/>
-    <key>NSHumanReadableCopyright</key><string>Longbridge</string>
+    <key>NSHumanReadableCopyright</key><string>Wireline</string>
     <!-- Uncomment to run as a menu-bar-only agent (no Dock icon):
     <key>LSUIElement</key><true/> -->
 </dict>

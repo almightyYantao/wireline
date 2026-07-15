@@ -7,6 +7,9 @@ import WirelineCore
 enum WLAction: Equatable {
     case portForward(host: String, localPort: Int, remoteHost: String, remotePort: Int)
     case addHost(alias: String, hostname: String, user: String?, port: Int?, group: String?)
+    case connect(host: String)
+    case openFiles(host: String)
+    case runSnippet(name: String)
 
     @MainActor
     func summary(_ loc: Localizer) -> String {
@@ -20,6 +23,12 @@ enum WLAction: Equatable {
             let g = group.map { loc.t("，分组 \($0)", ", group \($0)") } ?? ""
             return loc.t("新增主机：\(alias) → \(u)\(hostname)\(p)\(g)",
                          "Add host: \(alias) → \(u)\(hostname)\(p)\(g)")
+        case let .connect(host):
+            return loc.t("连接主机：\(host)", "Connect to host: \(host)")
+        case let .openFiles(host):
+            return loc.t("打开文件浏览器：\(host)", "Open file browser: \(host)")
+        case let .runSnippet(name):
+            return loc.t("运行片段：\(name)", "Run snippet: \(name)")
         }
     }
 
@@ -48,6 +57,15 @@ enum WLAction: Equatable {
                 return .addHost(alias: alias, hostname: hostname,
                                 user: obj["user"] as? String, port: intVal(obj["port"]),
                                 group: obj["group"] as? String)
+            case "connect":
+                guard let host = obj["host"] as? String else { return nil }
+                return .connect(host: host)
+            case "open_files":
+                guard let host = obj["host"] as? String else { return nil }
+                return .openFiles(host: host)
+            case "run_snippet":
+                guard let name = obj["name"] as? String else { return nil }
+                return .runSnippet(name: name)
             default: return nil
             }
         }

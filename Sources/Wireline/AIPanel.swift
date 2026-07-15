@@ -394,6 +394,21 @@ struct AIPanelView: View {
             let h = Host(alias: alias, hostname: hostname, user: user, port: port, group: group)
             store.upsert(h, password: nil)
             messages.append(AIMessage(role: .system, content: loc("✓ 已新增主机：\(alias)", "✓ Host added: \(alias)")))
+        case let .connect(host):
+            NotificationCenter.default.post(name: .aiConnect, object: host)
+            messages.append(AIMessage(role: .system, content: loc("✓ 已发起连接：\(host)", "✓ Connecting: \(host)")))
+        case let .openFiles(host):
+            NotificationCenter.default.post(name: .aiOpenFiles, object: host)
+            messages.append(AIMessage(role: .system, content: loc("✓ 已打开文件浏览器：\(host)", "✓ Opened files: \(host)")))
+        case let .runSnippet(name):
+            if let s = snippets.snippets.first(where: { $0.name == name })
+                ?? snippets.snippets.first(where: { $0.name.localizedCaseInsensitiveContains(name) }) {
+                if s.placeholders.isEmpty { session?.runInTerminal(s.command) }
+                else { session?.insertIntoTerminal(s.command) }   // has placeholders: let user fill
+                messages.append(AIMessage(role: .system, content: loc("✓ 已运行片段：\(s.name)", "✓ Ran snippet: \(s.name)")))
+            } else {
+                messages.append(AIMessage(role: .system, content: loc("未找到片段：\(name)", "Snippet not found: \(name)")))
+            }
         }
     }
 
@@ -532,9 +547,12 @@ struct AIPanelView: View {
             ctx += "遇到高危操作（rm -rf、dd、mkfs、chmod -R 777、drop database 等）必须用 ⚠️ 明确警告。"
         }
         // App-action capability (works in any mode).
-        ctx += "\n你还能操作本客户端：当用户想【建立端口转发/隧道】或【新增主机】时，输出一个 ```wl-action 代码块（内容为 JSON），用户确认后才执行。"
-        ctx += "端口转发：{\"action\":\"port_forward\",\"host\":\"<主机别名>\",\"localPort\":15432,\"remoteHost\":\"127.0.0.1\",\"remotePort\":5432}。"
-        ctx += "新增主机：{\"action\":\"add_host\",\"alias\":\"web1\",\"hostname\":\"1.2.3.4\",\"user\":\"root\",\"port\":22,\"group\":\"IAI\"}。每次仅一个 wl-action 块，并附一句简短说明。"
+        ctx += "\n你还能操作本客户端：需要时输出一个 ```wl-action 代码块（内容为 JSON），用户确认后才执行。支持："
+        ctx += "端口转发 {\"action\":\"port_forward\",\"host\":\"别名\",\"localPort\":15432,\"remoteHost\":\"127.0.0.1\",\"remotePort\":5432}；"
+        ctx += "新增主机 {\"action\":\"add_host\",\"alias\":\"web1\",\"hostname\":\"1.2.3.4\",\"user\":\"root\",\"port\":22,\"group\":\"IAI\"}；"
+        ctx += "连接主机 {\"action\":\"connect\",\"host\":\"别名\"}；"
+        ctx += "打开文件浏览器 {\"action\":\"open_files\",\"host\":\"别名\"}；"
+        ctx += "运行片段 {\"action\":\"run_snippet\",\"name\":\"片段名\"}。每次仅一个 wl-action 块，并附一句简短说明。"
         if let host {
             ctx += "\n当前主机：alias=\(host.alias)"
             if let h = host.hostname { ctx += ", host=\(h)" }

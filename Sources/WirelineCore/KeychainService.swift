@@ -8,7 +8,7 @@ import Security
 public struct KeychainService: Sendable {
     public let service: String
 
-    public init(service: String = "com.longbridge.wireline") {
+    public init(service: String = "com.wireline.app") {
         self.service = service
     }
 
