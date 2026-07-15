@@ -20,6 +20,18 @@ final class HostStore {
     var autoCheckOnLaunch: Bool {
         didSet { UserDefaults.standard.set(autoCheckOnLaunch, forKey: "autoCheckOnLaunch") }
     }
+    /// Periodically re-check reachability in the background and notify on changes.
+    var backgroundMonitor: Bool {
+        didSet {
+            UserDefaults.standard.set(backgroundMonitor, forKey: "backgroundMonitor")
+            backgroundMonitor ? startMonitoring() : stopMonitoring()
+        }
+    }
+    /// Seconds between background checks.
+    var monitorInterval: Double {
+        didSet { UserDefaults.standard.set(monitorInterval, forKey: "monitorInterval") }
+    }
+    private var monitorTask: Task<Void, Never>?
     /// Use the app's built-in terminal (default), or hand off to Terminal.app/iTerm2.
     var useBuiltInTerminal: Bool {
         didSet { UserDefaults.standard.set(useBuiltInTerminal, forKey: "useBuiltInTerminal") }
@@ -45,6 +57,7 @@ final class HostStore {
         didSet {
             let data = terminalTheme.flatMap { try? JSONEncoder().encode($0) }
             UserDefaults.standard.set(data, forKey: "terminalTheme")
+            Palette.shared.update(from: terminalTheme)   // recolor the whole UI
         }
     }
 
@@ -61,6 +74,8 @@ final class HostStore {
         let saved = UserDefaults.standard.string(forKey: "terminalApp")
         self.terminalApp = saved.flatMap(TerminalApp.init) ?? .terminal
         self.autoCheckOnLaunch = UserDefaults.standard.object(forKey: "autoCheckOnLaunch") as? Bool ?? true
+        self.backgroundMonitor = UserDefaults.standard.object(forKey: "backgroundMonitor") as? Bool ?? false
+        self.monitorInterval = UserDefaults.standard.object(forKey: "monitorInterval") as? Double ?? 60
         self.useBuiltInTerminal = UserDefaults.standard.object(forKey: "useBuiltInTerminal") as? Bool ?? true
         self.terminalOpacity = UserDefaults.standard.object(forKey: "terminalOpacity") as? Double ?? 1.0
         self.terminalBgImagePath = UserDefaults.standard.string(forKey: "terminalBgImagePath")
@@ -70,6 +85,7 @@ final class HostStore {
             .flatMap { try? JSONDecoder().decode(TerminalTheme.self, from: $0) }
         self.document = SSHConfig.Document(items: [])
         self.hosts = []
+        Palette.shared.update(from: terminalTheme)   // recolor UI from saved theme
         reload()
     }
 
@@ -196,6 +212,45 @@ final class HostStore {
             }
             for await (alias, status) in group {
                 statuses[alias] = status
+            }
+        }
+    }
+
+    // MARK: - Background monitoring
+
+    func startMonitoring() {
+        guard backgroundMonitor, monitorTask == nil else { return }
+        Notifier.requestAuthorization()
+        monitorTask = Task { [weak self] in
+            while !Task.isCancelled {
+                let interval = self?.monitorInterval ?? 60
+                try? await Task.sleep(for: .seconds(max(15, interval)))
+                if Task.isCancelled { break }
+                await self?.monitorPass()
+            }
+        }
+    }
+
+    func stopMonitoring() {
+        monitorTask?.cancel()
+        monitorTask = nil
+    }
+
+    /// Re-check all hosts and notify on online↔offline transitions.
+    private func monitorPass() async {
+        let before = statuses
+        await checkAll()
+        let loc = Localizer.shared
+        for host in hosts {
+            let old = before[host.alias]
+            switch (old, statuses[host.alias]) {
+            case (.online, .offline):
+                Notifier.post(title: loc("主机离线", "Host offline"),
+                              body: "\(host.alias) · \(host.connectionSummary)")
+            case (.offline, .online):
+                Notifier.post(title: loc("主机恢复", "Host back online"),
+                              body: "\(host.alias) · \(host.connectionSummary)")
+            default: break
             }
         }
     }

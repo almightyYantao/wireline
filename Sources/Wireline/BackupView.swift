@@ -16,8 +16,8 @@ struct BackupView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("// \(loc("加密备份 / 迁移", "Encrypted Backup / Migration"))")
-                .font(WL.body).foregroundStyle(WL.green)
+            Text(loc("加密备份 / 迁移", "Encrypted Backup / Migration"))
+                .font(WL.body.weight(.semibold)).foregroundStyle(WL.green)
                 .padding(.horizontal, 20).padding(.top, 22).padding(.bottom, 14)
             Rectangle().fill(WL.border).frame(height: 1)
 

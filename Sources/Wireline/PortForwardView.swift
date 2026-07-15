@@ -22,7 +22,7 @@ struct PortForwardView: View {
 
             if forwards.forwards.isEmpty {
                 VStack(spacing: 8) {
-                    Text(loc("// 暂无隧道", "// no tunnels")).font(WL.mono(16, .bold)).foregroundStyle(WL.textDim)
+                    Text(loc("暂无隧道", "No tunnels")).font(WL.mono(16, .bold)).foregroundStyle(WL.textDim)
                     Text(loc("把本地端口映射到远端服务，可经跳板机访问内网。",
                              "Map a local port to a remote service, optionally via a jump host."))
                         .font(WL.small).foregroundStyle(WL.textDim)
@@ -106,8 +106,8 @@ struct ForwardEditor: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("// \(existing == nil ? loc("新建隧道", "New Tunnel") : loc("编辑隧道", "Edit Tunnel"))")
-                .font(WL.body).foregroundStyle(WL.green)
+            Text(existing == nil ? loc("新建隧道", "New Tunnel") : loc("编辑隧道", "Edit Tunnel"))
+                .font(WL.body.weight(.semibold)).foregroundStyle(WL.green)
                 .padding(.horizontal, 20).padding(.top, 22).padding(.bottom, 14)
             Rectangle().fill(WL.border).frame(height: 1)
 

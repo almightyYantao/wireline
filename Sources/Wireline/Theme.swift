@@ -4,18 +4,18 @@ import WirelineCore
 /// The terminal / "hacker console" visual language: monospace everywhere,
 /// green-on-black, bracketed status tags.
 enum WL {
-    // Palette
-    static let bg          = Color(hex: 0x0A0E0A)
-    static let surface     = Color(hex: 0x0F150F)   // selected/raised rows
-    static let border      = Color(hex: 0x1B241B)
-    static let green       = Color(hex: 0x35D07F)   // primary accent
-    static let greenBright = Color(hex: 0x5CF0A2)
-    static let textPrimary = Color(hex: 0xC8D3C8)
-    static let textDim     = Color(hex: 0x63755F)
-    static let amber       = Color(hex: 0xE3B341)
-    static let red         = Color(hex: 0xF85149)
-    static let purple      = Color(hex: 0xB084F0)
-    static let teal        = Color(hex: 0x35D0C0)
+    // Palette — derived from the active terminal theme (see `Palette`).
+    static var bg: Color          { Palette.shared.bg }
+    static var surface: Color     { Palette.shared.surface }
+    static var border: Color      { Palette.shared.border }
+    static var green: Color       { Palette.shared.accent }
+    static var greenBright: Color { Palette.shared.accentBright }
+    static var textPrimary: Color { Palette.shared.textPrimary }
+    static var textDim: Color     { Palette.shared.textDim }
+    static var amber: Color       { Palette.shared.amber }
+    static var red: Color         { Palette.shared.red }
+    static var purple: Color      { Palette.shared.purple }
+    static var teal: Color        { Palette.shared.teal }
 
     // Fonts (monospaced)
     static func mono(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font {

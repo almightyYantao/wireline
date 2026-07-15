@@ -5,59 +5,70 @@ import WirelineCore
 struct QuickConnectView: View {
     @Environment(HostStore.self) private var store
     @Environment(SessionStore.self) private var sessions
+    @Environment(Localizer.self) private var loc
     @Environment(\.openWindow) private var openWindow
     @Environment(\.dismiss) private var dismiss
     @State private var query = ""
     @State private var highlighted = 0
+    @State private var results: [Host] = []
     @FocusState private var focused: Bool
 
-    private var results: [Host] { store.search(query) }
+    private func recompute() {
+        results = store.search(query)
+        highlighted = 0
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
-                Image(systemName: "magnifyingglass")
-                    .foregroundStyle(.secondary)
-                    .font(.title3)
-                TextField("Connect to…", text: $query)
+                Text(">").font(WL.mono(18, .bold)).foregroundStyle(WL.green)
+                TextField(loc("连接到…", "Connect to…"), text: $query)
                     .textFieldStyle(.plain)
-                    .font(.title2)
+                    .font(WL.mono(18))
+                    .foregroundStyle(WL.textPrimary)
                     .focused($focused)
                     .onSubmit(connectHighlighted)
-                    .onChange(of: query) { highlighted = 0 }
+                    .onChange(of: query) { recompute() }
+                    .onKeyPress(.downArrow) {
+                        highlighted = min(highlighted + 1, max(results.count - 1, 0)); return .handled
+                    }
+                    .onKeyPress(.upArrow) {
+                        highlighted = max(highlighted - 1, 0); return .handled
+                    }
             }
-            .padding(16)
+            .padding(.horizontal, 18).padding(.vertical, 16)
 
-            Divider()
+            Rectangle().fill(WL.border).frame(height: 1)
 
             ScrollViewReader { proxy in
-                List(Array(results.enumerated()), id: \.element.id) { index, host in
-                    QuickConnectRow(host: host,
-                                    status: store.statuses[host.alias],
-                                    isHighlighted: index == highlighted)
-                        .id(index)
-                        .contentShape(Rectangle())
-                        .onTapGesture { connect(host) }
-                        .listRowSeparator(.hidden)
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(Array(results.enumerated()), id: \.element.id) { index, host in
+                            QuickConnectRow(host: host,
+                                            status: store.statuses[host.alias],
+                                            isHighlighted: index == highlighted)
+                                .contentShape(Rectangle())
+                                .onTapGesture { connect(host) }
+                        }
+                    }
                 }
-                .listStyle(.plain)
-                .onChange(of: highlighted) { proxy.scrollTo(highlighted, anchor: .center) }
+                .onChange(of: highlighted) {
+                    if results.indices.contains(highlighted) {
+                        proxy.scrollTo(results[highlighted].id, anchor: .center)
+                    }
+                }
             }
             .overlay {
                 if results.isEmpty {
-                    Text("No matching hosts").foregroundStyle(.secondary)
+                    Text(loc("无匹配主机", "No matching hosts"))
+                        .font(WL.body).foregroundStyle(WL.textDim)
                 }
             }
         }
-        .background(.ultraThinMaterial)
-        .onAppear { focused = true }
-        .onKeyPress(.downArrow) {
-            highlighted = min(highlighted + 1, max(results.count - 1, 0)); return .handled
-        }
-        .onKeyPress(.upArrow) {
-            highlighted = max(highlighted - 1, 0); return .handled
-        }
-        .onKeyPress(.escape) { dismiss(); return .handled }
+        .background(WL.bg)
+        .preferredColorScheme(.dark)
+        .onAppear { focused = true; recompute() }
+        .onExitCommand { dismiss() }
     }
 
     private func connectHighlighted() {
@@ -76,20 +87,25 @@ struct QuickConnectRow: View {
     let status: HostStatus?
     let isHighlighted: Bool
 
+    private var s: HostStatus { status ?? .unknown }
+
     var body: some View {
         HStack(spacing: 10) {
-            StatusDot(status: status)
+            Image(systemName: host.resolvedAuthMethod == .key ? "key.fill" : "lock.fill")
+                .font(.system(size: 9)).foregroundStyle(WL.textDim)
             VStack(alignment: .leading, spacing: 1) {
-                Text(host.alias).font(.body.weight(.medium))
-                Text(host.connectionSummary).font(.caption).foregroundStyle(.secondary)
+                Text(host.alias).font(WL.body)
+                    .foregroundStyle(isHighlighted ? WL.greenBright : WL.textPrimary)
+                Text(host.connectionSummary).font(WL.caption).foregroundStyle(WL.textDim)
             }
             Spacer()
-            if let g = host.group { Text(g).font(.caption2).foregroundStyle(.tertiary) }
-            AuthBadge(method: host.resolvedAuthMethod)
+            if let g = host.group { Text(g).font(WL.caption).foregroundStyle(WL.textDim) }
+            Text(s.tagText).font(WL.small).foregroundStyle(s.tagColor)
         }
-        .padding(.vertical, 6)
-        .padding(.horizontal, 10)
-        .background(isHighlighted ? Color.accentColor.opacity(0.2) : .clear,
-                    in: RoundedRectangle(cornerRadius: 8))
+        .padding(.horizontal, 16).padding(.vertical, 8)
+        .background(isHighlighted ? WL.green.opacity(0.16) : .clear)
+        .overlay(alignment: .leading) {
+            Rectangle().fill(WL.green).frame(width: 2).opacity(isHighlighted ? 1 : 0)
+        }
     }
 }

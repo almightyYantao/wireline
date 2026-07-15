@@ -82,7 +82,7 @@ struct FileBrowserView: View {
             if model.needsPassword {
                 passwordPrompt(model).frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if model.connecting && model.entries.isEmpty {
-                Text(loc("// 连接中…", "// connecting…")).font(WL.body).foregroundStyle(WL.textDim)
+                Text(loc("连接中…", "Connecting…")).font(WL.body).foregroundStyle(WL.textDim)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView {
@@ -176,7 +176,7 @@ struct FileBrowserView: View {
                                             @ViewBuilder trailing: () -> Trailing) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Text("// \(title)").font(WL.small.weight(.semibold)).foregroundStyle(WL.green)
+                Text(title).font(WL.small.weight(.semibold)).foregroundStyle(WL.green)
                 Spacer()
                 trailing()
             }
@@ -199,7 +199,7 @@ struct FileBrowserView: View {
 
     private func passwordPrompt(_ model: FileBrowserModel) -> some View {
         VStack(spacing: 12) {
-            Text(loc("// 需要密码", "// password required")).font(WL.mono(16, .bold)).foregroundStyle(WL.green)
+            Text(loc("需要密码", "Password required")).font(WL.mono(16, .bold)).foregroundStyle(WL.green)
             Text("\(host.user ?? "")@\(host.connectHostname)").font(WL.small).foregroundStyle(WL.textDim)
             SecureField(loc("密码", "Password"), text: $password)
                 .textFieldStyle(.plain).font(WL.body).foregroundStyle(WL.textPrimary)

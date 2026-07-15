@@ -6,6 +6,7 @@ struct WirelineApp: App {
     @State private var store = HostStore()
     @State private var forwards = ForwardStore()
     @State private var sessions = SessionStore()
+    @State private var snippets = SnippetStore()
     @State private var loc = Localizer.shared
     @Environment(\.openWindow) private var openWindow
 
@@ -25,10 +26,12 @@ struct WirelineApp: App {
                 .environment(store)
                 .environment(forwards)
                 .environment(sessions)
+                .environment(snippets)
                 .environment(loc)
                 .frame(minWidth: 900, minHeight: 560)
                 .task {
                     if store.autoCheckOnLaunch { await store.checkAll() }
+                    store.startMonitoring()
                 }
         }
         .commands {
@@ -37,34 +40,14 @@ struct WirelineApp: App {
                     openLocalShell(sessions: sessions, openWindow: openWindow)
                 }
                 .keyboardShortcut("t", modifiers: [.command])
-                Button("Quick Connect…") { openWindow(id: "quick-connect") }
+                Button("Quick Connect…") { NotificationCenter.default.post(name: .showQuickConnect, object: nil) }
                     .keyboardShortcut("k", modifiers: [.command])
                 Button("Refresh Statuses") { Task { await store.checkAll() } }
                     .keyboardShortcut("r", modifiers: [.command])
+                Button("Find") { NotificationCenter.default.post(name: .focusSearch, object: nil) }
+                    .keyboardShortcut("f", modifiers: [.command])
             }
         }
-
-        // Spotlight-style quick-connect window.
-        Window("Quick Connect", id: "quick-connect") {
-            QuickConnectView()
-                .environment(store)
-                .environment(sessions)
-                .environment(loc)
-                .frame(width: 620, height: 420)
-                .preferredColorScheme(.dark)
-        }
-        .windowResizability(.contentSize)
-        .windowStyle(.hiddenTitleBar)
-
-        // Menu-bar extra: connect without bringing up the main window.
-        MenuBarExtra("Wireline", systemImage: "cable.connector") {
-            MenuBarContent()
-                .environment(store)
-                .environment(sessions)
-                .environment(loc)
-                .preferredColorScheme(.dark)
-        }
-        .menuBarExtraStyle(.window)
 
         Settings {
             SettingsView()

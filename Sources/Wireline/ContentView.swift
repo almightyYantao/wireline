@@ -2,10 +2,14 @@ import SwiftUI
 import Inject
 import WirelineCore
 
+extension Notification.Name {
+    static let focusSearch = Notification.Name("wireline.focusSearch")
+    static let showQuickConnect = Notification.Name("wireline.showQuickConnect")
+}
+
 /// Right-panel mode. `nil` = SSH (terminal sessions).
 enum SidebarItem: Hashable {
     case forwarding
-    case ftp
     case files
 }
 
@@ -19,8 +23,11 @@ struct ContentView: View {
     @State private var showBackup = false
     @State private var operation: SidebarItem?
     @State private var fileHost: Host?
+    @State private var selectedAlias: String?
+    @State private var showQuickConnect = false
     @State private var sidebarCollapsed = UserDefaults.standard.bool(forKey: "sidebarCollapsed")
     @State private var chrome = WindowChromeController()
+    @State private var palette = Palette.shared
     @ObserveInjection var inject
 
     var body: some View {
@@ -28,7 +35,7 @@ struct ContentView: View {
             if sidebarCollapsed {
                 collapsedSidebarStrip
             } else {
-                LeftPanel(query: $query, operation: $operation,
+                LeftPanel(query: $query, operation: $operation, selectedAlias: $selectedAlias,
                           onAdd: { editing = HostEditContext(host: nil, defaultGroup: $0) },
                           onEdit: { editing = HostEditContext(host: $0) },
                           onBackup: { showBackup = true },
@@ -38,12 +45,14 @@ struct ContentView: View {
                     .transition(.move(edge: .leading))
             }
             Rectangle().fill(WL.border).frame(width: 1)
-            RightPanel(operation: $operation, fileHost: $fileHost)
+            RightPanel(operation: $operation, fileHost: $fileHost, selectedAlias: $selectedAlias,
+                       onEditHost: { editing = HostEditContext(host: $0) })
         }
         .animation(.easeInOut(duration: 0.22), value: sidebarCollapsed)
         .background(WL.bg)
         .wlMenuHost()
         .background(WindowAccessor { w in chrome.attach(to: w) })
+        .id(palette.version)   // rebuild the tree when the theme recolors the UI
         .preferredColorScheme(.dark)
         .onChange(of: sessions.sessions.count) { old, new in
             // A new session opened (⌘T / menu bar / quick connect / host click):
@@ -55,6 +64,12 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showBackup) {
             BackupView().environment(store)
+        }
+        .sheet(isPresented: $showQuickConnect) {
+            QuickConnectView().frame(width: 620, height: 420)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .showQuickConnect)) { _ in
+            showQuickConnect = true
         }
         .alert("Something went wrong", isPresented: .constant(store.lastError != nil)) {
             Button("OK") { store.lastError = nil }
@@ -102,6 +117,7 @@ struct LeftPanel: View {
     @Binding var query: String
     @Environment(Localizer.self) private var loc
     @Binding var operation: SidebarItem?
+    @Binding var selectedAlias: String?
     var onAdd: (String?) -> Void
     var onEdit: (Host) -> Void
     var onBackup: () -> Void
@@ -111,6 +127,8 @@ struct LeftPanel: View {
     @State private var collapsed: Set<String> =
         Set(UserDefaults.standard.stringArray(forKey: "collapsedGroups") ?? ["未分组"])
     @State private var showNewGroup = false
+    @State private var searchHighlight = 0
+    @FocusState private var searchFocused: Bool
 
     private var trimmed: String { query.trimmingCharacters(in: .whitespaces) }
 
@@ -157,9 +175,9 @@ struct LeftPanel: View {
                     Image(systemName: "sidebar.left").font(.system(size: 12)).foregroundStyle(WL.textDim)
                 }.buttonStyle(.plain).help(loc("收起侧边栏", "Collapse sidebar"))
             }
-            Text(loc("// 连接管理器 v0.1", "// connection manager v0.1")).font(WL.small).foregroundStyle(WL.textDim)
+            Text(loc("连接管理器 v0.1", "connection manager v0.1")).font(WL.small).foregroundStyle(WL.textDim)
         }
-        .padding(.horizontal, 16).padding(.top, 14).padding(.bottom, 12)
+        .padding(.horizontal, 16).padding(.top, 30).padding(.bottom, 12)
     }
 
     private var searchBar: some View {
@@ -167,6 +185,20 @@ struct LeftPanel: View {
             Text("/").font(WL.body).foregroundStyle(WL.green)
             TextField(loc("搜索连接 ...", "Search hosts ..."), text: $query)
                 .textFieldStyle(.plain).font(WL.body).foregroundStyle(WL.textPrimary)
+                .focused($searchFocused)
+                .onReceive(NotificationCenter.default.publisher(for: .focusSearch)) { _ in
+                    searchFocused = true
+                }
+                .onChange(of: query) { searchHighlight = 0 }
+                .onSubmit(connectSearchHighlighted)
+                .onKeyPress(.downArrow) {
+                    let n = searchResults.count
+                    if n > 0 { searchHighlight = min(searchHighlight + 1, n - 1) }
+                    return .handled
+                }
+                .onKeyPress(.upArrow) {
+                    searchHighlight = max(searchHighlight - 1, 0); return .handled
+                }
             if !query.isEmpty {
                 Button { query = "" } label: {
                     Image(systemName: "xmark").font(.system(size: 9))
@@ -178,14 +210,12 @@ struct LeftPanel: View {
 
     private var functionRow: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(loc("// 功能", "// features")).font(WL.small).foregroundStyle(WL.textDim)
+            Text(loc("功能", "FEATURES")).font(WL.caption).foregroundStyle(WL.textDim)
             HStack(spacing: 8) {
                 FeatureButton(title: "SSH", symbol: "chevron.right.square", tint: WL.green,
                               active: operation == nil) { operation = nil }
-                FeatureButton(title: loc("端口", "Ports"), symbol: "arrow.left.arrow.right", tint: WL.green,
+                FeatureButton(title: loc("端口", "Ports"), symbol: "arrow.left.arrow.right", tint: WL.teal,
                               active: operation == .forwarding) { operation = .forwarding }
-                FeatureButton(title: "FTP", symbol: "arrow.up.circle", tint: WL.amber,
-                              active: operation == .ftp) { operation = .ftp }
                 FeatureButton(title: loc("文件", "Files"), symbol: "folder", tint: WL.purple,
                               active: operation == .files) { operation = .files }
             }
@@ -197,7 +227,9 @@ struct LeftPanel: View {
     private var hostSections: some View {
         if !trimmed.isEmpty {
             GroupHeader(title: "搜索结果", count: searchResults.count)
-            ForEach(searchResults) { hostItem($0) }
+            ForEach(Array(searchResults.enumerated()), id: \.element.id) { index, host in
+                hostItem(host, highlighted: index == searchHighlight)
+            }
             if searchResults.isEmpty {
                 Text(loc("  无匹配主机", "  No matching hosts")).font(WL.small).foregroundStyle(WL.textDim)
                     .padding(.horizontal, 16).padding(.top, 4)
@@ -250,13 +282,23 @@ struct LeftPanel: View {
         UserDefaults.standard.set(Array(collapsed), forKey: "collapsedGroups")
     }
 
-    private func hostItem(_ host: Host) -> some View {
+    private func connectSearchHighlighted() {
+        guard searchResults.indices.contains(searchHighlight) else { return }
+        let host = searchResults[searchHighlight]
+        selectedAlias = host.alias; operation = nil; connectOrFocus(host)
+        query = ""            // clear search after connecting
+        searchFocused = false
+    }
+
+    private func hostItem(_ host: Host, highlighted: Bool = false) -> some View {
         let active = sessions.activeSession?.alias == host.alias && operation == nil
         return HostItem(
             host: host,
             status: store.statuses[host.alias],
             isActive: active,
-            onConnect: { operation = nil; connectOrFocus(host) },
+            isSelected: selectedAlias == host.alias || highlighted,
+            onSelect: { selectedAlias = host.alias; operation = nil; sessions.activeID = nil },
+            onConnect: { selectedAlias = host.alias; operation = nil; connectOrFocus(host) },
             onEdit: { onEdit(host) },
             onForward: { operation = .forwarding },
             onFiles: { onOpenFiles(host) }
@@ -342,8 +384,8 @@ struct NewGroupSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("// \(loc("新建分组", "New Group"))")
-                .font(WL.body).foregroundStyle(WL.green)
+            Text(loc("新建分组", "New Group"))
+                .font(WL.body.weight(.semibold)).foregroundStyle(WL.green)
                 .padding(.horizontal, 20).padding(.top, 22).padding(.bottom, 14)
             Rectangle().fill(WL.border).frame(height: 1)
 
@@ -410,7 +452,7 @@ struct GroupHeader: View {
                     .rotationEffect(.degrees(collapsed ? -90 : 0))
                     .frame(width: 10)
             }
-            Text("// \(displayTitle)").font(WL.small.weight(.semibold))
+            Text(displayTitle).font(WL.small.weight(.semibold))
                 .foregroundStyle(targeted ? WL.greenBright : WL.green)
             if count > 0 {
                 Text("\(count)").font(WL.caption).foregroundStyle(WL.textDim)

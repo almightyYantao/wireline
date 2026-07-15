@@ -9,6 +9,8 @@ struct HostItem: View {
     let host: Host
     let status: HostStatus?
     let isActive: Bool
+    var isSelected: Bool = false
+    var onSelect: () -> Void = {}
     var onConnect: () -> Void
     var onEdit: () -> Void
     var onForward: () -> Void = {}
@@ -26,19 +28,19 @@ struct HostItem: View {
     }
     private var authSymbol: String { host.resolvedAuthMethod == .key ? "key.fill" : "lock.fill" }
     private var rowBackground: Color {
-        isActive ? WL.surface : (hover ? WL.surface.opacity(0.5) : Color.clear)
+        (isActive || isSelected) ? WL.surface : (hover ? WL.surface.opacity(0.5) : Color.clear)
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Button(action: onConnect) {
-                rowContent
-                    .padding(.horizontal, 16).padding(.top, 7)
-                    .padding(.bottom, isActive ? 3 : 7)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
+            rowContent
+                .padding(.horizontal, 16).padding(.top, 7)
+                .padding(.bottom, isActive ? 3 : 7)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+                // Single click selects; double click connects.
+                .onTapGesture { onSelect() }
+                .simultaneousGesture(TapGesture(count: 2).onEnded { onConnect() })
             if isActive {
                 HStack(spacing: 16) {
                     InlineAction(symbol: "arrow.left.arrow.right", label: "端口转发",
@@ -52,7 +54,7 @@ struct HostItem: View {
         }
         .background(rowBackground)
         .overlay(alignment: .leading) {
-            Rectangle().fill(WL.green).frame(width: 2).opacity(isActive ? 1 : 0)
+            Rectangle().fill(WL.green).frame(width: 2).opacity(isActive || isSelected ? 1 : 0)
         }
         .onHover { hover = $0 }
         .draggable(host.alias) {

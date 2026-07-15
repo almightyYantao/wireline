@@ -11,14 +11,14 @@ struct RightPanel: View {
     @Environment(\.openWindow) private var openWindow
     @Binding var operation: SidebarItem?
     @Binding var fileHost: Host?
+    @Binding var selectedAlias: String?
+    var onEditHost: (Host) -> Void = { _ in }
 
     var body: some View {
         Group {
             switch operation {
             case .forwarding:
                 ToolContainer(title: loc("端口转发", "Port Forwarding")) { PortForwardView() }
-            case .ftp:
-                ToolContainer(title: loc("FTP 传输", "FTP Transfer")) { ComingSoon(feature: loc("FTP 传输", "FTP Transfer")) }
             case .files:
                 if let host = fileHost {
                     ToolContainer(title: loc("文件 · \(host.alias)", "Files · \(host.alias)")) {
@@ -35,22 +35,26 @@ struct RightPanel: View {
         .background(WL.bg)
     }
 
+    private var detailHost: Host? {
+        selectedAlias.flatMap { alias in store.hosts.first { $0.alias == alias } }
+    }
+
     @ViewBuilder
     private var sessionArea: some View {
-        if sessions.sessions.isEmpty {
-            IdleConsole()
-        } else {
-            VStack(spacing: 0) {
+        VStack(spacing: 0) {
+            if !sessions.sessions.isEmpty {
                 SessionTabBar()
                 Rectangle().fill(WL.border).frame(height: 1)
-                if let session = sessions.activeSession {
-                    ConnectionInfoBar(session: session)
-                    Rectangle().fill(WL.border).frame(height: 1)
-                    TerminalHostView(session: session).id(session.id)
-                    StatusBar(session: session)
-                } else {
-                    IdleConsole()
-                }
+            }
+            if let session = sessions.activeSession {
+                ConnectionInfoBar(session: session)
+                Rectangle().fill(WL.border).frame(height: 1)
+                TerminalHostView(session: session).id(session.id)
+                StatusBar(session: session)
+            } else if let host = detailHost {
+                HostDetailView(host: host, onEdit: onEditHost)
+            } else {
+                IdleConsole()
             }
         }
     }
@@ -116,6 +120,7 @@ struct ConnectionInfoBar: View {
     @Environment(Localizer.self) private var loc
     @Environment(\.openWindow) private var openWindow
     let session: TerminalSession
+    @State private var showSnippets = false
 
     private var host: Host? { store.hosts.first { $0.alias == session.alias } }
 
@@ -128,11 +133,15 @@ struct ConnectionInfoBar: View {
             info(loc("协议", "Protocol"), "SSH-2")
             info(loc("延迟", "Latency"), latency)
             Spacer()
+            BracketButton(loc("片段", "Snippets")) { showSnippets = true }
             BracketButton(loc("断开", "Disconnect")) { sessions.close(session.id) }
             BracketButton(loc("重连", "Reconnect")) { reconnect() }
         }
         .padding(.horizontal, 18).padding(.vertical, 9)
         .background(WL.bg)
+        .sheet(isPresented: $showSnippets) {
+            SnippetsSheet { command in session.terminalView.send(txt: command + "\n") }
+        }
     }
 
     private func info(_ k: String, _ v: String) -> some View {
@@ -211,7 +220,7 @@ struct IdleConsole: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("> wireline").font(WL.mono(22, .bold)).foregroundStyle(WL.green)
-            Text(loc("// 未连接", "// not connected")).font(WL.body).foregroundStyle(WL.textDim)
+            Text(loc("未连接", "Not connected")).font(WL.body).foregroundStyle(WL.textDim)
             Text(loc("选择左侧主机连接，或按 ⌘K 快速连接，⌘T 打开本地终端。",
                      "Pick a host on the left, or press ⌘K to quick-connect, ⌘T for a local terminal."))
                 .font(WL.body).foregroundStyle(WL.textDim)
@@ -267,7 +276,7 @@ struct ComingSoon: View {
     let feature: String
     var body: some View {
         VStack(spacing: 8) {
-            Text("// \(feature)").font(WL.mono(18, .bold)).foregroundStyle(WL.textDim)
+            Text(feature).font(WL.mono(18, .bold)).foregroundStyle(WL.textDim)
             Text(loc("即将支持", "Coming soon")).font(WL.body).foregroundStyle(WL.textDim)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -280,7 +289,7 @@ struct ToolContainer<Content: View>: View {
     @ViewBuilder var content: Content
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("// \(title)").font(WL.body).foregroundStyle(WL.green)
+            Text(title).font(WL.body.weight(.semibold)).foregroundStyle(WL.green)
                 .padding(.horizontal, 18).padding(.vertical, 12)
             Rectangle().fill(WL.border).frame(height: 1)
             content

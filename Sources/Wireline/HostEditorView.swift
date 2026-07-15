@@ -24,8 +24,8 @@ struct HostEditorView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("// \(isEditing ? loc("编辑主机", "Edit Host") : loc("新建主机", "New Host"))")
-                .font(WL.body).foregroundStyle(WL.green)
+            Text(isEditing ? loc("编辑主机", "Edit Host") : loc("新建主机", "New Host"))
+                .font(WL.body.weight(.semibold)).foregroundStyle(WL.green)
                 .padding(.horizontal, 20).padding(.top, 22).padding(.bottom, 14)
             Rectangle().fill(WL.border).frame(height: 1)
 
@@ -95,7 +95,7 @@ struct HostEditorView: View {
 
     private func section<V: View>(_ title: String, @ViewBuilder _ content: () -> V) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("// \(title)").font(WL.small.weight(.semibold)).foregroundStyle(WL.green)
+            Text(title).font(WL.small.weight(.semibold)).foregroundStyle(WL.green).textCase(.uppercase)
             content()
         }
     }

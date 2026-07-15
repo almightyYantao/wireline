@@ -74,6 +74,19 @@ struct SettingsView: View {
                     Toggle(isOn: $store.autoCheckOnLaunch) {
                         Text(loc("启动时检测所有主机", "Check all hosts on launch")).font(WL.body).foregroundStyle(WL.textPrimary)
                     }.toggleStyle(.checkbox).tint(WL.green)
+                    Toggle(isOn: $store.backgroundMonitor) {
+                        Text(loc("后台定时巡检并通知", "Background monitoring with notifications")).font(WL.body).foregroundStyle(WL.textPrimary)
+                    }.toggleStyle(.checkbox).tint(WL.green)
+                    if store.backgroundMonitor {
+                        row(loc("巡检间隔", "Check interval")) {
+                            Stepper(value: $store.monitorInterval, in: 15...600, step: 15) {
+                                Text(loc("\(Int(store.monitorInterval)) 秒", "\(Int(store.monitorInterval))s"))
+                                    .font(WL.body).foregroundStyle(WL.textPrimary)
+                            }.fixedSize()
+                        }
+                    }
+                    hint(loc("主机在线↔离线切换时发系统通知。",
+                            "Sends a system notification when a host goes offline or comes back."))
                 }
 
                 section(loc("配置文件", "Config File")) {
@@ -91,7 +104,7 @@ struct SettingsView: View {
 
     private func section<V: View>(_ title: String, @ViewBuilder _ content: () -> V) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("// \(title)").font(WL.small.weight(.semibold)).foregroundStyle(WL.green)
+            Text(title).font(WL.small.weight(.semibold)).foregroundStyle(WL.green).textCase(.uppercase)
             content()
         }
     }
