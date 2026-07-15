@@ -27,6 +27,7 @@ struct AIPanelView: View {
     @State private var sessionTokens = 0
     @State private var lastPromptTokens = 0
     @State private var useFast = false
+    @State private var showFleet = false
     @State private var pendingDanger: String?           // command awaiting confirmation
     @FocusState private var inputFocused: Bool
 
@@ -46,6 +47,10 @@ struct AIPanelView: View {
         .frame(maxHeight: .infinity)
         .background(WL.bg.opacity(store.terminalOpacity))
         .overlay(Rectangle().stroke(WL.border, lineWidth: 1))
+        .sheet(isPresented: $showFleet) {
+            FleetView(onClose: { showFleet = false })
+                .environment(store).environment(loc)
+        }
         .onAppear { inputFocused = true; loadConvo() }
         .onChange(of: conversationKey) { _, _ in loadConvo() }
         .onChange(of: messages) { persistConvo() }
@@ -133,6 +138,7 @@ struct AIPanelView: View {
                     input = "@历史 "; inputFocused = true
                 }
                 chip(loc("存脚本", "To script"), "square.and.arrow.down") { saveScript() }
+                chip(loc("群跑", "Fleet"), "square.grid.3x3.fill") { showFleet = true }
             }
             .padding(.horizontal, 12).padding(.vertical, 8)
         }
