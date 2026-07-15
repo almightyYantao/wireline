@@ -47,6 +47,9 @@ final class AIConfig: @unchecked Sendable {
     var agentReadOnly: Bool { didSet { d.set(agentReadOnly, forKey: "ai.agentReadOnly") } }
     /// Max messages kept per conversation (persistence + memory bound).
     var historyLimit: Int { didSet { d.set(historyLimit, forKey: "ai.historyLimit") } }
+    /// When a monitored host goes offline, ask the AI for likely causes and add
+    /// them to the notification.
+    var alertAttribution: Bool { didSet { d.set(alertAttribution, forKey: "ai.alertAttribution") } }
 
     private let d = UserDefaults.standard
     private let keychain = KeychainService()
@@ -77,6 +80,7 @@ final class AIConfig: @unchecked Sendable {
         fontSize = (d.object(forKey: "ai.fontSize") as? Double) ?? 13
         agentReadOnly = d.bool(forKey: "ai.agentReadOnly")
         historyLimit = (d.object(forKey: "ai.historyLimit") as? Int) ?? 60
+        alertAttribution = d.bool(forKey: "ai.alertAttribution")
     }
 
     var activeBaseURL: String { provider == .relay ? relayBaseURL : ollamaBaseURL }

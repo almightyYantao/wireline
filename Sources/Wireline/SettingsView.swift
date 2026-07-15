@@ -231,6 +231,15 @@ struct SettingsView: View {
                     }
                 }
 
+                section(loc("值班", "On-call")) {
+                    Toggle(isOn: $ai.alertAttribution) {
+                        Text(loc("主机离线时 AI 自动归因", "AI triage when a host goes offline"))
+                            .font(WL.body).foregroundStyle(WL.textPrimary)
+                    }.toggleStyle(.checkbox).tint(WL.green)
+                    hint(loc("需同时开启「连通性 → 后台巡检」。主机掉线时,AI 给出可能原因与排查建议,附在系统通知里。",
+                            "Requires background monitoring. When a host drops, AI adds likely causes to the notification."))
+                }
+
                 section(loc("隐私", "Privacy")) {
                     Toggle(isOn: $ai.redact) {
                         Text(loc("发送前脱敏（密码 / token 等）", "Redact secrets before sending"))

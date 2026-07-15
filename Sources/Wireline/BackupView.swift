@@ -35,10 +35,14 @@ struct BackupView: View {
                 Text(descriptionText).font(WL.small).foregroundStyle(WL.textDim)
 
                 if mode == .webdav {
-                    field(loc("服务地址", "Server URL"), "https://dav.example.com/wireline/", $dav.baseURL)
-                    field(loc("用户名", "Username"), "user", $dav.username)
-                    secure(loc("WebDAV 密码", "WebDAV password"), $davPassword)
-                    field(loc("文件名", "Filename"), "wireline-backup.wlbk", $dav.filename)
+                    field(loc("目录地址（到文件夹，以 / 结尾）", "Folder URL (a directory, ends with /)"),
+                          "https://host:端口/路径/", $dav.baseURL)
+                    field(loc("用户名", "Username"), "your-account", $dav.username)
+                    secure(loc("密码（多数网盘需用「应用专用密码」）", "Password (often an app-specific password)"), $davPassword)
+                    field(loc("备份文件名（不含路径）", "Backup file name (no path)"), "wireline-backup.wlbk", $dav.filename)
+                    Text(loc("将写入：", "Will write to: ") + davTargetPreview)
+                        .font(WL.caption).foregroundStyle(WL.textDim)
+                        .lineLimit(2).textSelection(.enabled)
                 }
 
                 secure(loc("加密口令", "Encryption passphrase"), $passphrase)
@@ -92,6 +96,13 @@ struct BackupView: View {
         }
     }
 
+    /// Live preview of the exact URL the backup will be written to / read from.
+    private var davTargetPreview: String {
+        let base = dav.baseURL.isEmpty ? "…" : (dav.baseURL.hasSuffix("/") ? dav.baseURL : dav.baseURL + "/")
+        let name = dav.filename.isEmpty ? "wireline-backup.wlbk" : dav.filename
+        return base + name
+    }
+
     private var canRun: Bool {
         guard !passphrase.isEmpty else { return false }
         if mode == .export { return passphrase == confirm }
@@ -114,16 +125,29 @@ struct BackupView: View {
     }
 
     private func runWebDAVUpload() {
+        dav.password = davPassword            // ensure the latest password is committed
         busy = true
         do {
             let data = try store.exportBackup(passphrase: passphrase)
             let client = WebDAVClient(config: dav)
             Task {
                 do {
+                    await client.ensureCollection()          // create folder if missing
                     try await client.upload(data)
-                    await MainActor.run { busy = false; show(loc("已上传备份到 WebDAV。", "Uploaded backup to WebDAV."), error: false) }
+                    // Read it back to confirm it really persisted, and where.
+                    let readback = try await client.download()
+                    let ok = readback.count == data.count
+                    await MainActor.run {
+                        busy = false
+                        show(ok
+                             ? loc("已上传并校验：\(client.targetDescription)（\(data.count) 字节）",
+                                   "Uploaded & verified: \(client.targetDescription) (\(data.count) bytes)")
+                             : loc("上传后回读大小不一致，请检查 WebDAV 路径/权限。",
+                                   "Read-back size mismatch — check the WebDAV path/permissions."),
+                             error: !ok)
+                    }
                 } catch {
-                    await MainActor.run { busy = false; show(error.localizedDescription, error: true) }
+                    await MainActor.run { busy = false; show(loc("上传失败：", "Upload failed: ") + error.localizedDescription, error: true) }
                 }
             }
         } catch {
@@ -132,6 +156,7 @@ struct BackupView: View {
     }
 
     private func runWebDAVRestore() {
+        dav.password = davPassword
         busy = true
         let client = WebDAVClient(config: dav)
         Task {

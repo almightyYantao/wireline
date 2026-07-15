@@ -237,6 +237,23 @@ final class HostStore {
     }
 
     /// Re-check all hosts and notify on online↔offline transitions.
+    /// Ask the AI for likely causes when a host drops off, and notify. The host
+    /// is unreachable, so this is advisory (causes + what to check).
+    private static func postAttribution(for host: Host) async {
+        let loc = Localizer.shared
+        let client = AIClient(config: AIConfig.shared)
+        let model = AIConfig.shared.hasFastModel ? AIConfig.shared.activeModelFast : nil
+        let sys = "你是运维值班助手。某台主机刚变为不可达（TCP 连接失败）。用中文给出最可能的 2-3 个原因和应立即检查的项，一句话一条，简短，不要客套。"
+        let msg = AIMessage(role: .user, content: "主机：\(host.alias)（\(host.connectionSummary)）刚刚离线。可能原因与排查建议：")
+        var text = ""
+        do { for try await d in client.stream(system: sys, messages: [msg], model: model) { text += d } }
+        catch { return }
+        let note = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !note.isEmpty else { return }
+        Notifier.post(title: loc("AI 归因 · \(host.alias)", "AI triage · \(host.alias)"),
+                      body: String(note.prefix(400)))
+    }
+
     private func monitorPass() async {
         let before = statuses
         await checkAll()
@@ -247,6 +264,9 @@ final class HostStore {
             case (.online, .offline):
                 Notifier.post(title: loc("主机离线", "Host offline"),
                               body: "\(host.alias) · \(host.connectionSummary)")
+                if AIConfig.shared.enabled, AIConfig.shared.alertAttribution {
+                    Task { await Self.postAttribution(for: host) }
+                }
             case (.offline, .online):
                 Notifier.post(title: loc("主机恢复", "Host back online"),
                               body: "\(host.alias) · \(host.connectionSummary)")

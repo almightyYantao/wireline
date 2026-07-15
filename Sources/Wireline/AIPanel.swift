@@ -139,6 +139,7 @@ struct AIPanelView: View {
                     input = "@历史 "; inputFocused = true
                 }
                 chip(loc("存脚本", "To script"), "square.and.arrow.down") { saveScript() }
+                chip(loc("复盘", "Runbook"), "doc.text.magnifyingglass") { makeRunbook() }
                 chip(loc("群跑", "Fleet"), "square.grid.3x3.fill") { showFleet = true }
             }
             .padding(.horizontal, 12).padding(.vertical, 8)
@@ -362,6 +363,12 @@ struct AIPanelView: View {
         let out = contextOutput()
         send(userVisible: loc("把本次操作整理成脚本", "Turn this session into a script"),
              promptForModel: "根据下面的终端历史，把我执行过的关键命令整理成一个可复用的 shell 脚本；把其中可变的部分（路径 / IP / 主机名 / 参数）替换成 {{参数名}} 占位符；只输出一个 ```bash 代码块，脚本第一行写注释 `# name: <简短名称>`。然后点代码块的「存片段」即可保存：\n\n\(out)")
+    }
+
+    private func makeRunbook() {
+        let out = contextOutput()
+        send(userVisible: loc("生成本次操作的 Runbook", "Generate a runbook for this session"),
+             promptForModel: "根据下面的终端历史（命令与输出），整理成一份可复用的 Runbook，用 Markdown 输出，结构包含：## 目标 / ## 前置条件 / ## 步骤（每步：一句说明 + 对应命令放进 ```bash 块）/ ## 验证 / ## 回滚与注意。命令中可变部分用 {{参数名}} 标注。\n\n\(out)")
     }
 
     /// Save an AI-produced code block as a reusable snippet. A leading
