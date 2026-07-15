@@ -1,5 +1,7 @@
 # Wireline
 
+**简体中文** · [English](README.en.md)
+
 > 原生 macOS SSH 客户端 · 内置 AI 副驾
 >
 > *A native macOS SSH client with a built-in AI copilot.*
