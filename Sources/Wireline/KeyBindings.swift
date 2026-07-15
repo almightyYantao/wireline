@@ -78,6 +78,7 @@ enum ShortcutAction: String, CaseIterable, Identifiable {
     case find
     case toggleSidebar
     case toggleAI
+    case suggestCommand
     case editHost
     case closeShell
 
@@ -93,6 +94,7 @@ enum ShortcutAction: String, CaseIterable, Identifiable {
         case .find:             return loc.t("搜索连接", "Find")
         case .toggleSidebar:    return loc.t("折叠 / 展开侧栏", "Toggle Sidebar")
         case .toggleAI:         return loc.t("显示 / 收起 AI 面板", "Toggle AI Panel")
+        case .suggestCommand:   return loc.t("AI 建议下一条命令", "Suggest Next Command")
         case .editHost:         return loc.t("编辑当前主机", "Edit Host")
         case .closeShell:       return loc.t("关闭当前 Shell", "Close Current Shell")
         }
@@ -107,6 +109,7 @@ enum ShortcutAction: String, CaseIterable, Identifiable {
         case .find:             return KeyShortcut(key: "f")
         case .toggleSidebar:    return KeyShortcut(key: "s")
         case .toggleAI:         return KeyShortcut(key: "i")
+        case .suggestCommand:   return KeyShortcut(key: ";")
         case .editHost:         return KeyShortcut(key: "e")
         case .closeShell:       return KeyShortcut(key: "w")
         }

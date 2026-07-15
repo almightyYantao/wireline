@@ -10,6 +10,7 @@ extension Notification.Name {
     static let newConnection = Notification.Name("wireline.newConnection")
     static let selectTab = Notification.Name("wireline.selectTab")
     static let toggleAI = Notification.Name("wireline.toggleAI")
+    static let suggestCommand = Notification.Name("wireline.suggestCommand")
 }
 
 /// Right-panel mode. `nil` = SSH (terminal sessions).

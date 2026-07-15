@@ -56,6 +56,8 @@ struct WirelineApp: App {
                     .shortcut(.toggleSidebar, keys)
                 Button("Toggle AI Panel") { NotificationCenter.default.post(name: .toggleAI, object: nil) }
                     .shortcut(.toggleAI, keys)
+                Button("Suggest Next Command") { NotificationCenter.default.post(name: .suggestCommand, object: nil) }
+                    .shortcut(.suggestCommand, keys)
                 Button("Edit Host") { NotificationCenter.default.post(name: .editHost, object: nil) }
                     .shortcut(.editHost, keys)
                 Divider()

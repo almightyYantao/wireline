@@ -93,6 +93,10 @@ struct RightPanel: View {
                     .overlay(alignment: .topTrailing) {
                         if session.activeEditor == "vim" { VimHintView() }
                     }
+                if ai.enabled {
+                    Rectangle().fill(WL.border).frame(height: 1)
+                    SuggestionBar(session: session, host: activeHost)
+                }
                 StatusBar(session: session)
             } else if let host = detailHost {
                 HostDetailView(host: host, onEdit: onEditHost)
