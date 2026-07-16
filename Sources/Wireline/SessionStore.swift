@@ -25,6 +25,11 @@ final class TerminalSession: Identifiable {
     /// Drives the vim cheat-sheet overlay.
     var activeEditor: String?
 
+    /// Whether a command / process is currently running in this session (the shell
+    /// prompt has gone away). Drives the "running…" badge shown on a backgrounded
+    /// tab. Updated from the terminal view's prompt heuristic.
+    var isBusy = false
+
     /// Recent terminal output (ANSI-stripped) for AI context.
     var recentOutput: String { terminalView.recentClean }
 
@@ -141,6 +146,61 @@ final class TerminalSession: Identifiable {
             Notifier.post(title: loc.t("命令完成 · \(self.title)", "Command finished · \(self.title)"),
                           body: loc.t("耗时 \(Int(elapsed)) 秒", "took \(Int(elapsed))s"))
         }
+        terminalView.onBusyChange = { [weak self] busy, elapsed in
+            guard let self else { return }
+            // Local shells use reliable foreground-process polling (see
+            // `pollForeground`); the output heuristic is only trustworthy enough
+            // for SSH/SFTP, where the local foreground process is always `ssh`.
+            if case .localShell = self.kind { return }
+            self.applyBusy(busy, elapsed: elapsed)
+        }
+    }
+
+    /// Apply a busy-state change: update the badge and, when a run finishes in a
+    /// tab you've switched away from (app still frontmost — the away-from-app case
+    /// is handled by `onCommandFinished`), ping so you know it's done.
+    private func applyBusy(_ busy: Bool, elapsed: TimeInterval) {
+        guard busy != isBusy else { return }
+        isBusy = busy
+        guard !busy, elapsed >= 5, NSApp.isActive else { return }
+        let inActiveTab = store?.activeTab?.leafID(for: id) != nil
+        guard !inActiveTab else { return }
+        let loc = Localizer.shared
+        Notifier.post(title: loc.t("运行完成 · \(title)", "Finished · \(title)"),
+                      body: loc.t("该标签的任务已结束（耗时 \(Int(elapsed)) 秒）",
+                                  "This tab's task is done (\(Int(elapsed))s)"))
+    }
+
+    // MARK: - Foreground-process polling (local shells)
+
+    private var busyTimer: DispatchSourceTimer?
+    private var busyStartedAt: Date?
+
+    /// Poll the PTY's foreground process group for local shells: if it isn't the
+    /// login shell itself, a command is running. Reliable and prompt-agnostic.
+    private func startBusyPolling() {
+        guard case .localShell = kind else { return }
+        let t = DispatchSource.makeTimerSource(queue: .main)
+        t.schedule(deadline: .now() + 0.8, repeating: 0.8)
+        t.setEventHandler { [weak self] in
+            MainActor.assumeIsolated { self?.pollForeground() }
+        }
+        t.resume()
+        busyTimer = t
+    }
+
+    private func pollForeground() {
+        guard let proc = terminalView.process, proc.childfd >= 0 else { return }
+        let pgid = tcgetpgrp(proc.childfd)
+        let running = pgid > 0 && pgid != proc.shellPid
+        if running, !isBusy {
+            busyStartedAt = Date()
+            applyBusy(true, elapsed: 0)
+        } else if !running, isBusy {
+            let elapsed = busyStartedAt.map { Date().timeIntervalSince($0) } ?? 0
+            applyBusy(false, elapsed: elapsed)
+            busyStartedAt = nil
+        }
     }
 
     func start() {
@@ -190,8 +250,11 @@ final class TerminalSession: Identifiable {
                 executable: shell,
                 args: ["-l"],
                 environment: env,
-                execName: "-\(name)"
+                execName: "-\(name)",
+                // Start in the user's home, not the app's cwd (which is `/`).
+                currentDirectory: FileManager.default.homeDirectoryForCurrentUser.path
             )
+            startBusyPolling()
         }
     }
 
@@ -214,6 +277,8 @@ final class TerminalSession: Identifiable {
     func terminate() {
         guard isRunning else { return }
         isRunning = false
+        busyTimer?.cancel()
+        busyTimer = nil
         stats.stop()
         terminalView.stopLogging()
         isLogging = false
@@ -300,17 +365,24 @@ final class SessionStore {
     }
 
     private func add(_ session: TerminalSession) -> UUID {
-        session.store = self
-        let id = session.id
-        session.terminalView.onCloseRequested = { [weak self] in self?.close(id) }
-        sessions.append(session)
-        session.start()
+        let id = spawn(session)
         // Every new session starts as its own single-pane tab.
         let tab = PaneNode.makeLeaf(id)
         tabs.append(tab)
         activeTabID = tab.id
         activeID = id
         persist()
+        return id
+    }
+
+    /// Register a session and start its PTY, WITHOUT creating a tab for it —
+    /// `add` then wraps it in a leaf tab.
+    private func spawn(_ session: TerminalSession) -> UUID {
+        session.store = self
+        let id = session.id
+        session.terminalView.onCloseRequested = { [weak self] in self?.close(id) }
+        sessions.append(session)
+        session.start()
         return id
     }
 
@@ -399,6 +471,21 @@ final class SessionStore {
         focusTab(tabs[n - 1].id)
     }
 
+    /// Cycle the active tab by `delta` (+1 next, -1 previous), wrapping around.
+    func focusAdjacentTab(_ delta: Int) {
+        guard !tabs.isEmpty else { return }
+        let cur = tabs.firstIndex { $0.id == activeTabID } ?? 0
+        focusTab(tabs[(cur + delta + tabs.count) % tabs.count].id)
+    }
+
+    /// Move the active tab left/right in the tab bar by `delta`. No-op at the ends.
+    func moveActiveTab(_ delta: Int) {
+        guard let cur = tabs.firstIndex(where: { $0.id == activeTabID }) else { return }
+        let dest = cur + delta
+        guard tabs.indices.contains(dest) else { return }
+        tabs.swapAt(cur, dest)
+    }
+
     func close(_ id: UUID) {
         guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
         sessions[index].terminate()
@@ -441,21 +528,25 @@ final class SessionStore {
         for s in sessions { s.terminalView.send(txt: text) }
     }
 
+
     // MARK: - Persistence / restore
 
     private func persist() {
-        let snaps: [SessionSnapshot] = sessions.map { s in
-            let kind: SessionSnapshot.Kind
-            switch s.kind {
-            case .ssh:        kind = .ssh
-            case .sftp:       kind = .sftp
-            case .localShell: kind = .local
-            }
-            return SessionSnapshot(kind: kind, alias: s.alias, title: s.title)
-        }
+        let snaps = sessions.map(snapshot(of:))
         if let data = try? JSONEncoder().encode(snaps) {
             UserDefaults.standard.set(data, forKey: Self.persistKey)
         }
+    }
+
+    /// A restorable description of one live session.
+    private func snapshot(of s: TerminalSession) -> SessionSnapshot {
+        let kind: SessionSnapshot.Kind
+        switch s.kind {
+        case .ssh:        kind = .ssh
+        case .sftp:       kind = .sftp
+        case .localShell: kind = .local
+        }
+        return SessionSnapshot(kind: kind, alias: s.alias, title: s.title)
     }
 
     /// Reopen (and reconnect) the sessions that were open at last quit. Runs once.

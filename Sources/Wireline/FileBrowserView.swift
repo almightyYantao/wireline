@@ -35,6 +35,15 @@ struct FileBrowserView: View {
                     .padding(.horizontal, 16).padding(.vertical, 6)
             }
         }
+        .background {
+            // ⌘W closes the file browser (disconnecting), returning to the SSH
+            // terminal area on the tab that was active before. A hidden button so
+            // the shortcut works while this pane is up without stealing ⌘W from a
+            // focused terminal (terminals intercept it themselves).
+            Button("") { model?.disconnect(); onClose() }
+                .keyboardShortcut("w", modifiers: .command)
+                .hidden()
+        }
         .task(id: host.alias) {
             let m = FileBrowserModel(host: host, store: store)
             m.onTransferComplete = { local.reload() }

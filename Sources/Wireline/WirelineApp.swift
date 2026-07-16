@@ -55,6 +55,8 @@ struct WirelineApp: App {
                     openLocalShell(sessions: sessions, openWindow: openWindow)
                 }
                 .shortcut(.newLocalTerminal, keys)
+                Button("Command Palette…") { NotificationCenter.default.post(name: .showCommandPalette, object: nil) }
+                    .shortcut(.commandPalette, keys)
                 Button("Quick Connect…") { NotificationCenter.default.post(name: .showQuickConnect, object: nil) }
                     .shortcut(.quickConnect, keys)
                 Button("Refresh Statuses") { Task { await store.checkAll() } }
@@ -92,6 +94,21 @@ struct WirelineApp: App {
                     }
                     .keyboardShortcut(KeyEquivalent(Character("\(n)")), modifiers: [.command])
                 }
+                Button("Next Tab") { NotificationCenter.default.post(name: .cycleTab, object: 1) }
+                    .keyboardShortcut("]", modifiers: [.command, .shift])
+                Button("Previous Tab") { NotificationCenter.default.post(name: .cycleTab, object: -1) }
+                    .keyboardShortcut("[", modifiers: [.command, .shift])
+                Button("Move Tab Right") { NotificationCenter.default.post(name: .moveTab, object: 1) }
+                    .keyboardShortcut(.rightArrow, modifiers: [.command, .control])
+                Button("Move Tab Left") { NotificationCenter.default.post(name: .moveTab, object: -1) }
+                    .keyboardShortcut(.leftArrow, modifiers: [.command, .control])
+                Divider()
+                Button("Zoom In") { NotificationCenter.default.post(name: .zoomFont, object: 1.0) }
+                    .keyboardShortcut("=", modifiers: [.command])
+                Button("Zoom Out") { NotificationCenter.default.post(name: .zoomFont, object: -1.0) }
+                    .keyboardShortcut("-", modifiers: [.command])
+                Button("Reset Zoom") { NotificationCenter.default.post(name: .zoomFont, object: 0.0) }
+                    .keyboardShortcut("0", modifiers: [.command])
             }
             // Route ⌘, to our own settings window instead of the native one.
             CommandGroup(replacing: .appSettings) {

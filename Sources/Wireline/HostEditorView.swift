@@ -19,6 +19,7 @@ struct HostEditorView: View {
     @State private var descriptionText = ""
     @State private var autoSudo = false
     @State private var launchArgs = ""
+    @FocusState private var aliasFocused: Bool
 
     private var isEditing: Bool { context.host != nil }
     private var originalAlias: String? { context.host?.alias }
@@ -33,7 +34,9 @@ struct HostEditorView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     section(loc("身份", "Identity")) {
-                        field(loc("别名", "Alias")) { input(loc("如 web-hk-1", "e.g. web-hk-1"), $alias) }
+                        field(loc("别名", "Alias")) {
+                            input(loc("如 web-hk-1", "e.g. web-hk-1"), $alias).focused($aliasFocused)
+                        }
                         field(loc("分组", "Group")) { input(loc("如 Hong Kong", "e.g. Hong Kong"), $group) }
                         field(loc("描述", "Description")) { input("", $descriptionText) }
                     }
@@ -93,7 +96,10 @@ struct HostEditorView: View {
         .frame(width: 480, height: 580)
         .background(WL.bg)
         .preferredColorScheme(.dark)
-        .onAppear(perform: populate)
+        .onAppear {
+            populate()
+            DispatchQueue.main.async { aliasFocused = true }
+        }
     }
 
     private var canSave: Bool { !alias.trimmingCharacters(in: .whitespaces).isEmpty }

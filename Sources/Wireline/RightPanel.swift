@@ -302,7 +302,9 @@ struct SessionTabBar: View {
             }
         }
         .frame(height: 36)
-        .background(WL.bg)
+        // Transparent so the wallpaper / panel translucency reaches the very top,
+        // matching the rest of the panel instead of an opaque tab strip.
+        .background(.clear)
         .blocksWindowDrag()
     }
 }
@@ -328,6 +330,11 @@ struct SessionTab: View {
     private var title: String {
         tab.sessionIDs.compactMap { sessions.session($0)?.title }.joined(separator: " | ")
     }
+    /// True when this (non-active) tab has a command still running — shows a
+    /// "running…" badge so you know it's working while you're on another tab.
+    private var running: Bool {
+        tab.sessionIDs.contains { sessions.session($0)?.isBusy == true }
+    }
 
     var body: some View {
         HStack(spacing: 8) {
@@ -347,6 +354,9 @@ struct SessionTab: View {
             } else {
                 Text(title).font(WL.small)
                     .foregroundStyle(isActive ? WL.greenBright : WL.textDim).lineLimit(1)
+            }
+            if !isActive && running {
+                RunningBadge()
             }
             Button { closeTab() } label: {
                 Text("[x]").font(WL.small)
@@ -391,6 +401,26 @@ struct SessionTab: View {
     private func cancel() { isEditing = false }
 }
 
+/// A small pulsing "running…" badge shown on a backgrounded tab whose session is
+/// still busy, so long jobs (a build, an AI CLI) are visible at a glance.
+struct RunningBadge: View {
+    @Environment(Localizer.self) private var loc
+    @State private var pulse = false
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Circle().fill(WL.amber).frame(width: 5, height: 5)
+                .opacity(pulse ? 0.3 : 1)
+            Text(loc("运行中…", "running…")).font(WL.caption).foregroundStyle(WL.amber)
+        }
+        .padding(.horizontal, 5).padding(.vertical, 1)
+        .background(WL.amber.opacity(0.12), in: Capsule())
+        .onAppear {
+            withAnimation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true)) { pulse = true }
+        }
+    }
+}
+
 // MARK: - Connection info bar
 
 struct ConnectionInfoBar: View {
@@ -418,7 +448,9 @@ struct ConnectionInfoBar: View {
             BracketButton(loc("重连", "Reconnect")) { reconnect() }
         }
         .padding(.horizontal, 18).padding(.vertical, 9)
-        .background(WL.bg)
+        // Transparent so the panel's translucent background (and the wallpaper
+        // behind it) shows through here too, instead of an opaque strip.
+        .background(.clear)
         .sheet(isPresented: $showSnippets) {
             SnippetsSheet { command in session.terminalView.send(txt: command + "\n") }
         }

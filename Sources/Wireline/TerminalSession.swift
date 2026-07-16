@@ -52,6 +52,13 @@ final class WirelineTerminalView: LocalProcessTerminalView {
     /// returns), with its elapsed seconds — drives the "command finished" notice.
     var onCommandFinished: ((TimeInterval) -> Void)?
 
+    /// Called when this session's busy state flips: `true` when a command/process
+    /// starts running (the shell prompt goes away), `false` when it returns to the
+    /// prompt (with the run's elapsed seconds). Drives the "running…" tab badge and
+    /// the background-tab completion reminder. Emitted only after the first shell
+    /// prompt, so the initial connect/login phase doesn't count as a "run".
+    var onBusyChange: ((Bool, TimeInterval) -> Void)?
+
     // Session logging: append ANSI-stripped output to a file while active.
     private var logHandle: FileHandle?
 
@@ -93,6 +100,15 @@ final class WirelineTerminalView: LocalProcessTerminalView {
     private var atPrompt = true
     private var leftPromptAt: DispatchTime?
     private var promptTail = ""
+    /// Set once the first shell prompt appears, so the connect/login phase isn't
+    /// mistaken for a running command.
+    private var hasSeenFirstPrompt = false
+    /// Debounced "a command is running" state — survives transient prompt redraws
+    /// (async prompt segments, theme repaints) so an idle shell never flickers to
+    /// "running".
+    private var busy = false
+    /// Bumped on every prompt transition to invalidate a pending busy timer.
+    private var busyGeneration = 0
 
     init(frame: CGRect, password: String?, autoSudo: Bool) {
         self.password = password
@@ -140,16 +156,34 @@ final class WirelineTerminalView: LocalProcessTerminalView {
             .reversed().first { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
             .map(String.init) ?? ""
         let nowAtPrompt = isShellPrompt(promptLine)
+        // Seeing any prompt means we're past the connect/login phase — even if it
+        // doesn't flip the state (e.g. the first output already is a prompt).
+        if nowAtPrompt { hasSeenFirstPrompt = true }
         if nowAtPrompt != atPrompt {
-            if nowAtPrompt {
-                if let left = leftPromptAt {
-                    let elapsed = Double(DispatchTime.now().uptimeNanoseconds - left.uptimeNanoseconds) / 1e9
-                    if elapsed >= 20 { onCommandFinished?(elapsed) }
-                }
-            } else {
-                leftPromptAt = .now()
-            }
             atPrompt = nowAtPrompt
+            busyGeneration &+= 1
+            if nowAtPrompt {
+                // Back at the prompt: if a command had actually started, it's done.
+                if busy {
+                    busy = false
+                    let elapsed = leftPromptAt.map {
+                        Double(DispatchTime.now().uptimeNanoseconds - $0.uptimeNanoseconds) / 1e9
+                    } ?? 0
+                    if elapsed >= 20 { onCommandFinished?(elapsed) }
+                    onBusyChange?(false, elapsed)
+                }
+            } else if hasSeenFirstPrompt {
+                // Left the prompt — only count it as "running" if it stays that
+                // way for a beat, so prompt redraws / async segments (p10k, etc.)
+                // don't flicker the badge on an idle shell.
+                leftPromptAt = .now()
+                let gen = busyGeneration
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
+                    guard let self, self.busyGeneration == gen, !self.atPrompt, !self.busy else { return }
+                    self.busy = true
+                    self.onBusyChange?(true, 0)
+                }
+            }
         }
 
         guard password != nil || autoSudo else { return }

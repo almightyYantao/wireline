@@ -17,6 +17,10 @@ extension Notification.Name {
     static let searchTerminal = Notification.Name("wireline.searchTerminal")
     static let focusNextPane = Notification.Name("wireline.focusNextPane")
     static let focusPrevPane = Notification.Name("wireline.focusPrevPane")
+    static let showCommandPalette = Notification.Name("wireline.showCommandPalette")
+    static let cycleTab = Notification.Name("wireline.cycleTab")
+    static let moveTab = Notification.Name("wireline.moveTab")
+    static let zoomFont = Notification.Name("wireline.zoomFont")
 }
 
 /// Right-panel mode. `nil` = SSH (terminal sessions).
@@ -38,6 +42,7 @@ struct ContentView: View {
     @State private var fileHost: Host?
     @State private var selectedAlias: String?
     @State private var showQuickConnect = false
+    @State private var showCommandPalette = false
     @State private var sidebarCollapsed = UserDefaults.standard.bool(forKey: "sidebarCollapsed")
     @State private var chrome = WindowChromeController()
     @State private var palette = Palette.shared
@@ -69,9 +74,7 @@ struct ContentView: View {
             }
             .ignoresSafeArea()
 
-            if showQuickConnect {
-                quickConnectOverlay
-            }
+            overlays
         }
         .wlMenuHost()
         .background(WindowAccessor { w in chrome.attach(to: w) })
@@ -115,6 +118,7 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: .showQuickConnect)) { _ in
             showQuickConnect = true
         }
+        .modifier(PaletteTabHandlers(store: store, sessions: sessions, showCommandPalette: $showCommandPalette))
         .alert("Something went wrong", isPresented: .constant(store.lastError != nil)) {
             Button("OK") { store.lastError = nil }
         } message: {
@@ -129,6 +133,14 @@ struct ContentView: View {
         return alias.flatMap { a in store.hosts.first { $0.alias == a } }
     }
 
+    /// The keyboard-driven overlays (Quick Connect, Command Palette). Grouped so
+    /// the main `body` stays simple enough for the type-checker.
+    @ViewBuilder
+    private var overlays: some View {
+        if showQuickConnect { quickConnectOverlay }
+        if showCommandPalette { commandPaletteOverlay }
+    }
+
     /// The ⌘K quick-connect palette, as an in-window overlay (not a sheet) so it
     /// never triggers the AppKit title-bar reset / flash.
     private var quickConnectOverlay: some View {
@@ -138,6 +150,23 @@ struct ContentView: View {
                 .onTapGesture { showQuickConnect = false }
             QuickConnectView(onClose: { showQuickConnect = false })
                 .frame(width: 620, height: 420)
+                .background(WL.bg, in: RoundedRectangle(cornerRadius: 12))
+                .overlay(RoundedRectangle(cornerRadius: 12).stroke(WL.border, lineWidth: 1))
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .shadow(color: .black.opacity(0.5), radius: 24, y: 8)
+        }
+        .transition(.opacity)
+    }
+
+    /// The ⌘P command palette — an in-window overlay (not a sheet), same as Quick
+    /// Connect, so it never triggers the AppKit title-bar reset / flash.
+    private var commandPaletteOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.4)
+                .ignoresSafeArea()
+                .onTapGesture { showCommandPalette = false }
+            CommandPaletteView(onClose: { showCommandPalette = false })
+                .frame(width: 640, height: 460)
                 .background(WL.bg, in: RoundedRectangle(cornerRadius: 12))
                 .overlay(RoundedRectangle(cornerRadius: 12).stroke(WL.border, lineWidth: 1))
                 .clipShape(RoundedRectangle(cornerRadius: 12))
@@ -165,6 +194,34 @@ struct ContentView: View {
         .frame(width: 34)
         .frame(maxHeight: .infinity)
         .background(WL.bg.opacity(store.terminalOpacity))
+    }
+}
+
+/// Handlers for the command palette, tab cycling/moving, and font zoom. Grouped
+/// into a modifier so `ContentView.body`'s modifier chain stays short enough for
+/// the Swift type-checker.
+private struct PaletteTabHandlers: ViewModifier {
+    let store: HostStore
+    let sessions: SessionStore
+    @Binding var showCommandPalette: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .onReceive(NotificationCenter.default.publisher(for: .showCommandPalette)) { _ in
+                showCommandPalette = true
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .cycleTab)) { note in
+                if let d = note.object as? Int { sessions.focusAdjacentTab(d) }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .moveTab)) { note in
+                if let d = note.object as? Int { sessions.moveActiveTab(d) }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .zoomFont)) { note in
+                // Drive the app's real font-size setting; TerminalHostView re-applies
+                // it to every terminal on redraw.
+                guard let d = note.object as? Double else { return }
+                store.terminalFontSize = d == 0 ? 13 : min(28, max(9, store.terminalFontSize + d))
+            }
     }
 }
 

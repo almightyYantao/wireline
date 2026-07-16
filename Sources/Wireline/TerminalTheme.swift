@@ -56,6 +56,12 @@ struct TerminalTheme: Codable, Sendable, Equatable {
 
     /// A handful of well-loved schemes, available without importing a file.
     static let presets: [TerminalTheme] = [
+        // 猛男粉 — an unapologetically hot-pink scheme. Because the app derives its
+        // whole chrome from the active terminal theme, selecting this turns the
+        // entire UI pink (accent = the hot-pink cursor).
+        make("猛男粉 / Hot Pink", bg: 0x1a0a12, fg: 0xffcce4, cur: 0xff2d95, [
+            0x3a2030, 0xff4d6d, 0x5fe3a0, 0xffd166, 0x8ab6ff, 0xff5cc8, 0x64e0d6, 0xffd9ec,
+            0x6b4658, 0xff7d9c, 0x86f0bf, 0xffe08a, 0xa9caff, 0xff8fda, 0x93f0e8, 0xfff0f8]),
         make("Dracula", bg: 0x282a36, fg: 0xf8f8f2, cur: 0xf8f8f0, [
             0x21222c, 0xff5555, 0x50fa7b, 0xf1fa8c, 0xbd93f9, 0xff79c6, 0x8be9fd, 0xf8f8f2,
             0x6272a4, 0xff6e6e, 0x69ff94, 0xffffa5, 0xd6acff, 0xff92df, 0xa4ffff, 0xffffff]),
