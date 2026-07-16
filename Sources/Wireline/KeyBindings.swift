@@ -81,6 +81,7 @@ enum ShortcutAction: String, CaseIterable, Identifiable {
     case suggestCommand
     case editHost
     case closeShell
+    case showTodos
 
     var id: String { rawValue }
 
@@ -97,6 +98,7 @@ enum ShortcutAction: String, CaseIterable, Identifiable {
         case .suggestCommand:   return loc.t("AI 建议下一条命令", "Suggest Next Command")
         case .editHost:         return loc.t("编辑当前主机", "Edit Host")
         case .closeShell:       return loc.t("关闭当前 Shell", "Close Current Shell")
+        case .showTodos:        return loc.t("待办清单", "To-Do List")
         }
     }
 
@@ -112,6 +114,7 @@ enum ShortcutAction: String, CaseIterable, Identifiable {
         case .suggestCommand:   return KeyShortcut(key: ";")
         case .editHost:         return KeyShortcut(key: "e")
         case .closeShell:       return KeyShortcut(key: "w")
+        case .showTodos:        return KeyShortcut(key: "d")
         }
     }
 }

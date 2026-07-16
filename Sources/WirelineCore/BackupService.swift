@@ -9,10 +9,24 @@ public struct BackupBundle: Codable, Sendable {
     public var hosts: [Host]
     /// alias -> password, only for hosts that use password auth.
     public var passwords: [String: String]
+    /// The user's to-do items, so a migration carries them along too.
+    public var todos: [Todo]
 
-    public init(hosts: [Host], passwords: [String: String]) {
+    public init(hosts: [Host], passwords: [String: String], todos: [Todo] = []) {
         self.hosts = hosts
         self.passwords = passwords
+        self.todos = todos
+    }
+
+    // Tolerant decoding: backups written before to-dos existed have no `todos`
+    // key, and must still restore.
+    enum CodingKeys: String, CodingKey { case hosts, passwords, todos }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        hosts = try c.decode([Host].self, forKey: .hosts)
+        passwords = try c.decode([String: String].self, forKey: .passwords)
+        todos = try c.decodeIfPresent([Todo].self, forKey: .todos) ?? []
     }
 }
 

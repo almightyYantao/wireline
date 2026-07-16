@@ -16,6 +16,34 @@ struct WindowAccessor: NSViewRepresentable {
     }
 }
 
+/// Puts the app-wide wallpaper behind `content` and attaches the same window
+/// chrome the main window uses, so secondary windows (the to-do list, …)
+/// composite over the identical translucent backdrop. Panels inside `content`
+/// should use `WL.bg.opacity(store.terminalOpacity)` to let the wallpaper show
+/// through, exactly like the main window's panels.
+struct WallpaperBackground: ViewModifier {
+    @Environment(HostStore.self) private var store
+    @State private var chrome = WindowChromeController()
+
+    func body(content: Content) -> some View {
+        // Read the palette version so the tree rebuilds when the theme recolors.
+        let _ = Palette.shared.version
+        ZStack {
+            WallpaperView(path: store.terminalBgImagePath)
+                .ignoresSafeArea()
+            content
+        }
+        .background(WindowAccessor { chrome.attach(to: $0) })
+        .id(Palette.shared.version)
+        .preferredColorScheme(.dark)
+    }
+}
+
+extension View {
+    /// Composite this view over the app-wide wallpaper with shared window chrome.
+    func wlWallpaperBackground() -> some View { modifier(WallpaperBackground()) }
+}
+
 /// Full-size-content transparent title bar so the app's dark chrome runs edge to
 /// edge (no separate grey bar). Double-click-to-zoom is handled by a local event
 /// monitor — reliable even though SwiftUI content overlays the title bar.

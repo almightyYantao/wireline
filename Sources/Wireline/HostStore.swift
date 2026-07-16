@@ -321,13 +321,20 @@ final class HostStore {
 
     // MARK: - Backup / migration
 
+    /// Supplies the current to-do list to include in a backup, and restores an
+    /// imported one. Wired up in `WirelineApp` where both stores exist, so the
+    /// backup layer stays decoupled from `TodoStore`. Defaults are no-ops, so
+    /// backup works even before they're set.
+    var currentTodos: () -> [Todo] = { [] }
+    var restoreTodos: ([Todo]) -> Void = { _ in }
+
     /// Bundle every host plus its Keychain password into an encrypted blob.
     func exportBackup(passphrase: String) throws -> Data {
         var passwords: [String: String] = [:]
         for host in hosts where host.resolvedAuthMethod == .password {
             if let pw = try? keychain.password(for: host.alias) { passwords[host.alias] = pw }
         }
-        let bundle = BackupBundle(hosts: hosts, passwords: passwords)
+        let bundle = BackupBundle(hosts: hosts, passwords: passwords, todos: currentTodos())
         return try BackupService().export(bundle, passphrase: passphrase)
     }
 
@@ -346,6 +353,7 @@ final class HostStore {
             }
         }
         persist()
+        if !bundle.todos.isEmpty { restoreTodos(bundle.todos) }
         return bundle.hosts.count
     }
 

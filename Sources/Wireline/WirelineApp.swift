@@ -7,6 +7,7 @@ struct WirelineApp: App {
     @State private var forwards = ForwardStore()
     @State private var sessions = SessionStore()
     @State private var snippets = SnippetStore()
+    @State private var todos = TodoStore()
     @State private var loc = Localizer.shared
     @State private var keys = KeyBindingStore.shared
     @Environment(\.openWindow) private var openWindow
@@ -31,6 +32,11 @@ struct WirelineApp: App {
                 .environment(loc)
                 .frame(minWidth: 900, minHeight: 560)
                 .task {
+                    // Let the backup layer see the to-do list without coupling
+                    // HostStore to TodoStore.
+                    store.currentTodos = { [todos] in todos.todos }
+                    store.restoreTodos = { [todos] items in todos.replaceAll(items) }
+                    Notifier.requestAuthorization()
                     if store.autoCheckOnLaunch { await store.checkAll() }
                     store.startMonitoring()
                     store.startAutoBackup()
@@ -61,6 +67,8 @@ struct WirelineApp: App {
                     .shortcut(.suggestCommand, keys)
                 Button("Edit Host") { NotificationCenter.default.post(name: .editHost, object: nil) }
                     .shortcut(.editHost, keys)
+                Button("To-Do List") { openWindow(id: "todos") }
+                    .shortcut(.showTodos, keys)
                 Divider()
                 ForEach(1...9, id: \.self) { n in
                     Button("Select Tab \(n)") {
@@ -87,5 +95,31 @@ struct WirelineApp: App {
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentSize)
         .defaultPosition(.center)
+
+        // Standalone to-do window, invoked from the menu / a customizable
+        // shortcut (⌘D by default). A single unique window so re-invoking focuses
+        // it instead of spawning duplicates.
+        Window("Wireline To-Do", id: "todos") {
+            TodoWindowView()
+                .environment(todos)
+                .environment(store)
+                .environment(loc)
+        }
+        .windowStyle(.hiddenTitleBar)
+        .defaultSize(width: 440, height: 560)
+        .defaultPosition(.topTrailing)
+
+        // Menu-bar extra: a live count of open items plus quick add / toggle,
+        // so the to-do list is one click away without opening a window.
+        MenuBarExtra {
+            TodoMenuBarView(openWindow: { openWindow(id: "todos") })
+                .environment(todos)
+                .environment(loc)
+        } label: {
+            let _ = todos.todos   // observe so the badge updates live
+            Image(systemName: "checklist")
+            if todos.activeCount > 0 { Text("\(todos.activeCount)") }
+        }
+        .menuBarExtraStyle(.window)
     }
 }

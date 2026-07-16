@@ -52,6 +52,24 @@ In Settings → AI, enter an **OpenAI-compatible endpoint + key** (a relay or di
 
 ---
 
+## ✅ To-Do
+
+A standalone daily checklist that lives right next to your terminals — open it with **⌘D** (remappable) or from the menu-bar icon.
+
+- **Menu-bar extra**: a live count of open items, quick-add, and quick-toggle without opening a window
+- **Due date & time** with overdue highlighting, and **system notifications** when an item comes due
+- **Priority (star), tags, notes, and nested subtasks** (with `done/total` progress)
+- **Recurring items** (daily / weekly / monthly) — completing one spawns the next occurrence automatically
+- **Search** and **tag filtering**; filter by all / active / done
+- **Keyboard-driven**: ↑↓ to select, space to toggle, return to edit, delete to remove, **⌘Z to undo**
+- **AI recap** (reuses your configured endpoint): a natural-language *today / this-month* summary of what you finished and what still needs attention
+- **Smart add**: type “submit the report tomorrow 3pm” and the AI fills in the title, due time, and priority
+- Composites over the **same wallpaper backdrop** as the main window, and rides along inside the **encrypted backup / migration** — switch Macs and your to-dos come too
+
+Data lives only in a local `todos.json` (plus the opt-in encrypted backup); it never touches `~/.ssh/config`.
+
+---
+
 ## ✨ Features
 
 **Connect & manage**
