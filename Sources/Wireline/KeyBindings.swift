@@ -86,6 +86,7 @@ enum ShortcutAction: String, CaseIterable, Identifiable {
     case focusNextPane
     case focusPrevPane
     case commandPalette
+    case showPet
 
     var id: String { rawValue }
 
@@ -107,6 +108,7 @@ enum ShortcutAction: String, CaseIterable, Identifiable {
         case .focusNextPane:    return loc.t("下一个分屏", "Focus Next Pane")
         case .focusPrevPane:    return loc.t("上一个分屏", "Focus Previous Pane")
         case .commandPalette:   return loc.t("命令面板", "Command Palette")
+        case .showPet:          return loc.t("宠物对话窗口", "Desktop Pet Chat")
         }
     }
 
@@ -127,6 +129,7 @@ enum ShortcutAction: String, CaseIterable, Identifiable {
         case .focusNextPane:    return KeyShortcut(key: "]")
         case .focusPrevPane:    return KeyShortcut(key: "[")
         case .commandPalette:   return KeyShortcut(key: "p")
+        case .showPet:          return KeyShortcut(key: "j")
         }
     }
 }

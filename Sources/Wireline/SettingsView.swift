@@ -240,6 +240,15 @@ struct SettingsView: View {
                             "Requires background monitoring. When a host drops, AI adds likely causes to the notification."))
                 }
 
+                section(loc("桌面宠物", "Desktop Pet")) {
+                    Toggle(isOn: $ai.petEnabled) {
+                        Text(loc("启用桌面宠物（启动时悬浮显示）", "Enable desktop pet (float on launch)"))
+                            .font(WL.body).foregroundStyle(WL.textPrimary)
+                    }.toggleStyle(.checkbox).tint(WL.green)
+                    hint(loc("一只可拖动的悬浮小精灵,点它就能对话——它操作当前活动的终端标签页,帮你执行命令并总结结果。菜单 窗口 → 桌面宠物 也能随时唤出。",
+                            "A draggable floating sprite — click it to chat. It drives your active terminal tab, runs commands, and summarizes. Also summonable from the menu."))
+                }
+
                 section(loc("隐私", "Privacy")) {
                     Toggle(isOn: $ai.redact) {
                         Text(loc("发送前脱敏（密码 / token 等）", "Redact secrets before sending"))

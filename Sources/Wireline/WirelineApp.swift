@@ -42,6 +42,8 @@ struct WirelineApp: App {
                     if store.autoCheckOnLaunch { await store.checkAll() }
                     store.startMonitoring()
                     store.startAutoBackup()
+                    // Float the desktop pet on launch (unless the user disabled it).
+                    if AIConfig.shared.petEnabled { openWindow(id: "pet") }
                 }
         }
         .windowStyle(.hiddenTitleBar)   // SwiftUI-managed, so it survives sheets & window switches
@@ -87,6 +89,15 @@ struct WirelineApp: App {
                     .shortcut(.editHost, keys)
                 Button("To-Do List") { openWindow(id: "todos") }
                     .shortcut(.showTodos, keys)
+                Button("Desktop Pet") {
+                    openWindow(id: "pet")
+                    // Post after the window has a chance to mount & subscribe, so a
+                    // freshly-opened pet still receives the toggle/focus signal.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+                        NotificationCenter.default.post(name: .focusPet, object: nil)
+                    }
+                }
+                .shortcut(.showPet, keys)
                 Divider()
                 ForEach(1...9, id: \.self) { n in
                     Button("Select Tab \(n)") {
@@ -141,6 +152,20 @@ struct WirelineApp: App {
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 440, height: 560)
         .defaultPosition(.topTrailing)
+
+        // The floating desktop pet: a draggable, always-on-top AI companion that
+        // operates the currently active terminal tab. A single unique window.
+        Window("Wireline Pet", id: "pet") {
+            PetView()
+                .environment(store)
+                .environment(sessions)
+                .environment(snippets)
+                .environment(forwards)
+                .environment(loc)
+        }
+        .windowStyle(.hiddenTitleBar)
+        .windowResizability(.contentSize)
+        .defaultPosition(.bottomTrailing)
 
         // Menu-bar extra: a live count of open items plus quick add / toggle,
         // so the to-do list is one click away without opening a window.

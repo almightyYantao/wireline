@@ -481,7 +481,7 @@ struct ConnectionInfoBar: View {
     }
 
     private var endpoint: String {
-        guard case .ssh(let alias, _, _, _) = session.kind else { return session.title }
+        guard case .ssh(let alias, _, _, _, _) = session.kind else { return session.title }
         if let host { return "\(host.user ?? "root")@\(host.connectHostname)" }
         return alias
     }

@@ -5,8 +5,10 @@ import WirelineCore
 
 /// What a terminal session runs.
 enum SessionKind {
-    /// An SSH connection to a host alias.
-    case ssh(alias: String, password: String?, autoSudo: Bool, args: [String])
+    /// An SSH connection to a host alias. `password` is the login password (nil
+    /// for key auth); `sudoPassword` is fed to `sudo` for auto-sudo hosts and is
+    /// available even on key-auth hosts (which have no login password).
+    case ssh(alias: String, password: String?, sudoPassword: String?, autoSudo: Bool, args: [String])
     /// An interactive SFTP file-transfer session to a host alias.
     case sftp(alias: String, password: String?, args: [String])
     /// A plain local login shell (the user's `$SHELL`, e.g. zsh).
@@ -46,7 +48,7 @@ final class TerminalSession: Identifiable {
     /// disturbance to the interactive terminal); local shells run via zsh.
     func runCapturing(_ command: String) async -> String {
         switch kind {
-        case .ssh(let alias, _, _, _):
+        case .ssh(let alias, _, _, _, _):
             return await Self.exec(["/usr/bin/ssh", "-S", controlSocket, "-o", "BatchMode=yes", alias, command])
         case .localShell:
             return await Self.exec(["/bin/zsh", "-lc", command])
@@ -123,14 +125,14 @@ final class TerminalSession: Identifiable {
         self.kind = kind
         self.title = title
         switch kind {
-        case .ssh(let a, _, _, _): self.alias = a
+        case .ssh(let a, _, _, _, _): self.alias = a
         case .sftp(let a, _, _): self.alias = a
         case .localShell: self.alias = ""
         }
         let frame = CGRect(x: 0, y: 0, width: 800, height: 480)
         switch kind {
-        case .ssh(_, let password, let autoSudo, _):
-            self.terminalView = WirelineTerminalView(frame: frame, password: password, autoSudo: autoSudo)
+        case .ssh(_, let password, let sudoPassword, let autoSudo, _):
+            self.terminalView = WirelineTerminalView(frame: frame, password: password, sudoPassword: sudoPassword, autoSudo: autoSudo)
         case .sftp, .localShell:
             self.terminalView = WirelineTerminalView(frame: frame, password: nil, autoSudo: false)
         }
@@ -209,7 +211,7 @@ final class TerminalSession: Identifiable {
         if let lang = ProcessInfo.processInfo.environment["LANG"] { env.append("LANG=\(lang)") }
 
         switch kind {
-        case .ssh(let alias, let password, _, let extraArgs):
+        case .ssh(let alias, let password, _, _, let extraArgs):
             // For password hosts, feed the password to ssh deterministically via
             // an askpass helper (OpenSSH SSH_ASKPASS + REQUIRE=force) instead of
             // typing it into the PTY — no prompt-scraping, no dropped characters.
@@ -345,9 +347,10 @@ final class SessionStore {
     /// Open an SSH session for a host. `password` is fetched from the Keychain
     /// by the caller (nil for key auth).
     @discardableResult
-    func open(host: Host, password: String?) -> UUID {
+    func open(host: Host, password: String?, sudoPassword: String? = nil) -> UUID {
         add(TerminalSession(
-            kind: .ssh(alias: host.alias, password: password, autoSudo: host.autoSudo, args: host.launchArgTokens),
+            kind: .ssh(alias: host.alias, password: password, sudoPassword: sudoPassword,
+                       autoSudo: host.autoSudo, args: host.launchArgTokens),
             title: host.alias))
     }
 
@@ -560,7 +563,7 @@ final class SessionStore {
             switch snap.kind {
             case .ssh:
                 if let h = store.hosts.first(where: { $0.alias == snap.alias }) {
-                    let id = open(host: h, password: store.password(for: h))
+                    let id = open(host: h, password: store.password(for: h), sudoPassword: store.sudoPassword(for: h))
                     session(id)?.title = snap.title
                 }
             case .sftp:

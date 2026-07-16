@@ -319,6 +319,14 @@ final class HostStore {
         return (try? keychain.password(for: host.alias)) ?? nil
     }
 
+    /// The password to feed to `sudo` for an auto-sudo host. Unlike `password`,
+    /// this is returned regardless of the login auth method — key-auth hosts have
+    /// no login password but still need one for `sudo -i`.
+    func sudoPassword(for host: Host) -> String? {
+        guard host.autoSudo else { return nil }
+        return (try? keychain.password(for: host.alias)) ?? nil
+    }
+
     // MARK: - Backup / migration
 
     /// Supplies the current to-do list to include in a backup, and restores an

@@ -50,6 +50,8 @@ final class AIConfig: @unchecked Sendable {
     /// When a monitored host goes offline, ask the AI for likely causes and add
     /// them to the notification.
     var alertAttribution: Bool { didSet { d.set(alertAttribution, forKey: "ai.alertAttribution") } }
+    /// Show the floating desktop-pet assistant, and auto-open it at launch.
+    var petEnabled: Bool { didSet { d.set(petEnabled, forKey: "ai.petEnabled") } }
 
     private let d = UserDefaults.standard
     private let keychain = KeychainService()
@@ -81,6 +83,7 @@ final class AIConfig: @unchecked Sendable {
         agentReadOnly = d.bool(forKey: "ai.agentReadOnly")
         historyLimit = (d.object(forKey: "ai.historyLimit") as? Int) ?? 60
         alertAttribution = d.bool(forKey: "ai.alertAttribution")
+        petEnabled = (d.object(forKey: "ai.petEnabled") as? Bool) ?? true
     }
 
     var activeBaseURL: String { provider == .relay ? relayBaseURL : ollamaBaseURL }

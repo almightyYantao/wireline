@@ -21,6 +21,7 @@ extension Notification.Name {
     static let cycleTab = Notification.Name("wireline.cycleTab")
     static let moveTab = Notification.Name("wireline.moveTab")
     static let zoomFont = Notification.Name("wireline.zoomFont")
+    static let focusPet = Notification.Name("wireline.focusPet")
 }
 
 /// Right-panel mode. `nil` = SSH (terminal sessions).

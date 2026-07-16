@@ -42,6 +42,7 @@ enum TerminalFont {
 /// normal shell.
 final class WirelineTerminalView: LocalProcessTerminalView {
     private let password: String?
+    private let sudoPassword: String?
     private let autoSudo: Bool
 
     /// Invoked when the user presses ⌘W while this terminal is focused, so the
@@ -90,6 +91,7 @@ final class WirelineTerminalView: LocalProcessTerminalView {
 
     private var tail = ""            // rolling tail of recent output
     private var passwordSends = 0
+    private var sudoPasswordSends = 0
     private var sudoSent = false
     private var lastPasswordSend: DispatchTime?
 
@@ -110,8 +112,9 @@ final class WirelineTerminalView: LocalProcessTerminalView {
     /// Bumped on every prompt transition to invalidate a pending busy timer.
     private var busyGeneration = 0
 
-    init(frame: CGRect, password: String?, autoSudo: Bool) {
+    init(frame: CGRect, password: String?, sudoPassword: String? = nil, autoSudo: Bool) {
         self.password = password
+        self.sudoPassword = sudoPassword
         self.autoSudo = autoSudo
         super.init(frame: frame)
         if let font = TerminalFont.preferred(size: 13) { self.font = font }
@@ -186,7 +189,7 @@ final class WirelineTerminalView: LocalProcessTerminalView {
             }
         }
 
-        guard password != nil || autoSudo else { return }
+        guard password != nil || sudoPassword != nil || autoSudo else { return }
 
         tail += String(decoding: slice, as: UTF8.self)
         if tail.count > 600 { tail = String(tail.suffix(600)) }
@@ -195,13 +198,25 @@ final class WirelineTerminalView: LocalProcessTerminalView {
         let lastLine = lines.reversed().first { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
             .map(String.init) ?? ""
 
-        // 1) Answer a password prompt (ssh login or sudo), deduped so multiple
-        //    read chunks around the same prompt don't double-send.
-        if let password, passwordSends < 3, isPasswordPrompt(lastLine), mayResend() {
+        // 1) Answer the ssh login (or key passphrase) prompt with the login
+        //    password — only before auto-sudo kicks in, deduped so multiple read
+        //    chunks around the same prompt don't double-send.
+        if !sudoSent, let password, passwordSends < 3, isPasswordPrompt(lastLine), mayResend() {
             passwordSends += 1
             lastPasswordSend = .now()
             tail = ""
             send(txt: password + "\n")
+            return
+        }
+
+        // 1b) Answer the sudo password prompt after `sudo -i`. Uses the dedicated
+        //     sudo password, which is available even on key-auth hosts (where the
+        //     login `password` is nil).
+        if sudoSent, let sudoPassword, sudoPasswordSends < 3, isPasswordPrompt(lastLine), mayResend() {
+            sudoPasswordSends += 1
+            lastPasswordSend = .now()
+            tail = ""
+            send(txt: sudoPassword + "\n")
             return
         }
 

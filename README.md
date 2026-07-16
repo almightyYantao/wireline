@@ -52,6 +52,18 @@ In Settings → AI, enter an **OpenAI-compatible endpoint + key** (a relay or di
 
 ---
 
+## 🐾 Desktop Pet
+
+A draggable, always-on-top little sprite that floats over your desktop the moment you open Wireline — its own AI conversation window, distinct from the terminal panel. Summon or dismiss it with **⌘J** (remappable), or click it.
+
+- **Talk in plain language, it picks the target(s)**: "summarize the running docker containers on `fn`", or "summarize Docker status across all `IAI` hosts" — it resolves the machine(s) **by alias or by group**, runs the command across them in parallel (via the same non-interactive fleet engine — **no need to connect first**), and hands you one summary
+- **Multi-host by default**: one sentence can fan out to a whole group; per-host results are collapsible, with an overall AI conclusion on top
+- **Safe**: dangerous commands still require confirmation before running on your fleet; secrets redacted before sending
+- **Floating & tidy**: borderless, transparent, drag it anywhere; the chat unfolds *upward* so the pet stays put under your cursor; its own persisted history
+- Toggle it on/off in **Settings → AI → Desktop Pet**
+
+---
+
 ## ✅ To-Do
 
 A standalone daily checklist that lives right next to your terminals — open it with **⌘D** (remappable) or from the menu-bar icon.
@@ -80,7 +92,7 @@ Data lives only in a local `todos.json` (plus the opt-in encrypted backup); it n
 
 **Built-in terminal**
 - 🖥 Real PTY terminal ([SwiftTerm](https://github.com/migueldeicaza/SwiftTerm)), no external Terminal needed
-- 🔐 Password hosts auto-fill via OpenSSH askpass (reusing the Keychain); optional auto `sudo -i`
+- 🔐 Password hosts auto-fill via OpenSSH askpass (reusing the Keychain); optional auto `sudo -i` that auto-enters the saved password — even on key-auth hosts
 - 🧩 Session tabs (numbered, double-click to rename inline); ⌘1–9 to switch; ⌘T local shell; ⌘W close current
 - 🪟 **Split panes**: drag a tab onto another's edge to merge them into one split tab; ⌘[ / ⌘] cycle pane focus; detach a pane back to its own tab
 - 📡 **Broadcast input**: type once, send to every open session at once
