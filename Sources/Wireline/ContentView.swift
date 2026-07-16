@@ -13,12 +13,17 @@ extension Notification.Name {
     static let suggestCommand = Notification.Name("wireline.suggestCommand")
     static let aiConnect = Notification.Name("wireline.aiConnect")
     static let aiOpenFiles = Notification.Name("wireline.aiOpenFiles")
+    static let focusTerminal = Notification.Name("wireline.focusTerminal")
+    static let searchTerminal = Notification.Name("wireline.searchTerminal")
+    static let focusNextPane = Notification.Name("wireline.focusNextPane")
+    static let focusPrevPane = Notification.Name("wireline.focusPrevPane")
 }
 
 /// Right-panel mode. `nil` = SSH (terminal sessions).
 enum SidebarItem: Hashable {
     case forwarding
     case files
+    case keys
 }
 
 struct ContentView: View {
@@ -280,6 +285,8 @@ struct LeftPanel: View {
                               active: operation == .forwarding) { operation = .forwarding }
                 FeatureButton(title: loc("文件", "Files"), symbol: "folder", tint: WL.purple,
                               active: operation == .files) { operation = .files }
+                FeatureButton(title: loc("密钥", "Keys"), symbol: "key", tint: WL.amber,
+                              active: operation == .keys) { operation = .keys }
             }
         }
         .padding(.horizontal, 16).padding(.vertical, 12)

@@ -81,7 +81,13 @@ Data lives only in a local `todos.json` (plus the opt-in encrypted backup); it n
 **Built-in terminal**
 - 🖥 Real PTY terminal ([SwiftTerm](https://github.com/migueldeicaza/SwiftTerm)), no external Terminal needed
 - 🔐 Password hosts auto-fill via OpenSSH askpass (reusing the Keychain); optional auto `sudo -i`
-- 🧩 Session tabs, ⌘1–9 to switch; ⌘T local shell; ⌘W close current
+- 🧩 Session tabs (numbered, double-click to rename inline); ⌘1–9 to switch; ⌘T local shell; ⌘W close current
+- 🪟 **Split panes**: drag a tab onto another's edge to merge them into one split tab; ⌘[ / ⌘] cycle pane focus; detach a pane back to its own tab
+- 📡 **Broadcast input**: type once, send to every open session at once
+- 🔎 **In-terminal search (⌘F)** over the scrollback with match highlighting
+- 🔔 **Command-finished notifications**: get pinged when a long command completes while the app is in the background
+- 📼 **Session logging**: record a session's output to a file, reveal in Finder
+- ♻️ **Session restore**: reopens (and reconnects) the tabs you had open at last quit
 - 📊 Live remote **CPU / memory / time** in the status bar (via a reused ControlMaster connection)
 - 📝 A vim/vi cheat-sheet pops up while editing (collapsible to a floating icon)
 - 🎨 Built-in themes (Dracula/Nord/Solarized/Gruvbox/Tokyo Night/One Dark) or import **iTerm2 `.itermcolors`**; font & size adjustable
@@ -91,7 +97,8 @@ Data lives only in a local `todos.json` (plus the opt-in encrypted backup); it n
 - ⚡ Batch / fleet execution across selected hosts, aggregated output
 - 🔀 Graphical port forwarding (`ssh -L`, jump hosts, one-click toggle)
 - 🧰 Command snippets: multi-line commands, `{{placeholders}}` prompt-filled at run time
-- 💾 Encrypted backup & migration to a file, or **to WebDAV** (ciphertext only)
+- 🔑 **SSH key manager**: list `~/.ssh` keys with fingerprints, generate (ed25519/rsa/ecdsa), import keys from elsewhere (fixes permissions), copy public key, or deploy to a host via `ssh-copy-id`
+- 💾 Encrypted backup & migration to a file, or **to WebDAV** (ciphertext only) — to-dos ride along too
 
 **Native experience & personalization**
 - 🖼 App-wide **wallpaper**: image or looping **mp4**, translucent panels over it (paused when off-screen)

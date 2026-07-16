@@ -82,6 +82,9 @@ enum ShortcutAction: String, CaseIterable, Identifiable {
     case editHost
     case closeShell
     case showTodos
+    case focusTerminal
+    case focusNextPane
+    case focusPrevPane
 
     var id: String { rawValue }
 
@@ -99,6 +102,9 @@ enum ShortcutAction: String, CaseIterable, Identifiable {
         case .editHost:         return loc.t("编辑当前主机", "Edit Host")
         case .closeShell:       return loc.t("关闭当前 Shell", "Close Current Shell")
         case .showTodos:        return loc.t("待办清单", "To-Do List")
+        case .focusTerminal:    return loc.t("聚焦终端输入", "Focus Terminal")
+        case .focusNextPane:    return loc.t("下一个分屏", "Focus Next Pane")
+        case .focusPrevPane:    return loc.t("上一个分屏", "Focus Previous Pane")
         }
     }
 
@@ -115,6 +121,9 @@ enum ShortcutAction: String, CaseIterable, Identifiable {
         case .editHost:         return KeyShortcut(key: "e")
         case .closeShell:       return KeyShortcut(key: "w")
         case .showTodos:        return KeyShortcut(key: "d")
+        case .focusTerminal:    return KeyShortcut(key: "l")
+        case .focusNextPane:    return KeyShortcut(key: "]")
+        case .focusPrevPane:    return KeyShortcut(key: "[")
         }
     }
 }

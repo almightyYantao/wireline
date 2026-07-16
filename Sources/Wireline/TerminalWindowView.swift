@@ -8,6 +8,12 @@ import WirelineCore
 struct TerminalHostView: NSViewRepresentable {
     @Environment(HostStore.self) private var store
     let session: TerminalSession
+    /// Whether this pane should take keyboard focus. In split view only the
+    /// focused pane is `true`, so redraws never steal focus between panes.
+    var autoFocus: Bool = true
+
+    final class Coordinator { var didFocus = false }
+    func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeNSView(context: Context) -> NSView {
         let container = NSView()
@@ -23,12 +29,24 @@ struct TerminalHostView: NSViewRepresentable {
             term.bottomAnchor.constraint(equalTo: container.bottomAnchor)
         ])
         apply(to: container)
-        DispatchQueue.main.async { container.window?.makeFirstResponder(term) }
+        if autoFocus {
+            context.coordinator.didFocus = true
+            DispatchQueue.main.async { container.window?.makeFirstResponder(term) }
+        }
         return container
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {
         apply(to: nsView)
+        // Grab focus only on a false→true transition — never on every redraw, or
+        // split panes would fight over first responder.
+        if autoFocus, !context.coordinator.didFocus {
+            context.coordinator.didFocus = true
+            let term = session.terminalView
+            DispatchQueue.main.async { term.window?.makeFirstResponder(term) }
+        } else if !autoFocus {
+            context.coordinator.didFocus = false
+        }
     }
 
     private func apply(to container: NSView) {
@@ -60,6 +78,5 @@ struct TerminalHostView: NSViewRepresentable {
         term.layer?.isOpaque = false
         term.nativeBackgroundColor = .clear
         term.layer?.backgroundColor = NSColor.clear.cgColor
-        DispatchQueue.main.async { container.window?.makeFirstResponder(term) }
     }
 }

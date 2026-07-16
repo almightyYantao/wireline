@@ -37,6 +37,8 @@ struct WirelineApp: App {
                     store.currentTodos = { [todos] in todos.todos }
                     store.restoreTodos = { [todos] items in todos.replaceAll(items) }
                     Notifier.requestAuthorization()
+                    // Reopen the tabs that were open at last quit (reconnects).
+                    sessions.restoreIfNeeded(store: store)
                     if store.autoCheckOnLaunch { await store.checkAll() }
                     store.startMonitoring()
                     store.startAutoBackup()
@@ -57,14 +59,28 @@ struct WirelineApp: App {
                     .shortcut(.quickConnect, keys)
                 Button("Refresh Statuses") { Task { await store.checkAll() } }
                     .shortcut(.refreshStatuses, keys)
-                Button("Find") { NotificationCenter.default.post(name: .focusSearch, object: nil) }
-                    .shortcut(.find, keys)
+                // ⌘F searches the terminal scrollback when a session is active,
+                // otherwise focuses the host-list search in the sidebar.
+                Button("Find") {
+                    if sessions.activeSession != nil {
+                        NotificationCenter.default.post(name: .searchTerminal, object: nil)
+                    } else {
+                        NotificationCenter.default.post(name: .focusSearch, object: nil)
+                    }
+                }
+                .shortcut(.find, keys)
                 Button("Toggle Sidebar") { NotificationCenter.default.post(name: .toggleSidebar, object: nil) }
                     .shortcut(.toggleSidebar, keys)
                 Button("Toggle AI Panel") { NotificationCenter.default.post(name: .toggleAI, object: nil) }
                     .shortcut(.toggleAI, keys)
                 Button("Suggest Next Command") { NotificationCenter.default.post(name: .suggestCommand, object: nil) }
                     .shortcut(.suggestCommand, keys)
+                Button("Focus Terminal") { NotificationCenter.default.post(name: .focusTerminal, object: nil) }
+                    .shortcut(.focusTerminal, keys)
+                Button("Focus Next Pane") { NotificationCenter.default.post(name: .focusNextPane, object: nil) }
+                    .shortcut(.focusNextPane, keys)
+                Button("Focus Previous Pane") { NotificationCenter.default.post(name: .focusPrevPane, object: nil) }
+                    .shortcut(.focusPrevPane, keys)
                 Button("Edit Host") { NotificationCenter.default.post(name: .editHost, object: nil) }
                     .shortcut(.editHost, keys)
                 Button("To-Do List") { openWindow(id: "todos") }

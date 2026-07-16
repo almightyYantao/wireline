@@ -48,10 +48,51 @@ final class WirelineTerminalView: LocalProcessTerminalView {
     /// app can close just this session instead of the whole window.
     var onCloseRequested: (() -> Void)?
 
+    /// Called when a command that ran for a while finishes (the shell prompt
+    /// returns), with its elapsed seconds — drives the "command finished" notice.
+    var onCommandFinished: ((TimeInterval) -> Void)?
+
+    // Session logging: append ANSI-stripped output to a file while active.
+    private var logHandle: FileHandle?
+
+    /// Begin logging this session's (clean) output to a file under
+    /// `~/Library/Logs/Wireline/`. Returns the file URL, or nil on failure.
+    func startLogging(label: String) -> URL? {
+        let dir = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Logs/Wireline", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let safe = label.map { $0.isLetter || $0.isNumber ? $0 : "-" }
+        let stamp = Self.logStampFormatter.string(from: Date())
+        let url = dir.appendingPathComponent("\(String(safe))-\(stamp).log")
+        guard FileManager.default.createFile(atPath: url.path, contents: nil),
+              let handle = try? FileHandle(forWritingTo: url) else { return nil }
+        // Seed with a header so a fresh log has context.
+        handle.write(Data("# Wireline session log — \(label) — \(stamp)\n".utf8))
+        logHandle = handle
+        return url
+    }
+
+    func stopLogging() {
+        try? logHandle?.close()
+        logHandle = nil
+    }
+
+    private static let logStampFormatter: DateFormatter = {
+        let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd-HHmmss"; return f
+    }()
+
     private var tail = ""            // rolling tail of recent output
     private var passwordSends = 0
     private var sudoSent = false
     private var lastPasswordSend: DispatchTime?
+
+    // Command-timing for the finished-notification, inferred from output only
+    // (SwiftTerm seals the key-input path, so we can't observe Return): a command
+    // runs from when the shell prompt disappears (output starts) to when it
+    // returns.
+    private var atPrompt = true
+    private var leftPromptAt: DispatchTime?
+    private var promptTail = ""
 
     init(frame: CGRect, password: String?, autoSudo: Bool) {
         self.password = password
@@ -85,8 +126,32 @@ final class WirelineTerminalView: LocalProcessTerminalView {
         super.dataReceived(slice: slice)
         let chunk = String(decoding: slice, as: UTF8.self)
         detectFullScreenApp(chunk)
-        recentClean += Self.stripAnsi(chunk)
+        let clean = Self.stripAnsi(chunk)
+        recentClean += clean
         if recentClean.count > 20000 { recentClean = String(recentClean.suffix(20000)) }
+        if let logHandle { logHandle.write(Data(clean.utf8)) }
+
+        // Command-finished heuristic (output only): track the prompt→output→prompt
+        // cycle. Leaving the prompt = a command started; the prompt returning =
+        // it finished. Only durations ≥ the threshold notify.
+        promptTail += clean
+        if promptTail.count > 400 { promptTail = String(promptTail.suffix(400)) }
+        let promptLine = promptTail.split(separator: "\n", omittingEmptySubsequences: false)
+            .reversed().first { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+            .map(String.init) ?? ""
+        let nowAtPrompt = isShellPrompt(promptLine)
+        if nowAtPrompt != atPrompt {
+            if nowAtPrompt {
+                if let left = leftPromptAt {
+                    let elapsed = Double(DispatchTime.now().uptimeNanoseconds - left.uptimeNanoseconds) / 1e9
+                    if elapsed >= 20 { onCommandFinished?(elapsed) }
+                }
+            } else {
+                leftPromptAt = .now()
+            }
+            atPrompt = nowAtPrompt
+        }
+
         guard password != nil || autoSudo else { return }
 
         tail += String(decoding: slice, as: UTF8.self)

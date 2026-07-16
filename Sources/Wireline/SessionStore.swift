@@ -132,6 +132,15 @@ final class TerminalSession: Identifiable {
         terminalView.onEditorChange = { [weak self] editor in
             self?.activeEditor = editor
         }
+        terminalView.onCommandFinished = { [weak self] elapsed in
+            guard let self else { return }
+            // Only ping when the app isn't frontmost — if you're watching, you
+            // already see the prompt return.
+            guard !NSApp.isActive else { return }
+            let loc = Localizer.shared
+            Notifier.post(title: loc.t("命令完成 · \(self.title)", "Command finished · \(self.title)"),
+                          body: loc.t("耗时 \(Int(elapsed)) 秒", "took \(Int(elapsed))s"))
+        }
     }
 
     func start() {
@@ -186,10 +195,28 @@ final class TerminalSession: Identifiable {
         }
     }
 
+    /// Whether this session is recording its output to a log file, and where.
+    var isLogging = false
+    var logURL: URL?
+
+    /// Start or stop logging this session's output to a file.
+    func toggleLogging() {
+        if isLogging {
+            terminalView.stopLogging()
+            isLogging = false
+        } else {
+            let label = alias.isEmpty ? "local" : alias
+            logURL = terminalView.startLogging(label: label)
+            isLogging = logURL != nil
+        }
+    }
+
     func terminate() {
         guard isRunning else { return }
         isRunning = false
         stats.stop()
+        terminalView.stopLogging()
+        isLogging = false
         terminalView.terminate()
         try? FileManager.default.removeItem(atPath: controlSocket)
         if let askpassURL { try? FileManager.default.removeItem(at: askpassURL) }
@@ -213,14 +240,42 @@ final class TerminalSession: Identifiable {
     }
 }
 
+/// A restorable description of an open session — enough to reopen it (and
+/// reconnect) on the next launch. Live PTY state can't be frozen, so we persist
+/// what the session *is*, then re-establish it.
+struct SessionSnapshot: Codable, Sendable {
+    enum Kind: String, Codable { case ssh, sftp, local }
+    var kind: Kind
+    var alias: String
+    var title: String
+}
+
+/// How the terminal area is split into panes.
+enum SplitAxis { case none, horizontal, vertical }
+
 /// Tracks all open terminal sessions. Shared across the app so a session opened
 /// from Quick Connect or the menu bar shows up wherever windows are hosted.
 @Observable
 @MainActor
 final class SessionStore {
+    /// All live sessions (the terminal/PTY objects).
     private(set) var sessions: [TerminalSession] = []
-    /// The session currently shown in the main window's terminal pane.
+
+    /// The tab bar: each tab is a pane group — a single session (leaf) or a
+    /// split tree of sessions. Dragging one tab onto another's pane merges them
+    /// into one tab; detaching a pane splits it back out into its own tab.
+    private(set) var tabs: [PaneNode] = []
+    /// Which tab (pane group) is currently shown.
+    var activeTabID: UUID?
+    /// The focused session within the active tab (drives which pane is highlighted
+    /// and where the keyboard goes).
     var activeID: UUID?
+
+    var activeTab: PaneNode? { tabs.first { $0.id == activeTabID } }
+
+    private static let persistKey = "wireline.openSessions"
+    /// Guards one-time restore so re-appearing windows don't reopen duplicates.
+    private var didRestore = false
 
     /// Open an SSH session for a host. `password` is fetched from the Keychain
     /// by the caller (nil for key auth).
@@ -250,8 +305,83 @@ final class SessionStore {
         session.terminalView.onCloseRequested = { [weak self] in self?.close(id) }
         sessions.append(session)
         session.start()
+        // Every new session starts as its own single-pane tab.
+        let tab = PaneNode.makeLeaf(id)
+        tabs.append(tab)
+        activeTabID = tab.id
         activeID = id
+        persist()
         return id
+    }
+
+    /// The tab (pane group) containing `session`, if any.
+    private func tabIndex(containing session: UUID) -> Int? {
+        tabs.firstIndex { $0.leafID(for: session) != nil }
+    }
+
+    // MARK: - Split (tab groups)
+
+    /// Merge the dragged tab into the target pane: remove the dragged tab and
+    /// splice its whole pane node into the target tab, splitting `targetLeaf`
+    /// along `edge`. The two tabs become one. Dropping a tab onto a pane inside
+    /// the SAME tab is ignored.
+    func mergeTab(_ draggedTabID: UUID, ontoLeaf targetLeaf: UUID, edge: PaneEdge) {
+        guard let di = tabs.firstIndex(where: { $0.id == draggedTabID }),
+              let ti = tabs.firstIndex(where: { $0.contains(leaf: targetLeaf) }),
+              di != ti else { return }
+        let draggedNode = tabs[di]
+        tabs.remove(at: di)
+        let target = di < ti ? ti - 1 : ti
+        let e: PaneEdge = (edge == .center) ? .trailing : edge
+        tabs[target] = tabs[target].splitting(leaf: targetLeaf, insertNode: draggedNode, edge: e)
+        activeTabID = tabs[target].id
+        activeID = draggedNode.sessionIDs.first ?? activeID
+    }
+
+    /// Detach a pane (session) from its multi-pane tab into its own new tab.
+    func detachPaneToTab(_ session: UUID) {
+        guard let ti = tabIndex(containing: session) else { return }
+        // Only meaningful when the tab actually has more than one pane.
+        guard tabs[ti].sessionIDs.count > 1 else { return }
+        if let remaining = tabs[ti].removingSession(session) { tabs[ti] = remaining }
+        let tab = PaneNode.makeLeaf(session)
+        tabs.append(tab)
+        activeTabID = tab.id
+        activeID = session
+    }
+
+    /// Focus a session from a tab click / keyboard: activate its tab and pane.
+    func focusSession(_ id: UUID) {
+        guard let ti = tabIndex(containing: id) else { return }
+        activeTabID = tabs[ti].id
+        activeID = id
+    }
+
+    /// Cycle keyboard focus to the next/previous pane within the active tab.
+    func focusNextPane() { cyclePane(+1) }
+    func focusPreviousPane() { cyclePane(-1) }
+
+    private func cyclePane(_ delta: Int) {
+        guard let tab = activeTab else { return }
+        let ids = tab.sessionIDs
+        guard ids.count > 1 else { return }
+        let cur = ids.firstIndex(of: activeID ?? UUID()) ?? 0
+        activeID = ids[(cur + delta + ids.count) % ids.count]
+    }
+
+    /// Focus a whole tab (its first pane).
+    func focusTab(_ tabID: UUID) {
+        guard let tab = tabs.first(where: { $0.id == tabID }) else { return }
+        activeTabID = tabID
+        if tab.leafID(for: activeID ?? UUID()) == nil { activeID = tab.sessionIDs.first }
+    }
+
+    /// Rename a tab; the custom title is persisted and restored.
+    func rename(_ id: UUID, to name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let s = session(id) else { return }
+        s.title = trimmed
+        persist()
     }
 
     func session(_ id: UUID) -> TerminalSession? {
@@ -263,25 +393,95 @@ final class SessionStore {
         return session(activeID)
     }
 
-    /// Focus the Nth session (1-based), for ⌘1…⌘9. No-op if out of range.
+    /// Focus the Nth tab (1-based), for ⌘1…⌘9. No-op if out of range.
     func selectIndex(_ n: Int) {
-        guard sessions.indices.contains(n - 1) else { return }
-        activeID = sessions[n - 1].id
+        guard tabs.indices.contains(n - 1) else { return }
+        focusTab(tabs[n - 1].id)
     }
 
     func close(_ id: UUID) {
         guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
         sessions[index].terminate()
         sessions.remove(at: index)
-        // Move focus to a neighbouring session, if any.
-        if activeID == id {
-            activeID = sessions.indices.contains(index) ? sessions[index].id
-                     : sessions.last?.id
+        // Remove the session from its tab; drop the tab if it becomes empty.
+        if let ti = tabIndex(containing: id) {
+            if let remaining = tabs[ti].removingSession(id) { tabs[ti] = remaining }
+            else { tabs.remove(at: ti) }
         }
+        // Re-derive the active tab / session.
+        if !tabs.contains(where: { $0.id == activeTabID }) {
+            activeTabID = tabs.indices.contains(index) ? tabs[index].id : tabs.last?.id
+        }
+        if let at = activeTab {
+            if at.leafID(for: activeID ?? UUID()) == nil { activeID = at.sessionIDs.first }
+        } else {
+            activeID = nil
+        }
+        persist()
     }
 
     func closeAll() {
         sessions.forEach { $0.terminate() }
         sessions.removeAll()
+        tabs.removeAll()
+        activeTabID = nil
+        activeID = nil
+        persist()
+    }
+
+    /// Focus the active session's terminal so keystrokes go straight to the PTY —
+    /// used by the "focus terminal" shortcut after the command bar / AI panel.
+    func focusActiveTerminal() {
+        guard let term = activeSession?.terminalView else { return }
+        term.window?.makeFirstResponder(term)
+    }
+
+    /// Send the same text to every open session's terminal (the broadcast bar).
+    func broadcast(_ text: String) {
+        for s in sessions { s.terminalView.send(txt: text) }
+    }
+
+    // MARK: - Persistence / restore
+
+    private func persist() {
+        let snaps: [SessionSnapshot] = sessions.map { s in
+            let kind: SessionSnapshot.Kind
+            switch s.kind {
+            case .ssh:        kind = .ssh
+            case .sftp:       kind = .sftp
+            case .localShell: kind = .local
+            }
+            return SessionSnapshot(kind: kind, alias: s.alias, title: s.title)
+        }
+        if let data = try? JSONEncoder().encode(snaps) {
+            UserDefaults.standard.set(data, forKey: Self.persistKey)
+        }
+    }
+
+    /// Reopen (and reconnect) the sessions that were open at last quit. Runs once.
+    /// SSH/SFTP sessions resolve their password from the Keychain via `store`.
+    func restoreIfNeeded(store: HostStore) {
+        guard !didRestore else { return }
+        didRestore = true
+        guard let data = UserDefaults.standard.data(forKey: Self.persistKey),
+              let snaps = try? JSONDecoder().decode([SessionSnapshot].self, from: data) else { return }
+        for snap in snaps {
+            switch snap.kind {
+            case .ssh:
+                if let h = store.hosts.first(where: { $0.alias == snap.alias }) {
+                    let id = open(host: h, password: store.password(for: h))
+                    session(id)?.title = snap.title
+                }
+            case .sftp:
+                if let h = store.hosts.first(where: { $0.alias == snap.alias }) {
+                    let id = openSFTP(host: h, password: store.password(for: h))
+                    session(id)?.title = snap.title
+                }
+            case .local:
+                let id = openLocalShell()
+                session(id)?.title = snap.title
+            }
+        }
+        persist()
     }
 }
