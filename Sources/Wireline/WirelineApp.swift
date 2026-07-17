@@ -43,6 +43,8 @@ struct WirelineApp: App {
                     if store.autoCheckOnLaunch { await store.checkAll() }
                     store.startMonitoring()
                     store.startAutoBackup()
+                    // Reconnect enabled MCP servers so their tools are available to the AI.
+                    await MCPStore.shared.connectEnabled()
                     // Float the desktop pet on launch (unless the user disabled it).
                     if AIConfig.shared.petEnabled { openWindow(id: "pet") }
                     // System-wide hotkeys: summon the pet / Quick Connect from any

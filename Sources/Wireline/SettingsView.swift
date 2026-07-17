@@ -10,6 +10,7 @@ struct SettingsView: View {
     @State private var ai = AIConfig.shared
     @State private var aiKeyDraft = ""
     @State private var showThemeEditor = false
+    @State private var showMCP = false
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -30,6 +31,9 @@ struct SettingsView: View {
         .frame(width: 520, height: 580)
         .preferredColorScheme(.dark)
         .sheet(isPresented: $showThemeEditor) { ThemeEditorView() }
+        .sheet(isPresented: $showMCP) {
+            MCPSettingsView(onClose: { showMCP = false }).environment(loc)
+        }
     }
 
     private var header: some View {
@@ -248,6 +252,15 @@ struct SettingsView: View {
                     }.toggleStyle(.checkbox).tint(WL.green)
                     hint(loc("一只可拖动的悬浮小精灵,点它就能对话——它操作当前活动的终端标签页,帮你执行命令并总结结果。菜单 窗口 → 桌面宠物 也能随时唤出。",
                             "A draggable floating sprite — click it to chat. It drives your active terminal tab, runs commands, and summarizes. Also summonable from the menu."))
+                }
+
+                section(loc("MCP 工具", "MCP Tools")) {
+                    Button { showMCP = true } label: {
+                        Label(loc("管理 MCP Server…", "Manage MCP Servers…"), systemImage: "puzzlepiece.extension")
+                            .font(WL.body).foregroundStyle(WL.green)
+                    }.buttonStyle(.plain)
+                    hint(loc("接入外部工具（filesystem / github / k8s…），让 Agent 在本机调用；密钥存 Keychain，写操作二次确认。",
+                            "Plug in external tools (filesystem / github / k8s…) the Agent can call locally; secrets in Keychain, mutating calls confirmed."))
                 }
 
                 section(loc("隐私", "Privacy")) {

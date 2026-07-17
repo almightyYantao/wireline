@@ -31,9 +31,11 @@ struct AIPanelView: View {
     @State private var showFleet = false
     @State private var pendingDanger: String?           // command awaiting confirmation
     @State private var dangerReview = ""                 // AI impact assessment for it
+    @State private var pendingMCP: PendingMCPCall?       // MCP tool call awaiting confirmation
     @FocusState private var inputFocused: Bool
 
     private let maxAgentSteps = 8
+    private let mcpResultCap = 4000                      // chars of tool output fed back
 
     var body: some View {
         VStack(spacing: 0) {
@@ -67,6 +69,28 @@ struct AIPanelView: View {
         } message: {
             Text((pendingDanger ?? "") + (dangerReview.isEmpty ? "" : "\n\n" + dangerReview))
         }
+        .alert(loc("调用外部工具？", "Call this external tool?"),
+               isPresented: Binding(get: { pendingMCP != nil },
+                                    set: { if !$0 { pendingMCP = nil } })) {
+            Button(loc("取消", "Cancel"), role: .cancel) { declineMCP() }
+            Button(loc("调用", "Call")) {
+                if let p = pendingMCP { pendingMCP = nil; executeMCPAndContinue(p) }
+            }
+        } message: {
+            if let p = pendingMCP {
+                Text("\(p.server).\(p.tool)" + (p.argsJSON == "{}" ? "" : "\n\n" + p.argsJSON))
+            }
+        }
+    }
+
+    private func declineMCP() {
+        guard let p = pendingMCP else { return }
+        pendingMCP = nil
+        messages.append(AIMessage(role: .system, content: loc("已取消工具调用。", "Tool call cancelled.")))
+        modelMessages.append(AIMessage(role: .user,
+            content: "用户拒绝了工具 \(p.server).\(p.tool) 的调用。请不要重试该工具；如仍需信息，用自然语言告诉用户，或改用其它只读工具。"))
+        isStreaming = false
+        agentSteps = 0
     }
 
     /// Quick AI impact assessment shown in the dangerous-command dialog.
@@ -435,6 +459,18 @@ struct AIPanelView: View {
         case let .remember(note):
             HostMemoryStore.shared.add(note, for: conversationKey)
             messages.append(AIMessage(role: .system, content: loc("🧠 已记住：\(note)", "🧠 Remembered: \(note)")))
+        case let .mcpCall(server, tool, argsJSON):
+            // Card path (non-agent): run the tool once and show the result.
+            let cap = mcpResultCap, redact = ai.redact
+            messages.append(AIMessage(role: .system,
+                content: loc("▶︎ 调用 MCP 工具：\(server).\(tool)", "▶︎ Calling MCP tool: \(server).\(tool)")))
+            Task {
+                let raw: String
+                do { raw = try await MCPStore.shared.callTool(server: server, tool: tool, argsJSON: argsJSON) }
+                catch { raw = loc("工具调用失败：", "Tool call failed: ") + ((error as? MCPError)?.description ?? error.localizedDescription) }
+                let shown = redact ? AIRedactor.redact(String(raw.prefix(cap))) : String(raw.prefix(cap))
+                await MainActor.run { messages.append(AIMessage(role: .system, content: shown)) }
+            }
         }
     }
 
@@ -496,7 +532,8 @@ struct AIPanelView: View {
             messages.append(AIMessage(role: .assistant, content: text))
             modelMessages.append(AIMessage(role: .assistant, content: text))
         }
-        // Agent mode: if the model proposed a command, run it and feed back.
+        // Agent mode: if the model proposed a command or an MCP tool call, run it
+        // and feed the result back.
         if ai.agentMode, agentSteps < maxAgentSteps, let cmd = firstRunnableCommand(text) {
             if ai.agentReadOnly && !AICommandSafety.isReadOnly(cmd) {
                 refuseSandbox(cmd)           // read-only sandbox: bounce it back
@@ -507,9 +544,68 @@ struct AIPanelView: View {
             } else {
                 executeAndContinue(cmd)
             }
+        } else if ai.agentMode, agentSteps < maxAgentSteps,
+                  case let .mcpCall(server, tool, argsJSON)? = WLAction.parse(from: text) {
+            routeMCP(PendingMCPCall(server: server, tool: tool, argsJSON: argsJSON))
         } else {
             isStreaming = false
             agentSteps = 0
+        }
+    }
+
+    // MARK: MCP tool calls (agent loop)
+
+    /// Apply the safety gate to a proposed tool call, then run it or ask first.
+    private func routeMCP(_ call: PendingMCPCall) {
+        let store = MCPStore.shared
+        guard let ref = store.find(server: call.server, tool: call.tool) else {
+            agentSteps += 1
+            messages.append(AIMessage(role: .system,
+                content: loc("MCP 工具未找到：\(call.server).\(call.tool)", "MCP tool not found: \(call.server).\(call.tool)")))
+            modelMessages.append(AIMessage(role: .user,
+                content: "工具 \(call.server).\(call.tool) 不存在或未连接。请改用可用工具，或用自然语言告知用户，不要重试该工具。"))
+            startTurn()
+            return
+        }
+        if ai.agentReadOnly && !ref.isReadOnly {
+            agentSteps += 1
+            messages.append(AIMessage(role: .system,
+                content: loc("⛔ 只读沙盒拦截工具：\(call.server).\(call.tool)", "⛔ Blocked by read-only sandbox: \(call.server).\(call.tool)")))
+            modelMessages.append(AIMessage(role: .user,
+                content: "工具 \(call.server).\(call.tool) 可能有副作用，被只读沙盒拒绝。请改用只读工具，或停止并告知用户。"))
+            startTurn()
+            return
+        }
+        if ref.isReadOnly {
+            executeMCPAndContinue(call)      // safe: run without prompting
+        } else {
+            pendingMCP = call                // mutating: confirm first
+            isStreaming = false
+        }
+    }
+
+    private func executeMCPAndContinue(_ call: PendingMCPCall) {
+        agentSteps += 1
+        messages.append(AIMessage(role: .system,
+            content: loc("▶︎ 调用 MCP 工具：\(call.server).\(call.tool)", "▶︎ Calling MCP tool: \(call.server).\(call.tool)")))
+        isStreaming = true
+        let cap = mcpResultCap
+        let redact = ai.redact
+        task = Task {
+            let raw: String
+            do {
+                raw = try await MCPStore.shared.callTool(server: call.server, tool: call.tool, argsJSON: call.argsJSON)
+            } catch {
+                raw = loc("工具调用失败：", "Tool call failed: ") + ((error as? MCPError)?.description ?? error.localizedDescription)
+            }
+            let trimmed = String(raw.prefix(cap))
+            let shown = redact ? AIRedactor.redact(trimmed) : trimmed
+            await MainActor.run {
+                messages.append(AIMessage(role: .system, content: shown))
+                modelMessages.append(AIMessage(role: .user,
+                    content: "工具 \(call.server).\(call.tool) 的结果：\n\(shown)"))
+                startTurn()
+            }
         }
     }
 
@@ -581,6 +677,17 @@ struct AIPanelView: View {
         ctx += "打开文件浏览器 {\"action\":\"open_files\",\"host\":\"别名\"}；"
         ctx += "运行片段 {\"action\":\"run_snippet\",\"name\":\"片段名\"}；"
         ctx += "记住本主机的持久事实(仅在确认了解到稳定信息时) {\"action\":\"remember\",\"note\":\"该机用 systemd / nginx 配置在 /etc/nginx\"}。每次仅一个 wl-action 块，并附一句简短说明。"
+        // MCP tool catalog (progressive disclosure: names + one-line descriptions).
+        let mcp = MCPStore.shared
+        if mcp.hasTools {
+            ctx += "\n你还能调用外部工具(MCP)：输出 ```wl-action 块 {\"action\":\"mcp_call\",\"server\":\"服务名\",\"tool\":\"工具名\",\"args\":{…}}，本客户端会执行并把结果返回给你，再据此继续。可用工具（server.tool：说明）："
+            for ref in mcp.catalog.prefix(40) {
+                let d = ref.tool.description.split(whereSeparator: \.isNewline).first.map(String.init) ?? ""
+                ctx += "\n- \(ref.serverName).\(ref.tool.name)：\(d.prefix(100))"
+            }
+            if mcp.catalog.count > 40 { ctx += "\n（另有 \(mcp.catalog.count - 40) 个工具未列出，需要时可询问用户）" }
+            ctx += "\n工具参数请严格按各工具的用途填 JSON；不确定含义时先用只读工具探查，写操作类工具会由用户二次确认。"
+        }
         let mem = HostMemoryStore.shared.facts(for: conversationKey)
         if !mem.isEmpty {
             ctx += "\n关于该主机的已知记忆（供参考，可据此更精准回答）：\n- " + mem.joined(separator: "\n- ")

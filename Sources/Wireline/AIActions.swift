@@ -11,10 +11,17 @@ enum WLAction: Equatable {
     case openFiles(host: String)
     case runSnippet(name: String)
     case remember(note: String)
+    /// Call a tool on a configured MCP server. `argsJSON` keeps the arguments as a
+    /// JSON string so the case stays `Equatable`.
+    case mcpCall(server: String, tool: String, argsJSON: String)
 
     @MainActor
     func summary(_ loc: Localizer) -> String {
         switch self {
+        case let .mcpCall(server, tool, argsJSON):
+            let args = argsJSON == "{}" ? "" : "（\(argsJSON.prefix(120))）"
+            return loc.t("调用 MCP 工具：\(server).\(tool)\(args)",
+                         "Call MCP tool: \(server).\(tool)\(args)")
         case let .portForward(host, lp, rh, rp):
             return loc.t("建立端口转发：本地 \(lp) → \(host):\(rh):\(rp)",
                          "Create tunnel: local \(lp) → \(host):\(rh):\(rp)")
@@ -72,6 +79,13 @@ enum WLAction: Equatable {
             case "remember":
                 guard let note = obj["note"] as? String else { return nil }
                 return .remember(note: note)
+            case "mcp_call":
+                guard let server = obj["server"] as? String,
+                      let tool = obj["tool"] as? String else { return nil }
+                let argsObj = obj["args"] ?? [String: Any]()
+                let argsJSON = (try? JSONSerialization.data(withJSONObject: argsObj))
+                    .flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+                return .mcpCall(server: server, tool: tool, argsJSON: argsJSON)
             default: return nil
             }
         }
