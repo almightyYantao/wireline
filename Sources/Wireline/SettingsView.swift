@@ -162,7 +162,8 @@ struct SettingsView: View {
                     HStack(spacing: 12) {
                         Button(loc("检查更新", "Check for Updates")) { Updater.shared.checkForUpdates() }
                             .buttonStyle(.plain).font(WL.body).foregroundStyle(WL.green)
-                        Text("v0.7.0").font(WL.small).foregroundStyle(WL.textDim)
+                        Text("v" + (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"))
+                            .font(WL.small).foregroundStyle(WL.textDim)
                         Spacer()
                     }
                     Toggle(isOn: Binding(get: { Updater.shared.automaticChecks },
