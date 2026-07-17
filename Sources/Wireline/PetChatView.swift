@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import WirelineCore
 
 /// The desktop pet's own conversation surface — deliberately NOT the terminal AI
@@ -39,7 +40,7 @@ struct PetChatView: View {
         }
         .frame(width: 420, height: 560)
         .background(WL.bg.opacity(0.98))
-        .overlay(RoundedRectangle(cornerRadius: 10).stroke(WL.border, lineWidth: 1))
+        .overlay(RoundedRectangle(cornerRadius: WL.radius(10)).stroke(WL.border, lineWidth: WL.borderWidth))
         .onAppear { loadConvo(); focusSoon() }
         .onDisappear { task?.cancel(); persist() }
         .alert(loc("确认在多台机器执行高危命令？", "Run this risky command on your hosts?"),
@@ -88,7 +89,7 @@ struct PetChatView: View {
                     }
                     if let errorText {
                         Text(errorText).font(WL.caption).foregroundStyle(WL.red)
-                            .padding(10).background(WL.red.opacity(0.1), in: RoundedRectangle(cornerRadius: 6))
+                            .padding(10).background(WL.red.opacity(0.1), in: RoundedRectangle(cornerRadius: WL.radius(6)))
                     }
                     Color.clear.frame(height: 1).id("bottom")
                 }
@@ -403,12 +404,17 @@ private struct PetItemView: View {
             Text(item.text)
                 .font(WL.mono(13)).foregroundStyle(WL.textPrimary)
                 .padding(8).frame(maxWidth: .infinity, alignment: .leading)
-                .background(WL.green.opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
+                .background(WL.green.opacity(0.12), in: RoundedRectangle(cornerRadius: WL.radius(6)))
         case .assistant:
-            Text(.init(item.text))
-                .font(WL.mono(13)).foregroundStyle(WL.textPrimary)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            // Split on ``` fences so fenced code renders as a real, multi-line
+            // monospace block (inline markdown alone collapses newlines and never
+            // recognizes code fences, which mashed configs into one wall of text).
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(Array(segments(item.text).enumerated()), id: \.offset) { _, seg in
+                    if seg.isCode { codeBlock(seg.text) } else { prose(seg.text) }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
         case .note:
             Text(item.text)
                 .font(WL.mono(12)).foregroundStyle(WL.textDim)
@@ -418,6 +424,75 @@ private struct PetItemView: View {
         case .results:
             resultsCard
         }
+    }
+
+    // MARK: assistant rendering
+
+    /// Prose between code fences. Uses whitespace-preserving markdown so soft
+    /// line breaks and lists the model wrote survive (plain `Text(.init:)` would
+    /// collapse them into a single paragraph).
+    private func prose(_ text: String) -> some View {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return Group {
+            if t.isEmpty { EmptyView() }
+            else {
+                Text(attributed(t))
+                    .font(WL.mono(13)).foregroundStyle(WL.textPrimary)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+
+    private func attributed(_ s: String) -> AttributedString {
+        (try? AttributedString(
+            markdown: s,
+            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+        )) ?? AttributedString(s)
+    }
+
+    /// A fenced code block: monospace, newlines preserved, with a copy button.
+    private func codeBlock(_ code: String) -> some View {
+        let text = code.trimmingCharacters(in: .whitespacesAndNewlines)
+        return VStack(alignment: .leading, spacing: 6) {
+            Text(text)
+                .font(WL.mono(12)).foregroundStyle(WL.green)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            HStack {
+                Spacer()
+                BracketButton(loc("复制", "Copy")) {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(text, forType: .string)
+                }
+            }
+        }
+        .padding(9)
+        .background(WL.surface.opacity(0.6), in: RoundedRectangle(cornerRadius: WL.radius(6)))
+        .overlay(RoundedRectangle(cornerRadius: WL.radius(6)).stroke(WL.border, lineWidth: WL.borderWidth))
+    }
+
+    /// Split content on ``` fences into prose/code segments (code strips an
+    /// optional leading language hint like `nginx`).
+    private func segments(_ s: String) -> [(isCode: Bool, text: String)] {
+        let parts = s.components(separatedBy: "```")
+        var result: [(Bool, String)] = []
+        for (i, part) in parts.enumerated() {
+            let isCode = i % 2 == 1
+            if isCode {
+                var body = part
+                if let nl = body.firstIndex(of: "\n") {
+                    let firstLine = body[body.startIndex..<nl].trimmingCharacters(in: .whitespaces)
+                    if firstLine.range(of: #"^[A-Za-z0-9_+-]{1,15}$"#, options: .regularExpression) != nil {
+                        body = String(body[body.index(after: nl)...])
+                    }
+                }
+                result.append((true, body))
+            } else {
+                result.append((false, part))
+            }
+        }
+        return result
     }
 
     private var runCard: some View {
@@ -437,8 +512,8 @@ private struct PetItemView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(9)
-        .background(WL.surface.opacity(0.5), in: RoundedRectangle(cornerRadius: 6))
-        .overlay(RoundedRectangle(cornerRadius: 6).stroke(WL.border, lineWidth: 1))
+        .background(WL.surface.opacity(0.5), in: RoundedRectangle(cornerRadius: WL.radius(6)))
+        .overlay(RoundedRectangle(cornerRadius: WL.radius(6)).stroke(WL.border, lineWidth: WL.borderWidth))
     }
 
     private var resultsCard: some View {
@@ -462,7 +537,7 @@ private struct PetItemView: View {
             }
         }
         .padding(9)
-        .background(WL.surface.opacity(0.35), in: RoundedRectangle(cornerRadius: 6))
-        .overlay(RoundedRectangle(cornerRadius: 6).stroke(WL.border, lineWidth: 1))
+        .background(WL.surface.opacity(0.35), in: RoundedRectangle(cornerRadius: WL.radius(6)))
+        .overlay(RoundedRectangle(cornerRadius: WL.radius(6)).stroke(WL.border, lineWidth: WL.borderWidth))
     }
 }
