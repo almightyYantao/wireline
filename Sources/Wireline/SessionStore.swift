@@ -225,9 +225,12 @@ final class TerminalSession: Identifiable {
         // Replay prior scrollback (with colors) so a reopened tab looks untouched,
         // then a dim separator before the fresh live session begins.
         if let sb = pendingScrollback, !sb.isEmpty {
-            terminalView.feed(byteArray: ArraySlice(sb))
+            // Replay keeps SGR colors but strips cursor-positioning / erase / save-
+            // restore / OSC sequences — those were computed for the OLD terminal
+            // width (e.g. a zsh right-prompt) and would land at the wrong columns.
+            terminalView.feed(byteArray: ArraySlice(Self.sanitizeForReplay(sb)))
             terminalView.feed(text: "\r\n\u{1b}[2m──────── 已恢复上次会话 / restored ────────\u{1b}[0m\r\n")
-            terminalView.seedScrollback(sb)   // keep it so it persists forward, not just this run
+            terminalView.seedScrollback(sb)   // store RAW forward; sanitize only at replay
             pendingScrollback = nil
         }
 
@@ -283,6 +286,46 @@ final class TerminalSession: Identifiable {
             )
             startBusyPolling()
         }
+    }
+
+    /// Strip escape sequences that assume a fixed geometry (cursor moves, absolute
+    /// column/position, erase, save/restore, OSC) while KEEPING SGR color codes, so
+    /// replayed scrollback reflows cleanly at any width instead of scattering
+    /// right-prompts and progress output across the screen.
+    static func sanitizeForReplay(_ data: Data) -> Data {
+        let esc: UInt8 = 0x1b
+        let bytes = [UInt8](data)
+        var out = [UInt8](); out.reserveCapacity(bytes.count)
+        var i = 0
+        while i < bytes.count {
+            let b = bytes[i]
+            guard b == esc, i + 1 < bytes.count else { out.append(b); i += 1; continue }
+            let next = bytes[i + 1]
+            switch next {
+            case UInt8(ascii: "["):
+                // CSI: ESC [ params... final(0x40...0x7e). Keep only SGR ('m').
+                var j = i + 2
+                while j < bytes.count, !(0x40...0x7e).contains(bytes[j]) { j += 1 }
+                if j < bytes.count {
+                    if bytes[j] == UInt8(ascii: "m") { out.append(contentsOf: bytes[i...j]) }
+                    i = j + 1
+                } else { i = bytes.count }
+            case UInt8(ascii: "]"):
+                // OSC: ESC ] ... terminated by BEL or ST (ESC \). Drop entirely.
+                var j = i + 2
+                while j < bytes.count {
+                    if bytes[j] == 0x07 { j += 1; break }
+                    if bytes[j] == esc, j + 1 < bytes.count, bytes[j + 1] == UInt8(ascii: "\\") { j += 2; break }
+                    j += 1
+                }
+                i = j
+            case UInt8(ascii: "("), UInt8(ascii: ")"), UInt8(ascii: "#"), UInt8(ascii: "%"):
+                i += 3   // charset / designation: ESC ( X  — drop the 3 bytes
+            default:
+                i += 2   // ESC 7/8/=/> and other 2-byte sequences — drop
+            }
+        }
+        return Data(out)
     }
 
     /// Persist this session's raw scrollback so it can be replayed next launch.
