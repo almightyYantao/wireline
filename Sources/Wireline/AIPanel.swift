@@ -36,6 +36,12 @@ struct AIPanelView: View {
 
     private let maxAgentSteps = 8
     private let mcpResultCap = 4000                      // chars of tool output fed back
+    // Circuit breaker: stop the agent loop when it stalls or spins.
+    @State private var timeoutStreak = 0                 // consecutive capture timeouts
+    @State private var lastAgentCmd: String?             // to detect an identical-command loop
+    @State private var repeatStreak = 0
+    private let maxTimeoutStreak = 2
+    private let maxRepeatStreak = 2
 
     var body: some View {
         VStack(spacing: 0) {
@@ -506,6 +512,7 @@ struct AIPanelView: View {
     private func beginUserTurn(_ userVisible: String) {
         errorText = nil
         agentSteps = 0
+        timeoutStreak = 0; repeatStreak = 0; lastAgentCmd = nil
         messages.append(AIMessage(role: .user, content: userVisible))
     }
 
@@ -544,7 +551,14 @@ struct AIPanelView: View {
         // Agent mode: if the model proposed a command or an MCP tool call, run it
         // and feed the result back.
         if ai.agentMode, agentSteps < maxAgentSteps, let cmd = firstRunnableCommand(text) {
-            if ai.agentReadOnly && !AICommandSafety.isReadOnly(cmd) {
+            if let ph = AICommandSafety.unfilledPlaceholder(cmd) {
+                // B — placeholder guard: never run a command with a literal {{…}}.
+                haltAgent(loc("命令里有未填的占位符 \(ph)，已停止。请补一个具体值后重试，或先把命令里的 \(ph) 换成实际值。",
+                              "Command still has an unfilled placeholder \(ph) — stopped. Provide a concrete value and retry."))
+            } else if isRepeatLoop(cmd) {
+                // A — loop guard: same command over and over.
+                haltAgent(loc("AI 在反复执行同一条命令，已停止自动执行。", "The AI kept repeating the same command — auto-execution stopped."))
+            } else if ai.agentReadOnly && !AICommandSafety.isReadOnly(cmd) {
                 refuseSandbox(cmd)           // read-only sandbox: bounce it back
             } else if AICommandSafety.isDangerous(cmd) {
                 pendingDanger = cmd          // ask before running
@@ -660,12 +674,40 @@ struct AIPanelView: View {
             let shown = String(output.suffix(4000))
             await MainActor.run {
                 messages.append(AIMessage(role: .system, content: shown))
+                // A — timeout breaker: if capture keeps timing out, the terminal is
+                // likely wedged; stop rather than spin on dead commands.
+                if output.contains("(执行超时)") {
+                    timeoutStreak += 1
+                    if timeoutStreak >= maxTimeoutStreak {
+                        haltAgent(loc("连续多次执行超时，终端可能已卡住，已停止自动执行。请检查或重连该终端后再试。",
+                                      "Repeated capture timeouts — the terminal looks wedged. Auto-execution stopped; check or reconnect the terminal."))
+                        return
+                    }
+                } else {
+                    timeoutStreak = 0
+                }
                 let forModel = ai.redact ? AIRedactor.redact(shown) : shown
                 modelMessages.append(AIMessage(role: .user, content: "命令 `\(cmd)` 的输出：\n\(forModel)\n请根据输出继续（执行下一条命令，或给出最终结论）。"))
                 startTurn()
             }
         }
     }
+
+    /// Track consecutive identical agent commands; true once it exceeds the cap.
+    private func isRepeatLoop(_ cmd: String) -> Bool {
+        repeatStreak = (cmd == lastAgentCmd) ? repeatStreak + 1 : 0
+        lastAgentCmd = cmd
+        return repeatStreak >= maxRepeatStreak
+    }
+
+    /// Stop the agent loop cleanly with a user-facing note (no feedback to model).
+    private func haltAgent(_ note: String) {
+        messages.append(AIMessage(role: .system, content: note))
+        isStreaming = false
+        agentSteps = 0
+        timeoutStreak = 0; repeatStreak = 0; lastAgentCmd = nil
+    }
+
 
     /// The first shell command inside a fenced code block, if any.
     private func firstRunnableCommand(_ text: String) -> String? {

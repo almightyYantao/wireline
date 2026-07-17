@@ -235,6 +235,12 @@ struct PetChatView: View {
                 startTurn()
                 return
             }
+            if let ph = AICommandSafety.unfilledPlaceholder(plan.command) {
+                items.append(PetChatItem(kind: .note, text: loc("命令里有未填的占位符 \(ph)，已停止。请补一个具体值后重试。",
+                                                                 "Command has an unfilled placeholder \(ph) — stopped. Provide a concrete value and retry.")))
+                isBusy = false; steps = 0
+                return
+            }
             if AICommandSafety.isDangerous(plan.command) {
                 pendingPlan = PetPlan(targets: aliases, command: plan.command, intent: plan.intent)
                 isBusy = false

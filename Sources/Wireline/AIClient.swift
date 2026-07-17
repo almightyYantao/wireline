@@ -98,6 +98,15 @@ enum AITokenEstimator {
 /// Flags commands that could cause data loss / outage, so agent mode can force a
 /// confirmation before running them.
 enum AICommandSafety {
+    /// The first unfilled `{{placeholder}}` in a command, if any (e.g. `{{project_name}}`).
+    /// Agent mode must never send a command that still contains one to the shell.
+    static func unfilledPlaceholder(_ command: String) -> String? {
+        guard let re = try? NSRegularExpression(pattern: #"\{\{\s*[A-Za-z0-9_]+\s*\}\}"#) else { return nil }
+        let ns = command as NSString
+        guard let m = re.firstMatch(in: command, range: NSRange(location: 0, length: ns.length)) else { return nil }
+        return ns.substring(with: m.range)
+    }
+
     static func isDangerous(_ command: String) -> Bool {
         let c = command.lowercased()
         let patterns = [
