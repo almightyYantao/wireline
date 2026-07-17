@@ -294,7 +294,11 @@ final class TerminalSession: Identifiable {
         guard !scrollbackKey.isEmpty, isRunning else { return }
         let url = dir.appendingPathComponent("\(scrollbackKey).txt")
         var data = terminalView.renderedBuffer
-        // Trim leading blank lines and cap to a sane tail.
+        // Empty cells come back as NUL (\0), which the terminal drops on replay —
+        // collapsing the gap that keeps a right-prompt at the right edge. Turn them
+        // into real spaces so columns (and thus right-aligned prompts) survive.
+        data = Data(data.map { $0 == 0 ? 0x20 : $0 })
+        // Cap to a sane tail.
         let cap = 256 * 1024
         if data.count > cap { data = data.suffix(cap) }
         // Drop prior restore-banner lines so they don't stack up launch after launch.
