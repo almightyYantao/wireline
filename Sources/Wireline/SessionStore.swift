@@ -49,9 +49,9 @@ final class TerminalSession: Identifiable {
     func runCapturing(_ command: String) async -> String {
         switch kind {
         case .ssh(let alias, _, _, _, _):
-            return await Self.exec(["/usr/bin/ssh", "-S", controlSocket, "-o", "BatchMode=yes", alias, command])
+            return await Self.exec(["/usr/bin/ssh", "-S", controlSocket, "-o", "BatchMode=yes", alias, command], timeout: 1800)
         case .localShell:
-            return await Self.exec(["/bin/zsh", "-lc", command])
+            return await Self.exec(["/bin/zsh", "-lc", command], timeout: 1800)
         case .sftp:
             return "(SFTP 会话不支持执行命令)"
         }
@@ -60,18 +60,26 @@ final class TerminalSession: Identifiable {
     /// Run a command IN the visible terminal (so the user sees it happen) and
     /// capture its output by bracketing it with unique start/end markers, then
     /// polling the terminal's clean output buffer for them.
-    func runInTerminalCapturing(_ command: String, timeout: TimeInterval = 30) async -> String {
+    /// `idleTimeout` is time with NO new terminal output (a truly wedged shell);
+    /// `maxTimeout` is a hard ceiling. A long-but-active command (e.g. `docker
+    /// build`) keeps producing output, so it never trips the idle timer.
+    func runInTerminalCapturing(_ command: String,
+                                idleTimeout: TimeInterval = 120,
+                                maxTimeout: TimeInterval = 3600) async -> String {
         let tag = String(UUID().uuidString.prefix(6))
         let start = "WLc\(tag)START", end = "WLc\(tag)END"
         // Markers print on their own lines; `$?` captures the command's exit code.
         terminalView.send(txt: "printf '%s\\n' \(start); \(command); printf '%s:%d\\n' \(end) $?\n")
 
-        let deadline = Date().addingTimeInterval(timeout)
+        let hardDeadline = Date().addingTimeInterval(maxTimeout)
+        var idleDeadline = Date().addingTimeInterval(idleTimeout)
+        var lastBuf = ""
         let startRE = try? NSRegularExpression(pattern: "(?m)^\(start)$")
         let endRE = try? NSRegularExpression(pattern: "(?m)^\(end):(\\d+)$")
-        while Date() < deadline {
+        while Date() < hardDeadline, Date() < idleDeadline {
             try? await Task.sleep(for: .milliseconds(200))
             let buf = terminalView.recentClean
+            if buf != lastBuf { lastBuf = buf; idleDeadline = Date().addingTimeInterval(idleTimeout) }
             let ns = buf as NSString
             guard let sM = startRE?.firstMatch(in: buf, range: NSRange(location: 0, length: ns.length)),
                   let eM = endRE?.firstMatch(in: buf, range: NSRange(location: 0, length: ns.length)),
