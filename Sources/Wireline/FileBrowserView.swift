@@ -223,8 +223,8 @@ struct FileBrowserView: View {
             SecureField(loc("密码", "Password"), text: $password)
                 .textFieldStyle(.plain).font(WL.body).foregroundStyle(WL.textPrimary)
                 .padding(.horizontal, 10).padding(.vertical, 8).frame(width: 220)
-                .background(WL.surface, in: RoundedRectangle(cornerRadius: 5))
-                .overlay(RoundedRectangle(cornerRadius: 5).stroke(WL.border, lineWidth: 1))
+                .background(WL.surface, in: RoundedRectangle(cornerRadius: WL.radius(5)))
+                .overlay(RoundedRectangle(cornerRadius: WL.radius(5)).stroke(WL.border, lineWidth: WL.borderWidth))
                 .onSubmit { model.connect(withPassword: password); password = "" }
             Button { model.connect(withPassword: password); password = "" } label: {
                 Text("[\(loc("连接", "Connect"))]").font(WL.small).foregroundStyle(WL.green)

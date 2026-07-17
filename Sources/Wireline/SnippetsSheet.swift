@@ -94,7 +94,7 @@ struct SnippetsSheet: View {
             Text(snippet.filled(with: fillValues))
                 .font(WL.mono(11)).foregroundStyle(WL.green.opacity(0.8))
                 .padding(8).frame(maxWidth: .infinity, alignment: .leading)
-                .background(WL.surface.opacity(0.5), in: RoundedRectangle(cornerRadius: 5))
+                .background(WL.surface.opacity(0.5), in: RoundedRectangle(cornerRadius: WL.radius(5)))
                 .textSelection(.enabled)
             HStack(spacing: 18) {
                 Spacer()
@@ -166,8 +166,8 @@ struct SnippetsSheet: View {
         TextField("", text: text, prompt: Text(prompt).foregroundStyle(WL.textDim))
             .textFieldStyle(.plain).font(WL.body).foregroundStyle(WL.textPrimary)
             .padding(.horizontal, 10).padding(.vertical, 7)
-            .background(WL.surface, in: RoundedRectangle(cornerRadius: 5))
-            .overlay(RoundedRectangle(cornerRadius: 5).stroke(WL.border, lineWidth: 1))
+            .background(WL.surface, in: RoundedRectangle(cornerRadius: WL.radius(5)))
+            .overlay(RoundedRectangle(cornerRadius: WL.radius(5)).stroke(WL.border, lineWidth: WL.borderWidth))
     }
 
     private func multilineInput(_ text: Binding<String>, height: CGFloat = 130) -> some View {
@@ -178,8 +178,8 @@ struct SnippetsSheet: View {
             .scrollContentBackground(.hidden)
             .padding(.horizontal, 6).padding(.vertical, 5)
             .frame(height: height)
-            .background(WL.surface, in: RoundedRectangle(cornerRadius: 5))
-            .overlay(RoundedRectangle(cornerRadius: 5).stroke(WL.border, lineWidth: 1))
+            .background(WL.surface, in: RoundedRectangle(cornerRadius: WL.radius(5)))
+            .overlay(RoundedRectangle(cornerRadius: WL.radius(5)).stroke(WL.border, lineWidth: WL.borderWidth))
     }
 }
 

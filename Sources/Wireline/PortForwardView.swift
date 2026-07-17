@@ -158,8 +158,8 @@ struct ForwardEditor: View {
         TextField("", text: text, prompt: Text(prompt).foregroundStyle(WL.textDim))
             .textFieldStyle(.plain).font(WL.body).foregroundStyle(WL.textPrimary)
             .padding(.horizontal, 10).padding(.vertical, 7)
-            .background(WL.surface, in: RoundedRectangle(cornerRadius: 5))
-            .overlay(RoundedRectangle(cornerRadius: 5).stroke(WL.border, lineWidth: 1))
+            .background(WL.surface, in: RoundedRectangle(cornerRadius: WL.radius(5)))
+            .overlay(RoundedRectangle(cornerRadius: WL.radius(5)).stroke(WL.border, lineWidth: WL.borderWidth))
     }
 
     private func populate() {

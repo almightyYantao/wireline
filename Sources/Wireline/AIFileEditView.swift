@@ -58,8 +58,8 @@ struct AIFileEditView: View {
                           text: $instruction)
                     .textFieldStyle(.plain).font(WL.body).foregroundStyle(WL.textPrimary)
                     .padding(.horizontal, 10).padding(.vertical, 7)
-                    .background(WL.surface, in: RoundedRectangle(cornerRadius: 5))
-                    .overlay(RoundedRectangle(cornerRadius: 5).stroke(WL.border, lineWidth: 1))
+                    .background(WL.surface, in: RoundedRectangle(cornerRadius: WL.radius(5)))
+                    .overlay(RoundedRectangle(cornerRadius: WL.radius(5)).stroke(WL.border, lineWidth: WL.borderWidth))
                     .onSubmit { generate() }
                 if generating {
                     Button { task?.cancel(); generating = false } label: {
@@ -78,8 +78,8 @@ struct AIFileEditView: View {
                 .scrollContentBackground(.hidden)
                 .padding(8)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(WL.surface.opacity(0.5), in: RoundedRectangle(cornerRadius: 6))
-                .overlay(RoundedRectangle(cornerRadius: 6).stroke(WL.border, lineWidth: 1))
+                .background(WL.surface.opacity(0.5), in: RoundedRectangle(cornerRadius: WL.radius(6)))
+                .overlay(RoundedRectangle(cornerRadius: WL.radius(6)).stroke(WL.border, lineWidth: WL.borderWidth))
 
             if reviewing || !reviewText.isEmpty {
                 Text(loc("变更评审（影响与风险）", "Change review (impact & risks)"))
@@ -91,8 +91,8 @@ struct AIFileEditView: View {
                 }
                 .frame(maxHeight: 120)
                 .padding(8)
-                .background(WL.amber.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
-                .overlay(RoundedRectangle(cornerRadius: 6).stroke(WL.amber.opacity(0.4), lineWidth: 1))
+                .background(WL.amber.opacity(0.08), in: RoundedRectangle(cornerRadius: WL.radius(6)))
+                .overlay(RoundedRectangle(cornerRadius: WL.radius(6)).stroke(WL.amber.opacity(0.4), lineWidth: 1))
             }
 
             HStack {

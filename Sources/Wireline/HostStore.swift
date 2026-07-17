@@ -54,12 +54,81 @@ final class HostStore {
         didSet { UserDefaults.standard.set(terminalFontSize, forKey: "terminalFontSize") }
     }
     /// The active color scheme, persisted as JSON. Nil = built-in default.
+    /// (Kept for the terminal's color path — SwiftTerm reads this directly.)
     var terminalTheme: TerminalTheme? {
         didSet {
             let data = terminalTheme.flatMap { try? JSONEncoder().encode($0) }
             UserDefaults.standard.set(data, forKey: "terminalTheme")
             Palette.shared.update(from: terminalTheme)   // recolor the whole UI
         }
+    }
+
+    // MARK: - Themes (skins)
+
+    /// User-created skins (colors + shape + typography + background), persisted
+    /// as JSON. Built-ins live in `AppTheme.builtIns`; `allThemes` merges both.
+    var customThemes: [AppTheme] = [] {
+        didSet {
+            let data = try? JSONEncoder().encode(customThemes)
+            UserDefaults.standard.set(data, forKey: "customThemes")
+            applyActiveTheme()
+        }
+    }
+    /// Name of the selected theme (matched across `allThemes`).
+    var selectedThemeName: String = "Wireline" {
+        didSet {
+            UserDefaults.standard.set(selectedThemeName, forKey: "selectedThemeName")
+            applyActiveTheme()
+        }
+    }
+
+    /// Built-in + custom themes, in one list.
+    var allThemes: [AppTheme] { AppTheme.builtIns + customThemes }
+    /// The currently selected theme (falls back to the Wireline default).
+    var activeTheme: AppTheme {
+        allThemes.first { $0.name == selectedThemeName } ?? .wirelineDefault
+    }
+
+    /// Push the active theme into the running UI: the terminal color path stays
+    /// on `terminalTheme`, while `Palette` carries the full skin (colors + shape
+    /// + typography + background). A theme may also set the wallpaper.
+    func applyActiveTheme() {
+        let t = activeTheme
+        let desiredColors: TerminalTheme? = t.usesDefaultColors ? nil : t.colors
+        if terminalTheme != desiredColors { terminalTheme = desiredColors }
+        Palette.shared.apply(t)
+        if let img = t.background.imagePath, !img.isEmpty, terminalBgImagePath != img {
+            terminalBgImagePath = img
+        }
+    }
+
+    /// Save (create or overwrite) a custom theme by name and select it.
+    func upsertTheme(_ theme: AppTheme) {
+        var t = theme
+        t.isBuiltIn = false
+        if let i = customThemes.firstIndex(where: { $0.id == t.id }) {
+            customThemes[i] = t
+        } else if let i = customThemes.firstIndex(where: { $0.name == t.name }) {
+            customThemes[i] = t
+        } else {
+            customThemes.append(t)
+        }
+        selectedThemeName = t.name
+    }
+
+    /// Delete a custom theme; if it was selected, fall back to the default.
+    func deleteTheme(_ theme: AppTheme) {
+        customThemes.removeAll { $0.id == theme.id }
+        if selectedThemeName == theme.name { selectedThemeName = "Wireline" }
+    }
+
+    /// A unique "Custom", "Custom 2", … name for a new theme.
+    func uniqueThemeName(_ base: String) -> String {
+        let names = Set(allThemes.map(\.name))
+        if !names.contains(base) { return base }
+        var n = 2
+        while names.contains("\(base) \(n)") { n += 1 }
+        return "\(base) \(n)"
     }
 
     let repository: ConfigRepository
@@ -84,9 +153,26 @@ final class HostStore {
         self.terminalFontSize = UserDefaults.standard.object(forKey: "terminalFontSize") as? Double ?? 13
         self.terminalTheme = UserDefaults.standard.data(forKey: "terminalTheme")
             .flatMap { try? JSONDecoder().decode(TerminalTheme.self, from: $0) }
+        self.customThemes = UserDefaults.standard.data(forKey: "customThemes")
+            .flatMap { try? JSONDecoder().decode([AppTheme].self, from: $0) } ?? []
         self.document = SSHConfig.Document(items: [])
         self.hosts = []
-        Palette.shared.update(from: terminalTheme)   // recolor UI from saved theme
+
+        // Resolve the selected theme. Migrate legacy users who only had a saved
+        // `terminalTheme`: adopt its name, and if it was an imported scheme not in
+        // the built-in list, fold it into the custom library so it stays editable.
+        if let saved = UserDefaults.standard.string(forKey: "selectedThemeName") {
+            self.selectedThemeName = saved
+        } else if let legacy = terminalTheme {
+            self.selectedThemeName = legacy.name
+            let known = AppTheme.builtIns.map(\.name) + customThemes.map(\.name)
+            if !known.contains(legacy.name) {
+                self.customThemes.append(AppTheme(name: legacy.name, colors: legacy))
+            }
+        } else {
+            self.selectedThemeName = "Wireline"
+        }
+        Palette.shared.apply(activeTheme)   // recolor + restyle UI from saved skin
         reload()
     }
 

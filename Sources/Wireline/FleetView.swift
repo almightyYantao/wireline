@@ -99,8 +99,8 @@ struct FleetView: View {
                 TextField(loc("例如：检查磁盘和内存使用率", "e.g. check disk & memory usage"), text: $goal)
                     .textFieldStyle(.plain).font(WL.body).foregroundStyle(WL.textPrimary)
                     .padding(.horizontal, 10).padding(.vertical, 7)
-                    .background(WL.surface, in: RoundedRectangle(cornerRadius: 5))
-                    .overlay(RoundedRectangle(cornerRadius: 5).stroke(WL.border, lineWidth: 1))
+                    .background(WL.surface, in: RoundedRectangle(cornerRadius: WL.radius(5)))
+                    .overlay(RoundedRectangle(cornerRadius: WL.radius(5)).stroke(WL.border, lineWidth: WL.borderWidth))
                     .onSubmit { generate() }
                 BracketButton(generating ? loc("生成中", "…") : loc("生成命令", "Generate")) { generate() }
                     .disabled(generating || !ai.isConfigured)
@@ -110,8 +110,8 @@ struct FleetView: View {
             TextField("df -h; free -h", text: $command)
                 .textFieldStyle(.plain).font(WL.mono(12)).foregroundStyle(WL.green)
                 .padding(.horizontal, 10).padding(.vertical, 7)
-                .background(WL.surface, in: RoundedRectangle(cornerRadius: 5))
-                .overlay(RoundedRectangle(cornerRadius: 5).stroke(WL.border, lineWidth: 1))
+                .background(WL.surface, in: RoundedRectangle(cornerRadius: WL.radius(5)))
+                .overlay(RoundedRectangle(cornerRadius: WL.radius(5)).stroke(WL.border, lineWidth: WL.borderWidth))
 
             HStack {
                 Button(action: runFleet) {
@@ -150,7 +150,7 @@ struct FleetView: View {
                         .font(WL.small).foregroundStyle(WL.textPrimary)
                         .padding(10)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(WL.green.opacity(0.1), in: RoundedRectangle(cornerRadius: 6))
+                        .background(WL.green.opacity(0.1), in: RoundedRectangle(cornerRadius: WL.radius(6)))
                         .textSelection(.enabled)
                 }
                 ForEach(results) { r in
@@ -168,8 +168,8 @@ struct FleetView: View {
                             .textSelection(.enabled)
                     }
                     .padding(9)
-                    .background(WL.surface.opacity(0.4), in: RoundedRectangle(cornerRadius: 6))
-                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(WL.border, lineWidth: 1))
+                    .background(WL.surface.opacity(0.4), in: RoundedRectangle(cornerRadius: WL.radius(6)))
+                    .overlay(RoundedRectangle(cornerRadius: WL.radius(6)).stroke(WL.border, lineWidth: WL.borderWidth))
                 }
             }
         }

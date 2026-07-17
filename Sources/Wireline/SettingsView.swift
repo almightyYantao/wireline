@@ -9,6 +9,7 @@ struct SettingsView: View {
     @State private var tab = 0
     @State private var ai = AIConfig.shared
     @State private var aiKeyDraft = ""
+    @State private var showThemeEditor = false
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -28,6 +29,7 @@ struct SettingsView: View {
         }
         .frame(width: 520, height: 580)
         .preferredColorScheme(.dark)
+        .sheet(isPresented: $showThemeEditor) { ThemeEditorView() }
     }
 
     private var header: some View {
@@ -52,9 +54,9 @@ struct SettingsView: View {
             .foregroundStyle(active ? WL.green : WL.textDim)
             .padding(.horizontal, 11).padding(.vertical, 6)
             .background(active ? WL.green.opacity(0.14) : WL.surface.opacity(0.4),
-                        in: RoundedRectangle(cornerRadius: 6))
-            .overlay(RoundedRectangle(cornerRadius: 6)
-                .stroke(active ? WL.green.opacity(0.6) : WL.border, lineWidth: 1))
+                        in: RoundedRectangle(cornerRadius: WL.radius(6)))
+            .overlay(RoundedRectangle(cornerRadius: WL.radius(6))
+                .stroke(active ? WL.green.opacity(0.6) : WL.border, lineWidth: WL.borderWidth))
         }
         .buttonStyle(.plain)
     }
@@ -83,21 +85,20 @@ struct SettingsView: View {
                     }
                 }
 
-                section(loc("终端配色", "Terminal Colors")) {
-                    row(loc("配色方案", "Color scheme")) {
+                section(loc("主题 / 配色", "Theme")) {
+                    row(loc("当前主题", "Active theme")) {
                         Picker("", selection: themeSelection) {
-                            Text(loc("Wireline (默认)", "Wireline (default)")).tag("Wireline")
-                            ForEach(TerminalTheme.presets, id: \.name) { Text($0.name).tag($0.name) }
-                            if let t = store.terminalTheme,
-                               !TerminalTheme.presets.contains(where: { $0.name == t.name }) {
-                                Text(t.name + loc("（导入）", " (imported)")).tag(t.name)
-                            }
+                            ForEach(store.allThemes) { Text($0.name).tag($0.name) }
                         }.labelsHidden().fixedSize()
-                        BracketButton(loc("导入 iTerm2…", "Import iTerm2…")) { importTheme() }
+                        BracketButton(loc("编辑器…", "Editor…")) { showThemeEditor = true }
                     }
                     themeSwatches
-                    hint(loc("内置数款常用主题；也支持导入 iTerm2 的 .itermcolors（iterm2-color-schemes 有数百个）。",
-                            "Bundled popular themes; also imports iTerm2 .itermcolors (hundreds in iterm2-color-schemes)."))
+                    row("") {
+                        BracketButton(loc("导入 iTerm2…", "Import iTerm2…")) { importTheme() }
+                        Spacer()
+                    }
+                    hint(loc("主题不止配色——形状、密度、字体、壁纸都能自定义，可保存多套。编辑器里能导出自包含的 .wltheme 主题包(内嵌壁纸)，发给别人直接导入即用。",
+                            "A theme is more than colors — shape, density, font and wallpaper too. Save multiple; the editor exports a self-contained .wltheme pack (wallpaper embedded) others can import directly."))
                 }
 
                 section(loc("终端字体", "Terminal Font")) {
@@ -198,8 +199,8 @@ struct SettingsView: View {
                             .textFieldStyle(.plain).font(WL.mono(12)).foregroundStyle(WL.textPrimary)
                             .frame(width: 80)
                             .padding(.horizontal, 8).padding(.vertical, 5)
-                            .background(WL.surface, in: RoundedRectangle(cornerRadius: 5))
-                            .overlay(RoundedRectangle(cornerRadius: 5).stroke(WL.border, lineWidth: 1))
+                            .background(WL.surface, in: RoundedRectangle(cornerRadius: WL.radius(5)))
+                            .overlay(RoundedRectangle(cornerRadius: WL.radius(5)).stroke(WL.border, lineWidth: WL.borderWidth))
                     }
                     row(loc("每会话保留条数", "History per chat")) {
                         Stepper(value: $ai.historyLimit, in: 10...500, step: 10) {
@@ -269,8 +270,8 @@ struct SettingsView: View {
             TextField("", text: text, prompt: Text(prompt).foregroundStyle(WL.textDim))
                 .textFieldStyle(.plain).font(WL.mono(12)).foregroundStyle(WL.textPrimary)
                 .padding(.horizontal, 10).padding(.vertical, 7)
-                .background(WL.surface, in: RoundedRectangle(cornerRadius: 5))
-                .overlay(RoundedRectangle(cornerRadius: 5).stroke(WL.border, lineWidth: 1))
+                .background(WL.surface, in: RoundedRectangle(cornerRadius: WL.radius(5)))
+                .overlay(RoundedRectangle(cornerRadius: WL.radius(5)).stroke(WL.border, lineWidth: WL.borderWidth))
         }
     }
 
@@ -280,38 +281,31 @@ struct SettingsView: View {
             SecureField("", text: $aiKeyDraft, prompt: Text("sk-…").foregroundStyle(WL.textDim))
                 .textFieldStyle(.plain).font(WL.mono(12)).foregroundStyle(WL.textPrimary)
                 .padding(.horizontal, 10).padding(.vertical, 7)
-                .background(WL.surface, in: RoundedRectangle(cornerRadius: 5))
-                .overlay(RoundedRectangle(cornerRadius: 5).stroke(WL.border, lineWidth: 1))
+                .background(WL.surface, in: RoundedRectangle(cornerRadius: WL.radius(5)))
+                .overlay(RoundedRectangle(cornerRadius: WL.radius(5)).stroke(WL.border, lineWidth: WL.borderWidth))
                 .onChange(of: aiKeyDraft) { ai.apiKey = aiKeyDraft }
         }
     }
 
-    /// Two-way binding between the picker's string tag and `store.terminalTheme`.
+    /// Two-way binding between the picker's tag and the active theme name.
     private var themeSelection: Binding<String> {
-        Binding(
-            get: { store.terminalTheme?.name ?? "Wireline" },
-            set: { name in
-                if name == "Wireline" { store.terminalTheme = nil }
-                else if let t = TerminalTheme.presets.first(where: { $0.name == name }) {
-                    store.terminalTheme = t
-                }
-            }
-        )
+        Binding(get: { store.selectedThemeName },
+                set: { store.selectedThemeName = $0 })
     }
 
     /// A small strip of the active theme's ANSI colors as a live preview.
     private var themeSwatches: some View {
-        let theme = store.terminalTheme ?? .wireline
+        let theme = store.activeTheme.colors
         return HStack(spacing: 3) {
             ForEach(Array(theme.ansi.enumerated()), id: \.offset) { _, c in
-                RoundedRectangle(cornerRadius: 2)
+                RoundedRectangle(cornerRadius: WL.radius(2))
                     .fill(Color(.sRGB, red: c[0], green: c[1], blue: c[2]))
                     .frame(height: 14)
             }
         }
         .padding(4)
         .background(Color(.sRGB, red: theme.background[0], green: theme.background[1], blue: theme.background[2]),
-                    in: RoundedRectangle(cornerRadius: 4))
+                    in: RoundedRectangle(cornerRadius: WL.radius(4)))
     }
 
     private func section<V: View>(_ title: String, @ViewBuilder _ content: () -> V) -> some View {
@@ -352,7 +346,8 @@ struct SettingsView: View {
         }
         if panel.runModal() == .OK, let url = panel.url,
            let theme = ITermColorParser.parse(url: url) {
-            store.terminalTheme = theme
+            let t = AppTheme(name: store.uniqueThemeName(theme.name), colors: theme)
+            store.upsertTheme(t)   // fold the imported scheme into the theme library
         }
     }
 

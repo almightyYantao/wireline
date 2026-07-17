@@ -25,8 +25,8 @@ struct ShortcutSettingsView: View {
                         }
                     }
                 }
-                .background(WL.surface.opacity(0.4), in: RoundedRectangle(cornerRadius: 8))
-                .overlay(RoundedRectangle(cornerRadius: 8).stroke(WL.border, lineWidth: 1))
+                .background(WL.surface.opacity(0.4), in: RoundedRectangle(cornerRadius: WL.radius(8)))
+                .overlay(RoundedRectangle(cornerRadius: WL.radius(8)).stroke(WL.border, lineWidth: WL.borderWidth))
 
                 if let warning {
                     Text(warning).font(WL.caption).foregroundStyle(WL.red)
@@ -64,9 +64,9 @@ struct ShortcutSettingsView: View {
                     .frame(minWidth: 74)
                     .padding(.horizontal, 10).padding(.vertical, 5)
                     .background(recording == action ? WL.green.opacity(0.14) : WL.bg,
-                                in: RoundedRectangle(cornerRadius: 5))
-                    .overlay(RoundedRectangle(cornerRadius: 5)
-                        .stroke(recording == action ? WL.green : WL.border, lineWidth: 1))
+                                in: RoundedRectangle(cornerRadius: WL.radius(5)))
+                    .overlay(RoundedRectangle(cornerRadius: WL.radius(5))
+                        .stroke(recording == action ? WL.green : WL.border, lineWidth: WL.borderWidth))
             }
             .buttonStyle(.plain)
             if keys.shortcut(for: action) != action.defaultShortcut {

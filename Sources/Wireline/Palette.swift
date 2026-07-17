@@ -23,6 +23,36 @@ final class Palette: @unchecked Sendable {
     var purple = Color(hex: 0xB084F0)
     var teal = Color(hex: 0x35D0C0)
 
+    // MARK: Non-color style tokens (driven by the active AppTheme)
+
+    /// Multiplies every corner radius (see `WL.radius`).
+    var radiusScale: Double = 1.0
+    /// Border thickness in points (see `WL.borderWidth`).
+    var borderWidth: Double = 1.0
+    /// Multiplies base paddings/spacing (see `WL.pad`).
+    var densityPad: Double = 1.0
+    /// UI font design; used when `fontName` is nil.
+    var fontDesign: Font.Design = .monospaced
+    /// Explicit UI font family; overrides `fontDesign` when set.
+    var fontName: String? = nil
+    /// Multiplies every font size.
+    var fontScale: Double = 1.0
+    /// Overall chrome opacity — lets the wallpaper show through panels.
+    var chromeOpacity: Double = 1.0
+
+    /// Apply a full skin: colors + shape + typography + background.
+    func apply(_ theme: AppTheme) {
+        update(from: theme.usesDefaultColors ? nil : theme.colors)
+        radiusScale   = theme.shape.radiusScale
+        borderWidth   = theme.shape.borderWidth
+        densityPad    = theme.shape.density.pad
+        fontDesign    = theme.type.design.swiftUI
+        fontName      = theme.type.fontName
+        fontScale     = theme.type.sizeScale
+        chromeOpacity = theme.background.chromeOpacity
+        version += 1
+    }
+
     /// Recompute from a terminal theme (nil resets to the Wireline default).
     func update(from theme: TerminalTheme?) {
         guard let t = theme else {

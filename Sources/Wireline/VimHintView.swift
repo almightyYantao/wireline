@@ -77,8 +77,8 @@ struct VimHintView: View {
                 .font(.system(size: 14))
                 .foregroundStyle(WL.green)
                 .frame(width: 34, height: 34)
-                .background(WL.surface.opacity(0.9), in: RoundedRectangle(cornerRadius: 8))
-                .overlay(RoundedRectangle(cornerRadius: 8).stroke(WL.green.opacity(0.5), lineWidth: 1))
+                .background(WL.surface.opacity(0.9), in: RoundedRectangle(cornerRadius: WL.radius(8)))
+                .overlay(RoundedRectangle(cornerRadius: WL.radius(8)).stroke(WL.green.opacity(0.5), lineWidth: 1))
         }
         .buttonStyle(.plain)
         .help(loc("Vim 速查表", "Vim cheat sheet"))
@@ -125,8 +125,8 @@ struct VimHintView: View {
         }
         .frame(width: 232)
         .frame(maxHeight: 460)
-        .background(WL.bg.opacity(0.92), in: RoundedRectangle(cornerRadius: 10))
-        .overlay(RoundedRectangle(cornerRadius: 10).stroke(WL.border, lineWidth: 1))
+        .background(WL.bg.opacity(0.92), in: RoundedRectangle(cornerRadius: WL.radius(10)))
+        .overlay(RoundedRectangle(cornerRadius: WL.radius(10)).stroke(WL.border, lineWidth: WL.borderWidth))
         .shadow(color: .black.opacity(0.4), radius: 12, y: 4)
     }
 }

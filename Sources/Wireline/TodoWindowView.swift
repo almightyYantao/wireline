@@ -157,7 +157,7 @@ struct TodoWindowView: View {
                 .padding(.horizontal, 8).padding(.vertical, 3)
                 .background(active ? WL.green.opacity(0.2) : WL.surface.opacity(0.6), in: Capsule())
                 .foregroundStyle(active ? WL.greenBright : WL.textDim)
-                .overlay(Capsule().stroke(active ? WL.green.opacity(0.5) : WL.border, lineWidth: 1))
+                .overlay(Capsule().stroke(active ? WL.green.opacity(0.5) : WL.border, lineWidth: WL.borderWidth))
         }
         .buttonStyle(.plain)
     }
@@ -496,8 +496,8 @@ private struct TodoEditor: View {
                     .textFieldStyle(.plain).font(WL.small).foregroundStyle(WL.textPrimary)
                     .onSubmit(addSubtask)
                     .padding(6)
-                    .background(WL.bg.opacity(0.6), in: RoundedRectangle(cornerRadius: 5))
-                    .overlay(RoundedRectangle(cornerRadius: 5).stroke(WL.border, lineWidth: 1))
+                    .background(WL.bg.opacity(0.6), in: RoundedRectangle(cornerRadius: WL.radius(5)))
+                    .overlay(RoundedRectangle(cornerRadius: WL.radius(5)).stroke(WL.border, lineWidth: WL.borderWidth))
             }
         }
     }
@@ -526,8 +526,8 @@ private struct TodoEditor: View {
                 .font(WL.small).foregroundStyle(WL.textPrimary)
                 .lineLimit(1...4)
                 .padding(6)
-                .background(WL.bg.opacity(0.6), in: RoundedRectangle(cornerRadius: 5))
-                .overlay(RoundedRectangle(cornerRadius: 5).stroke(WL.border, lineWidth: 1))
+                .background(WL.bg.opacity(0.6), in: RoundedRectangle(cornerRadius: WL.radius(5)))
+                .overlay(RoundedRectangle(cornerRadius: WL.radius(5)).stroke(WL.border, lineWidth: WL.borderWidth))
         }
     }
 

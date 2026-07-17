@@ -186,7 +186,7 @@ struct PaneLeafView: View {
             // Fill the allotted cell so panes divide the space evenly (without
             // this each pane shrinks to its content and leaves gaps).
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .overlay(Rectangle().stroke(focused ? WL.green.opacity(0.5) : WL.border.opacity(0.4), lineWidth: 1))
+            .overlay(Rectangle().stroke(focused ? WL.green.opacity(0.5) : WL.border.opacity(0.4), lineWidth: WL.borderWidth))
             .overlay(targeted ? WL.teal.opacity(0.15) : .clear)
             .background(GeometryReader { geo in
                 Color.clear

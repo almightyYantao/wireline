@@ -114,7 +114,7 @@ struct ActionCardView: View {
             }
         }
         .padding(10)
-        .background(WL.purple.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(WL.purple.opacity(0.5), lineWidth: 1))
+        .background(WL.purple.opacity(0.08), in: RoundedRectangle(cornerRadius: WL.radius(8)))
+        .overlay(RoundedRectangle(cornerRadius: WL.radius(8)).stroke(WL.purple.opacity(0.5), lineWidth: 1))
     }
 }

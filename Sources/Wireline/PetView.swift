@@ -24,7 +24,7 @@ struct PetView: View {
                 PetChatView {
                     withAnimation(spring) { expanded = false }
                 }
-                .clipShape(RoundedRectangle(cornerRadius: 10))
+                .clipShape(RoundedRectangle(cornerRadius: WL.radius(10)))
                 .transition(.scale(scale: 0.94, anchor: .bottomTrailing).combined(with: .opacity))
             }
 
@@ -67,8 +67,8 @@ struct PetView: View {
             .font(WL.small)
             .foregroundStyle(WL.textPrimary)
             .padding(.horizontal, 10).padding(.vertical, 6)
-            .background(WL.surface.opacity(0.95), in: RoundedRectangle(cornerRadius: 8))
-            .overlay(RoundedRectangle(cornerRadius: 8).stroke(WL.border, lineWidth: 1))
+            .background(WL.surface.opacity(0.95), in: RoundedRectangle(cornerRadius: WL.radius(8)))
+            .overlay(RoundedRectangle(cornerRadius: WL.radius(8)).stroke(WL.border, lineWidth: WL.borderWidth))
             .animation(.easeInOut(duration: 0.15), value: hovering)
     }
 }

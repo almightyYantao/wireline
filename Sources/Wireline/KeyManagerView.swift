@@ -223,7 +223,7 @@ struct KeyManagerView: View {
             Text(key.fingerprint).font(WL.caption).foregroundStyle(WL.textDim).textSelection(.enabled)
         }
         .padding(10)
-        .background(WL.surface.opacity(0.4), in: RoundedRectangle(cornerRadius: 6))
+        .background(WL.surface.opacity(0.4), in: RoundedRectangle(cornerRadius: WL.radius(6)))
     }
 
     private func deployMenu(_ key: SSHKey) -> some View {
@@ -258,8 +258,8 @@ struct KeyManagerView: View {
                 Text(loc("口令", "Passphrase")).font(WL.small).foregroundStyle(WL.textDim).frame(width: 56, alignment: .leading)
                 SecureField(loc("可留空", "optional"), text: $genPass)
                     .textFieldStyle(.plain).font(WL.small).foregroundStyle(WL.textPrimary)
-                    .padding(6).background(WL.bg.opacity(0.6), in: RoundedRectangle(cornerRadius: 5))
-                    .overlay(RoundedRectangle(cornerRadius: 5).stroke(WL.border, lineWidth: 1))
+                    .padding(6).background(WL.bg.opacity(0.6), in: RoundedRectangle(cornerRadius: WL.radius(5)))
+                    .overlay(RoundedRectangle(cornerRadius: WL.radius(5)).stroke(WL.border, lineWidth: WL.borderWidth))
             }
             BracketButton(model.busy ? loc("生成中…", "Generating…") : loc("生成", "Generate")) {
                 model.generate(type: genType, name: genName, comment: genComment, passphrase: genPass)
@@ -272,8 +272,8 @@ struct KeyManagerView: View {
             Text(label).font(WL.small).foregroundStyle(WL.textDim).frame(width: 56, alignment: .leading)
             TextField("", text: text)
                 .textFieldStyle(.plain).font(WL.small).foregroundStyle(WL.textPrimary)
-                .padding(6).background(WL.bg.opacity(0.6), in: RoundedRectangle(cornerRadius: 5))
-                .overlay(RoundedRectangle(cornerRadius: 5).stroke(WL.border, lineWidth: 1))
+                .padding(6).background(WL.bg.opacity(0.6), in: RoundedRectangle(cornerRadius: WL.radius(5)))
+                .overlay(RoundedRectangle(cornerRadius: WL.radius(5)).stroke(WL.border, lineWidth: WL.borderWidth))
         }
     }
 

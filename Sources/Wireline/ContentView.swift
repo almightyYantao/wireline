@@ -151,9 +151,9 @@ struct ContentView: View {
                 .onTapGesture { showQuickConnect = false }
             QuickConnectView(onClose: { showQuickConnect = false })
                 .frame(width: 620, height: 420)
-                .background(WL.bg, in: RoundedRectangle(cornerRadius: 12))
-                .overlay(RoundedRectangle(cornerRadius: 12).stroke(WL.border, lineWidth: 1))
-                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .background(WL.bg, in: RoundedRectangle(cornerRadius: WL.radius(12)))
+                .overlay(RoundedRectangle(cornerRadius: WL.radius(12)).stroke(WL.border, lineWidth: WL.borderWidth))
+                .clipShape(RoundedRectangle(cornerRadius: WL.radius(12)))
                 .shadow(color: .black.opacity(0.5), radius: 24, y: 8)
         }
         .transition(.opacity)
@@ -168,9 +168,9 @@ struct ContentView: View {
                 .onTapGesture { showCommandPalette = false }
             CommandPaletteView(onClose: { showCommandPalette = false })
                 .frame(width: 640, height: 460)
-                .background(WL.bg, in: RoundedRectangle(cornerRadius: 12))
-                .overlay(RoundedRectangle(cornerRadius: 12).stroke(WL.border, lineWidth: 1))
-                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .background(WL.bg, in: RoundedRectangle(cornerRadius: WL.radius(12)))
+                .overlay(RoundedRectangle(cornerRadius: WL.radius(12)).stroke(WL.border, lineWidth: WL.borderWidth))
+                .clipShape(RoundedRectangle(cornerRadius: WL.radius(12)))
                 .shadow(color: .black.opacity(0.5), radius: 24, y: 8)
         }
         .transition(.opacity)
@@ -194,7 +194,7 @@ struct ContentView: View {
         }
         .frame(width: 34)
         .frame(maxHeight: .infinity)
-        .background(WL.bg.opacity(store.terminalOpacity))
+        .background(WL.bg.opacity(store.terminalOpacity * WL.chromeOpacity))
     }
 }
 
@@ -281,7 +281,7 @@ struct LeftPanel: View {
             Rectangle().fill(WL.border).frame(height: 1)
             bottomBar
         }
-        .background(WL.bg.opacity(store.terminalOpacity))
+        .background(WL.bg.opacity(store.terminalOpacity * WL.chromeOpacity))
         .sheet(isPresented: $showNewGroup) {
             NewGroupSheet { name in store.createGroup(name) }
         }
@@ -478,9 +478,9 @@ struct FeatureButton: View {
             .padding(.horizontal, 9).padding(.vertical, 7)
             .frame(maxWidth: .infinity)
             .background(active ? tint.opacity(0.14) : WL.surface.opacity(hover ? 0.7 : 0.4),
-                        in: RoundedRectangle(cornerRadius: 6))
-            .overlay(RoundedRectangle(cornerRadius: 6)
-                .stroke(active ? tint.opacity(0.6) : WL.border, lineWidth: 1))
+                        in: RoundedRectangle(cornerRadius: WL.radius(6)))
+            .overlay(RoundedRectangle(cornerRadius: WL.radius(6))
+                .stroke(active ? tint.opacity(0.6) : WL.border, lineWidth: WL.borderWidth))
         }
         .buttonStyle(.plain)
         .onHover { hover = $0 }
@@ -522,8 +522,8 @@ struct NewGroupSheet: View {
                           prompt: Text(loc("如 生产环境", "e.g. Production")).foregroundStyle(WL.textDim))
                     .textFieldStyle(.plain).font(WL.body).foregroundStyle(WL.textPrimary)
                     .padding(.horizontal, 10).padding(.vertical, 7)
-                    .background(WL.surface, in: RoundedRectangle(cornerRadius: 5))
-                    .overlay(RoundedRectangle(cornerRadius: 5).stroke(WL.border, lineWidth: 1))
+                    .background(WL.surface, in: RoundedRectangle(cornerRadius: WL.radius(5)))
+                    .overlay(RoundedRectangle(cornerRadius: WL.radius(5)).stroke(WL.border, lineWidth: WL.borderWidth))
                     .onSubmit(create)
                 Text(loc("创建后把主机拖进去即可。", "Create it, then drag hosts in."))
                     .font(WL.caption).foregroundStyle(WL.textDim)

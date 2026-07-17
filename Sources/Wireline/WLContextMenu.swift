@@ -166,8 +166,8 @@ private struct WLMenuList: View {
         .padding(.vertical, 5)
         .frame(minWidth: 176, alignment: .leading)
         .background(WL.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(WL.border, lineWidth: 1))
+        .clipShape(RoundedRectangle(cornerRadius: WL.radius(8)))
+        .overlay(RoundedRectangle(cornerRadius: WL.radius(8)).stroke(WL.border, lineWidth: WL.borderWidth))
         .shadow(color: .black.opacity(0.4), radius: 14, y: 6)
     }
 }

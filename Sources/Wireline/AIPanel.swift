@@ -47,8 +47,8 @@ struct AIPanelView: View {
         }
         .frame(width: 380)
         .frame(maxHeight: .infinity)
-        .background(WL.bg.opacity(store.terminalOpacity))
-        .overlay(Rectangle().stroke(WL.border, lineWidth: 1))
+        .background(WL.bg.opacity(store.terminalOpacity * WL.chromeOpacity))
+        .overlay(Rectangle().stroke(WL.border, lineWidth: WL.borderWidth))
         .sheet(isPresented: $showFleet) {
             FleetView(onClose: { showFleet = false })
                 .environment(store).environment(loc)
@@ -170,8 +170,8 @@ struct AIPanelView: View {
             }
             .foregroundStyle(WL.textPrimary)
             .padding(.horizontal, 8).padding(.vertical, 5)
-            .background(WL.surface.opacity(0.6), in: RoundedRectangle(cornerRadius: 5))
-            .overlay(RoundedRectangle(cornerRadius: 5).stroke(WL.border, lineWidth: 1))
+            .background(WL.surface.opacity(0.6), in: RoundedRectangle(cornerRadius: WL.radius(5)))
+            .overlay(RoundedRectangle(cornerRadius: WL.radius(5)).stroke(WL.border, lineWidth: WL.borderWidth))
         }
         .buttonStyle(.plain)
         .disabled(isStreaming)
@@ -199,7 +199,7 @@ struct AIPanelView: View {
                     if let errorText {
                         Text(errorText).font(WL.caption).foregroundStyle(WL.red)
                             .padding(10)
-                            .background(WL.red.opacity(0.1), in: RoundedRectangle(cornerRadius: 6))
+                            .background(WL.red.opacity(0.1), in: RoundedRectangle(cornerRadius: WL.radius(6)))
                     }
                     // Invisible bottom anchor: scrolling to it always sticks the
                     // view to the very bottom as content streams in / grows.
@@ -615,7 +615,7 @@ private struct MessageBubble: View {
                     .font(WL.mono(fontSize)).foregroundStyle(WL.textPrimary)
                     .padding(8)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(WL.green.opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
+                    .background(WL.green.opacity(0.12), in: RoundedRectangle(cornerRadius: WL.radius(6)))
             case .system:
                 // Agent execution trace: the run command (▶︎ …) and its output.
                 Text(message.content)
@@ -623,7 +623,7 @@ private struct MessageBubble: View {
                     .textSelection(.enabled)
                     .padding(8)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(WL.surface.opacity(0.4), in: RoundedRectangle(cornerRadius: 6))
+                    .background(WL.surface.opacity(0.4), in: RoundedRectangle(cornerRadius: WL.radius(6)))
                     .overlay(alignment: .leading) { Rectangle().fill(WL.green.opacity(0.5)).frame(width: 2) }
             case .assistant:
                 ForEach(Array(segments(message.content).enumerated()), id: \.offset) { _, seg in
@@ -670,8 +670,8 @@ private struct MessageBubble: View {
             }
         }
         .padding(9)
-        .background(WL.surface.opacity(0.6), in: RoundedRectangle(cornerRadius: 6))
-        .overlay(RoundedRectangle(cornerRadius: 6).stroke(WL.border, lineWidth: 1))
+        .background(WL.surface.opacity(0.6), in: RoundedRectangle(cornerRadius: WL.radius(6)))
+        .overlay(RoundedRectangle(cornerRadius: WL.radius(6)).stroke(WL.border, lineWidth: WL.borderWidth))
     }
 
     /// Whether a code segment is a wl-action JSON payload (rendered as a card).

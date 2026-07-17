@@ -19,7 +19,7 @@ struct WindowAccessor: NSViewRepresentable {
 /// Puts the app-wide wallpaper behind `content` and attaches the same window
 /// chrome the main window uses, so secondary windows (the to-do list, …)
 /// composite over the identical translucent backdrop. Panels inside `content`
-/// should use `WL.bg.opacity(store.terminalOpacity)` to let the wallpaper show
+/// should use `WL.bg.opacity(store.terminalOpacity * WL.chromeOpacity)` to let the wallpaper show
 /// through, exactly like the main window's panels.
 struct WallpaperBackground: ViewModifier {
     @Environment(HostStore.self) private var store

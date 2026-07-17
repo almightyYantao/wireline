@@ -160,16 +160,14 @@ struct CommandPaletteView: View {
             }
         }
 
-        // Switch terminal theme (recolors the whole UI).
+        // Switch theme / skin (recolors & restyles the whole UI).
         let theme = loc("主题", "Theme")
-        out.append(PaletteCommand(title: "Wireline", subtitle: loc("默认绿", "Default green"),
-                                  category: theme, systemImage: "paintpalette", tint: WL.green) {
-            store.terminalTheme = nil
-        })
-        for t in TerminalTheme.presets {
-            out.append(PaletteCommand(title: t.name, category: theme,
-                                      systemImage: "paintpalette", tint: WL.purple) {
-                store.terminalTheme = t
+        for t in store.allThemes {
+            out.append(PaletteCommand(title: t.name,
+                                      subtitle: t.isBuiltIn ? nil : loc("自定义", "Custom"),
+                                      category: theme, systemImage: "paintpalette",
+                                      tint: t.isBuiltIn ? WL.green : WL.purple) {
+                store.selectedThemeName = t.name
             })
         }
 

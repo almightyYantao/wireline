@@ -61,7 +61,7 @@ struct RightPanel: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(WL.bg.opacity(store.terminalOpacity))
+        .background(WL.bg.opacity(store.terminalOpacity * WL.chromeOpacity))
         .onReceive(NotificationCenter.default.publisher(for: .toggleAI)) { _ in
             if ai.enabled { showAI.toggle() }
         }
@@ -105,9 +105,9 @@ struct RightPanel: View {
                 Image(systemName: "sparkles")
                     .font(.system(size: 14)).foregroundStyle(WL.green)
                     .frame(width: 36, height: 36)
-                    .background(WL.surface.opacity(0.9), in: RoundedRectangle(cornerRadius: 8))
-                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(WL.green.opacity(0.5), lineWidth: 1))
-                    .contentShape(RoundedRectangle(cornerRadius: 8))
+                    .background(WL.surface.opacity(0.9), in: RoundedRectangle(cornerRadius: WL.radius(8)))
+                    .overlay(RoundedRectangle(cornerRadius: WL.radius(8)).stroke(WL.green.opacity(0.5), lineWidth: 1))
+                    .contentShape(RoundedRectangle(cornerRadius: WL.radius(8)))
                     .padding(14)
                     .offset(x: aiBtnX + aiDrag.width, y: aiBtnY + aiDrag.height)
                     // Drag follows the cursor live (minimumDistance 1 so a plain
@@ -254,8 +254,8 @@ struct RightPanel: View {
         }
         .foregroundStyle(WL.textDim)
         .padding(.horizontal, 10).padding(.vertical, 6)
-        .background(WL.surface, in: RoundedRectangle(cornerRadius: 8))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(WL.border, lineWidth: 1))
+        .background(WL.surface, in: RoundedRectangle(cornerRadius: WL.radius(8)))
+        .overlay(RoundedRectangle(cornerRadius: WL.radius(8)).stroke(WL.border, lineWidth: WL.borderWidth))
         .padding(8)
         .onExitCommand(perform: closeSearch)
     }
