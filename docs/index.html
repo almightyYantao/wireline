@@ -3,11 +3,11 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Wireline · 原生 macOS SSH 客户端 · 内置 AI 副驾</title>
-<meta name="description" content="Wireline 是一款原生 macOS SSH 客户端，内置 AI 副驾：自然语言生成/执行命令、跨主机群跑、诊断报错，标准 ~/.ssh/config 单一数据源。">
+<title>Wireline · 原生 macOS SSH 舰队管理器 · 绝不锁定你的数据</title>
+<meta name="description" content="Wireline 是一款原生 macOS SSH 舰队管理器:主机数据始终以标准 ~/.ssh/config 为唯一来源、绝不锁定;选中一整个分组一句话并发跑遍全部并汇总成表;AI 是让批量运维变简单的杠杆。">
 <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%20100%20100'%3E%3Crect%20width='100'%20height='100'%20rx='22'%20fill='%230a0e0a'/%3E%3Ctext%20x='50'%20y='72'%20font-family='monospace'%20font-size='62'%20font-weight='700'%20text-anchor='middle'%20fill='%2335d07f'%3E%26gt;%3C/text%3E%3C/svg%3E">
-<meta property="og:title" content="Wireline · 原生 macOS SSH 客户端 · 内置 AI 副驾">
-<meta property="og:description" content="一句话生成并执行命令、跨主机群跑、诊断报错。标准 ~/.ssh/config 单一数据源。">
+<meta property="og:title" content="Wireline · 原生 macOS SSH 舰队管理器 · 绝不锁定你的数据">
+<meta property="og:description" content="主机数据始终以标准 ~/.ssh/config 为唯一来源、绝不锁定;一句话并发跑遍一整个分组并汇总成表;AI 是杠杆,不是卖点。">
 <meta property="og:type" content="website">
 <style>
   :root{
@@ -69,7 +69,8 @@
   .lead{color:var(--dim);margin-bottom:34px;font-size:15px}
   .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px}
   .card{background:var(--surface);border:1px solid var(--border);border-radius:11px;padding:22px}
-  .card .ic{font-size:22px;margin-bottom:12px}
+  .card .ic{margin-bottom:12px;line-height:0}
+  .card .ic svg{width:24px;height:24px;fill:none;stroke:var(--green);stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
   .card h3{font-size:16px;margin-bottom:7px;color:var(--text)}
   .card p{color:var(--dim);font-size:13.5px}
   .card .k{color:var(--green)}
@@ -83,6 +84,18 @@
     border-radius:8px;padding:16px 18px;color:var(--dim);font-size:13.5px}
   .note b{color:var(--amber)}
 
+  .cmp-wrap{overflow-x:auto;border:1px solid var(--border);border-radius:11px;margin-bottom:20px}
+  table.cmp{border-collapse:collapse;width:100%;min-width:640px;font-size:13.5px}
+  table.cmp th,table.cmp td{padding:12px 14px;text-align:left;border-bottom:1px solid var(--border);color:var(--dim)}
+  table.cmp thead th{color:var(--text);font-weight:600;background:var(--surface)}
+  table.cmp thead th.me{color:var(--green)}
+  table.cmp tbody tr:last-child td{border-bottom:none}
+  table.cmp td:first-child{color:var(--text)}
+  table.cmp td.me{color:var(--green);font-weight:600;background:rgba(53,208,127,.05)}
+  .hook{background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--green);
+    border-radius:8px;padding:16px 18px;color:var(--text);font-size:14.5px;line-height:1.6}
+  .hook b{color:var(--green)}
+
   footer{border-top:1px solid var(--border);padding:40px 0;text-align:center;color:var(--dim);font-size:13px}
   footer a{color:var(--dim);text-decoration:underline}
   @media(max-width:640px){h1{font-size:32px}.sub{font-size:15px}}
@@ -94,16 +107,19 @@
   <div class="brand">&gt; wireline <span>/ ssh + ai</span></div>
   <div class="sp"></div>
   <a class="link" href="#demo">演示</a>
+  <a class="link" href="#fleet">舰队</a>
+  <a class="link" href="#compare">对比</a>
   <a class="link" href="#ai">AI</a>
   <a class="link" href="#features">功能</a>
   <a class="link" href="#security">安全</a>
+  <a class="link" href="https://yantao.wiki">博客</a>
   <a class="link" href="https://github.com/almightyYantao/wireline">GitHub</a>
 </div></nav>
 
 <header><div class="wrap">
   <div class="tag">✦ 原生 macOS · SwiftUI · 无服务端</div>
-  <h1>原生 macOS SSH 客户端<br><span class="g">内置 AI 副驾</span></h1>
-  <p class="sub">把命令行时代验证过的高效范式，装进一个真正能动手的图形客户端：一句话生成并执行命令、跨主机群跑、诊断报错——而所有主机数据始终以标准 <code>~/.ssh/config</code> 为唯一来源，绝不锁定。</p>
+  <h1>原生 macOS SSH 舰队管理器<br><span class="g">绝不锁定你的数据</span></h1>
+  <p class="sub">主机配置始终以标准 <code>~/.ssh/config</code> 为唯一数据源,卸载后 <code>ssh</code>/<code>scp</code>/VS Code Remote 照样能读——没有私有账号,绝不锁定。选中一整个分组、一句话并发跑遍全部并汇总成一张表:这是单机 AI 终端给不了的。AI 是让这一切变简单的杠杆,不是卖点。</p>
   <div class="cta">
     <a class="btn solid" href="https://github.com/almightyYantao/wireline/releases/latest">下载 macOS 版</a>
     <a class="btn" href="https://github.com/almightyYantao/wireline">在 GitHub 查看</a>
@@ -133,19 +149,54 @@
          style="width:100%;border:1px solid var(--border);border-radius:12px;box-shadow:0 20px 60px rgba(0,0,0,.5)"></video>
 </div></section>
 
-<section id="ai"><div class="wrap">
-  <h2><span class="g">AI</span> 副驾</h2>
-  <p class="lead">接 OpenAI 兼容服务(中转站/直连)或本地 Ollama。数据可脱敏、命令永不自动执行。</p>
+<section id="fleet"><div class="wrap">
+  <h2><span class="g">舰队</span> · Fleet</h2>
+  <p class="lead">单机 AI 终端给不了的能力:一次操作一整个分组——因为 Wireline 掌握你的主机图谱。</p>
   <div class="grid">
-    <div class="card"><div class="ic">⌨️</div><h3>自然语言 → 命令</h3><p>说需求，生成命令，<span class="k">[插入]</span> 或 <span class="k">[运行]</span>；命令栏 <span class="k">⌘;</span> 更快。</p></div>
-    <div class="card"><div class="ic">🤖</div><h3>Agent 自动执行</h3><p>给命令 → 真实执行 → 拿输出 → 继续，直到出结论。可见/旁路、危险确认、只读沙盒。</p></div>
-    <div class="card"><div class="ic">🛰</div><h3>舰队群跑</h3><p>多选主机 → 一句话 → 并发执行 → AI 汇总成结论/表格。单终端做不到。</p></div>
-    <div class="card"><div class="ic">🩺</div><h3>诊断 · 解释 · 总结</h3><p>一键分析报错、解释命令(高危警告)、总结长日志。</p></div>
-    <div class="card"><div class="ic">🧠</div><h3>主机记忆</h3><p>记住每台机器的稳定信息，之后回答自动结合，越用越懂你的环境。</p></div>
-    <div class="card"><div class="ic">🪄</div><h3>AI 副驾操作客户端</h3><p>一句话建隧道、加主机、连接、开文件、跑片段——均需确认。</p></div>
-    <div class="card"><div class="ic">📄</div><h3>SFTP AI 改文件 · 变更评审</h3><p>右键远程文件说改动 → 预览 → 影响/风险评审 → 写回。</p></div>
-    <div class="card"><div class="ic">📓</div><h3>会话复盘 → Runbook</h3><p>把本次操作整理成带步骤/命令/回滚的 Markdown 手册。</p></div>
-    <div class="card"><div class="ic">🐾</div><h3>桌面宠物</h3><p>悬浮桌面的小精灵，独立对话窗口。<span class="k">⌥⌘J</span> <b style="color:var(--text)">全局</b>唤出(任意 App 都行)，说「把 IAI 所有机器的 Docker 状态总结下」，它<b style="color:var(--text)">按分组</b>并发执行再汇总。</p></div>
+    <div class="card"><div class="ic"><svg viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="7" rx="1"/><rect x="2" y="13" width="20" height="7" rx="1"/><line x1="6" y1="7.5" x2="6.01" y2="7.5"/><line x1="6" y1="16.5" x2="6.01" y2="16.5"/></svg></div><h3>一句话，多主机</h3><p>选中若干主机或一整个分组，描述一次任务，并发跑遍全部。</p></div>
+    <div class="card"><div class="ic"><svg viewBox="0 0 24 24"><line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="15"/></svg></div><h3>是汇总，不是刷屏</h3><p>逐机输出可折叠，顶部由 AI 提炼成一个结论或一张对比表。</p></div>
+    <div class="card"><div class="ic"><svg viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></div><h3>无需先连接</h3><p>非交互引擎直接跑批，不必逐台开会话。</p></div>
+    <div class="card"><div class="ic"><svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></div><h3>规模化也安全</h3><p>高危命令在触及舰队前仍强制二次确认；发送前脱敏。</p></div>
+    <div class="card"><div class="ic"><svg viewBox="0 0 24 24"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg></div><h3>认得分组与别名</h3><p>直接用 <code>~/.ssh/config</code> 里的别名或分组名指定目标——和 <code>ssh</code> 同一套名字。</p></div>
+    <div class="card"><div class="ic"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><line x1="9" y1="1.5" x2="9" y2="4"/><line x1="15" y1="1.5" x2="15" y2="4"/><line x1="9" y1="20" x2="9" y2="22.5"/><line x1="15" y1="20" x2="15" y2="22.5"/><line x1="20" y1="9" x2="22.5" y2="9"/><line x1="20" y1="15" x2="22.5" y2="15"/><line x1="1.5" y1="9" x2="4" y2="9"/><line x1="1.5" y1="15" x2="4" y2="15"/></svg></div><h3>你的模型跑舰队</h3><p>汇总用你自己的 endpoint 或完全本地的 Ollama，敏感运维不出本机。</p></div>
+  </div>
+</div></section>
+
+<section id="compare"><div class="wrap">
+  <h2>Wireline <span class="g">vs</span> Termius vs Warp</h2>
+  <p class="lead">对手强的格子如实标出；真正没人同时具备的,是最后三条的交集。</p>
+  <div class="cmp-wrap"><table class="cmp">
+    <thead><tr><th></th><th class="me">Wireline</th><th>Termius</th><th>Warp</th></tr></thead>
+    <tbody>
+      <tr><td>定位</td><td class="me">原生 macOS SSH 舰队管理器</td><td>跨平台 SSH 客户端</td><td>AI 原生终端</td></tr>
+      <tr><td>主机数据存在标准 <code>~/.ssh/config</code></td><td class="me">✅ 唯一源</td><td>❌ 自家 vault</td><td>— 不管理主机</td></tr>
+      <tr><td>完全本地、无需账号即可用</td><td class="me">✅</td><td>⚠️ 同步/AI 需账号</td><td>✅ 2026 起登录可选</td></tr>
+      <tr><td>自带 AI endpoint / 完全本地 Ollama</td><td class="me">✅ 全部 AI(含舰队 agent)</td><td>❌ 只能用其云模型</td><td>⚠️ 本地 AI 仅命令生成;agent 走云</td></tr>
+      <tr><td>Fleet:选组→一句话→并发→AI 汇总成表</td><td class="me">✅</td><td>⚠️ 广播镜像输入(无汇总)/云 agent</td><td>❌ 无主机图谱</td></tr>
+      <tr><td>可视化 SFTP</td><td class="me">✅</td><td>✅</td><td>❌</td></tr>
+      <tr><td>图形化端口转发</td><td class="me">✅</td><td>✅</td><td>❌</td></tr>
+      <tr><td>AI 改远程文件 + 变更评审</td><td class="me">✅</td><td>❌</td><td>❌</td></tr>
+      <tr><td>自然语言 → 命令 / 诊断</td><td class="me">✅</td><td>✅</td><td>✅ 最成熟</td></tr>
+      <tr><td>跨平台(Win/Linux/移动)</td><td class="me">❌ 仅 macOS</td><td>✅</td><td>✅ 桌面</td></tr>
+    </tbody>
+  </table></div>
+  <p class="hook"><b>Warp</b> 加了本地 AI,却仍不管你的主机;<b>Termius</b> 管主机,却把它们锁进自家 vault、AI 只跑在它的云上。<b>Wireline</b> 把主机留在标准 <code>~/.ssh/config</code>、AI 跑在你自己的模型上(或完全离线)、一句话指挥整支舰队。</p>
+  <p class="lead" style="margin:14px 0 0;font-size:12.5px">竞品能力为 2026-07 时点信息 —— 迭代很快,以最新版本为准。</p>
+</div></section>
+
+<section id="ai"><div class="wrap">
+  <h2><span class="g">AI</span> 是杠杆</h2>
+  <p class="lead">AI 让上面这一切毫不费力,不是外挂功能。接 OpenAI 兼容服务(中转站/直连)或本地 Ollama;数据可脱敏、命令永不自动执行。</p>
+  <div class="grid">
+    <div class="card"><div class="ic"><svg viewBox="0 0 24 24"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg></div><h3>自然语言 → 命令</h3><p>说需求，生成命令，<span class="k">[插入]</span> 或 <span class="k">[运行]</span>；命令栏 <span class="k">⌘;</span> 更快。</p></div>
+    <div class="card"><div class="ic"><svg viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4"/><line x1="8" y1="16" x2="8.01" y2="16"/><line x1="16" y1="16" x2="16.01" y2="16"/></svg></div><h3>Agent 自动执行</h3><p>给命令 → 真实执行 → 拿输出 → 继续，直到出结论。可见/旁路、危险确认、只读沙盒。</p></div>
+    <div class="card"><div class="ic"><svg viewBox="0 0 24 24"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg></div><h3>舰队群跑</h3><p>多选主机 → 一句话 → 并发执行 → AI 汇总成结论/表格。单终端做不到。</p></div>
+    <div class="card"><div class="ic"><svg viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg></div><h3>诊断 · 解释 · 总结</h3><p>一键分析报错、解释命令(高危警告)、总结长日志。</p></div>
+    <div class="card"><div class="ic"><svg viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 5v14c0 1.66-4 3-9 3s-9-1.34-9-3V5"/><path d="M3 12c0 1.66 4 3 9 3s9-1.34 9-3"/></svg></div><h3>主机记忆</h3><p>记住每台机器的稳定信息，之后回答自动结合，越用越懂你的环境。</p></div>
+    <div class="card"><div class="ic"><svg viewBox="0 0 24 24"><path d="M5 3v4M3 5h4M6 17v4M4 19h4"/><path d="M13 3l2.4 6.6L22 12l-6.6 2.4L13 21l-2.4-6.6L4 12l6.6-2.4L13 3z"/></svg></div><h3>AI 副驾操作客户端</h3><p>一句话建隧道、加主机、连接、开文件、跑片段——均需确认。</p></div>
+    <div class="card"><div class="ic"><svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="13" y2="13"/><line x1="8" y1="17" x2="12" y2="17"/></svg></div><h3>SFTP AI 改文件 · 变更评审</h3><p>右键远程文件说改动 → 预览 → 影响/风险评审 → 写回。</p></div>
+    <div class="card"><div class="ic"><svg viewBox="0 0 24 24"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg></div><h3>会话复盘 → Runbook</h3><p>把本次操作整理成带步骤/命令/回滚的 Markdown 手册。</p></div>
+    <div class="card"><div class="ic"><svg viewBox="0 0 24 24"><circle cx="12" cy="13" r="9"/><path d="M8.5 14.5s1.2 1.5 3.5 1.5 3.5-1.5 3.5-1.5"/><line x1="9" y1="10" x2="9.01" y2="10"/><line x1="15" y1="10" x2="15.01" y2="10"/></svg></div><h3>桌面宠物</h3><p>悬浮桌面的小精灵，独立对话窗口。<span class="k">⌥⌘J</span> <b style="color:var(--text)">全局</b>唤出(任意 App 都行)，说「把 IAI 所有机器的 Docker 状态总结下」，它<b style="color:var(--text)">按分组</b>并发执行再汇总。</p></div>
   </div>
 </div></section>
 
@@ -173,16 +224,16 @@
   <h2><span class="g">安全</span>与隐私</h2>
   <p class="lead">无服务端、无中心数据库，所有状态都在本机。</p>
   <div class="grid">
-    <div class="card"><div class="ic">🔑</div><h3>密码只进 Keychain</h3><p>主机密码与 AI Key 仅存 macOS 钥匙串，配置文件不落明文。</p></div>
-    <div class="card"><div class="ic">🧾</div><h3>标准配置单一来源</h3><p>始终读写标准 <code>~/.ssh/config</code>；卸载后 ssh/scp/VS Code Remote 照常可用。</p></div>
-    <div class="card"><div class="ic">🛡</div><h3>AI 可控</h3><p>发送前脱敏；生成命令永不自动执行；高危命令强制确认，可开只读沙盒。</p></div>
+    <div class="card"><div class="ic"><svg viewBox="0 0 24 24"><circle cx="7.5" cy="15.5" r="5.5"/><path d="M11.5 11.5L21 2"/><line x1="16" y1="7" x2="19" y2="10"/><line x1="18" y1="5" x2="21" y2="8"/></svg></div><h3>密码只进 Keychain</h3><p>主机密码与 AI Key 仅存 macOS 钥匙串，配置文件不落明文。</p></div>
+    <div class="card"><div class="ic"><svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="16" y2="17"/></svg></div><h3>标准配置单一来源</h3><p>始终读写标准 <code>~/.ssh/config</code>；卸载后 ssh/scp/VS Code Remote 照常可用。</p></div>
+    <div class="card"><div class="ic"><svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><polyline points="9 12 11 14 15 10"/></svg></div><h3>AI 可控</h3><p>发送前脱敏；生成命令永不自动执行；高危命令强制确认，可开只读沙盒。</p></div>
   </div>
   <div style="height:16px"></div>
   <div class="note"><b>分发说明</b>：当前为 ad-hoc 签名，首次打开请右键 → 打开(或 <code>xattr -cr /Applications/Wireline.app</code>)。</div>
 </div></section>
 
 <footer><div class="wrap">
-  Wireline · MIT License · <a href="https://github.com/almightyYantao/wireline">github.com/almightyYantao/wireline</a>
+  Wireline · MIT License · <a href="https://github.com/almightyYantao/wireline">github.com/almightyYantao/wireline</a> · <a href="https://yantao.wiki">yantao.wiki</a>
 </div></footer>
 
 </body>

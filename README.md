@@ -8,15 +8,19 @@
   <a href="https://github.com/almightyYantao/wireline/releases/latest">Download</a>
   &nbsp;·&nbsp;
   <a href="https://almightyyantao.github.io/wireline/">Website</a>
+  &nbsp;·&nbsp;
+  <a href="https://yantao.wiki">Blog</a>
 </p>
 
-> A native macOS SSH client with a built-in AI copilot.
+> A native macOS SSH **fleet manager** that never locks up your data — and lets AI turn batch ops across every host into one sentence.
 
-Wireline reimagines the command-line era's proven workflow (aliases, groups, batch ops, secure storage) as a native macOS app — and layers on an AI assistant that can actually *do things*: turn plain language into commands and run them, fan out across hosts, diagnose errors, even set up tunnels or add hosts for you.
+**Your data is never held hostage.** Host config **always lives in the standard `~/.ssh/config` as the single source of truth** — the GUI is just an efficient shell over that standard file. Uninstall Wireline and `ssh` / `scp` / `rsync` / VS Code Remote still read the same config. No proprietary account, no cloud sync you can't opt out of, no export button you'll ever need. That's the difference between Wireline and the SSH clients that lock your hosts inside their own format.
 
-Your host data **always lives in the standard `~/.ssh/config` as the single source of truth** — the GUI is just an efficient shell over that standard file. Uninstall Wireline and `ssh` / `scp` / `rsync` / VS Code Remote still read the same config. No lock-in.
+**Built for many hosts, not one.** Aliases, groups, and batch ops are first-class: select a whole group, describe the task in one sentence, and Wireline fans out in parallel and aggregates every host's output into a single conclusion or table — no need to connect first. A plain AI terminal can't do this, because it doesn't have your host graph.
 
-A terminal-hacker look (monospace · green-on-black · themeable), a real built-in PTY terminal, a visual SFTP browser, graphical port forwarding, and even an app-wide animated wallpaper.
+**AI is the lever, not the pitch.** Layered on top is an assistant that actually *does things*: plain language → command, diagnose errors, edit remote files with a change review, even set up tunnels or add hosts for you — always with confirmation, secrets redacted before sending.
+
+Wrapped in a native macOS terminal-hacker look (monospace · green-on-black · themeable), with a real built-in PTY terminal, a visual SFTP browser, graphical port forwarding, and an app-wide animated wallpaper.
 
 ## 📸 Screenshots
 
@@ -31,9 +35,44 @@ A terminal-hacker look (monospace · green-on-black · themeable), a real built-
 
 ---
 
+## 🚀 Fleet
+
+The thing a single-host AI terminal can't give you: operate a whole group at once, because Wireline knows your host graph.
+
+- **One sentence, many hosts**: select hosts or a whole group, describe the task once, and it runs in parallel across all of them
+- **Aggregated, not dumped**: per-host output stays collapsible while AI distills everything into one conclusion or comparison table on top
+- **No connect required**: a non-interactive engine runs the batch without opening a session per host
+- **Safe at scale**: dangerous commands still require confirmation before they touch the fleet; secrets redacted before sending
+- **Group- and alias-aware**: target machines by their `~/.ssh/config` alias or group name — the same names `ssh` already uses
+
+---
+
+## ⚔️ Wireline vs Termius vs Warp
+
+| | **Wireline** | Termius | Warp |
+|---|---|---|---|
+| Positioning | Native macOS SSH **fleet manager** | Cross-platform SSH client | AI-native terminal |
+| Host data in plain `~/.ssh/config` | ✅ single source | ❌ own vault | — doesn't manage hosts |
+| Works fully local, no account | ✅ | ⚠️ account for sync/AI | ✅ (login optional since 2026) |
+| Bring-your-own AI endpoint / full local Ollama | ✅ all AI, incl. the fleet agent | ❌ cloud model only, no BYOK | ⚠️ local AI for command-gen only; agent is cloud |
+| Fleet: group → one sentence → parallel → AI aggregates to a table | ✅ | ⚠️ broadcast input (no synthesis) or cloud chat agent | ❌ no host graph |
+| Visual SFTP browser | ✅ | ✅ | ❌ |
+| GUI port forwarding | ✅ | ✅ | ❌ |
+| AI edit remote file + change review | ✅ | ❌ | ❌ |
+| NL → command / diagnose | ✅ | ✅ | ✅ (most polished) |
+| Cross-platform (Win/Linux/mobile) | ❌ macOS only | ✅ | ✅ desktop |
+
+*Competitor capabilities as of 2026-07 — they move fast; verify against current releases.*
+
+**What only Wireline does, all at once:** keep your hosts in plain `~/.ssh/config` (no lock-in), run **every** AI feature — including the fleet agent — on your own endpoint or fully offline via Ollama, and command a whole group in one sentence with the output distilled into a single table.
+
+> Warp added local AI but still won't manage your hosts. Termius manages hosts but locks them in its vault and runs AI only in its cloud. Wireline keeps your hosts in plain `~/.ssh/config`, runs AI on your own model (or fully offline), and commands the whole fleet in one sentence.
+
+---
+
 ## 🤖 AI Copilot
 
-In Settings → AI, enter an **OpenAI-compatible endpoint + key** (a relay or direct), or point it at local **Ollama** (nothing leaves your machine). The ✨ button by the terminal opens the AI panel.
+AI is the lever that makes the above feel effortless — not a bolt-on. In Settings → AI, enter an **OpenAI-compatible endpoint + key** (a relay or direct), or point it at local **Ollama** (nothing leaves your machine). The ✨ button by the terminal opens the AI panel.
 
 - **Natural language → command**: describe it, get a command, `Insert` or `Run` — never auto-executed
 - **Command bar (⌘;)**: describe → generate → ⌘; again to run
@@ -166,6 +205,14 @@ Dependencies: SwiftTerm (terminal) · Citadel (SFTP) · Inject (debug live reloa
 - The backup passphrase is never written to disk or uploaded; lose it and the backup is unrecoverable.
 - No network traffic except to the AI endpoint you configure; SSH connections go straight from your machine to the target.
 - `~/.ssh/config` is timestamp-backed-up before writes and forced to 0600.
+
+---
+
+## Star History
+
+<a href="https://star-history.com/#almightyYantao/wireline&Date">
+  <img src="https://api.star-history.com/svg?repos=almightyYantao/wireline&type=Date" alt="Star History Chart" width="600">
+</a>
 
 ---
 
