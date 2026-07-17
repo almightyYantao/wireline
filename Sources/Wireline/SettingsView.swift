@@ -11,6 +11,7 @@ struct SettingsView: View {
     @State private var aiKeyDraft = ""
     @State private var showThemeEditor = false
     @State private var showMCP = false
+    @State private var showSkills = false
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -33,6 +34,9 @@ struct SettingsView: View {
         .sheet(isPresented: $showThemeEditor) { ThemeEditorView() }
         .sheet(isPresented: $showMCP) {
             MCPSettingsView(onClose: { showMCP = false }).environment(loc)
+        }
+        .sheet(isPresented: $showSkills) {
+            SkillSettingsView(onClose: { showSkills = false }).environment(loc)
         }
     }
 
@@ -252,6 +256,15 @@ struct SettingsView: View {
                     }.toggleStyle(.checkbox).tint(WL.green)
                     hint(loc("一只可拖动的悬浮小精灵,点它就能对话——它操作当前活动的终端标签页,帮你执行命令并总结结果。菜单 窗口 → 桌面宠物 也能随时唤出。",
                             "A draggable floating sprite — click it to chat. It drives your active terminal tab, runs commands, and summarizes. Also summonable from the menu."))
+                }
+
+                section(loc("运维技能", "Ops Skills")) {
+                    Button { showSkills = true } label: {
+                        Label(loc("管理运维技能…", "Manage Ops Skills…"), systemImage: "checklist")
+                            .font(WL.body).foregroundStyle(WL.green)
+                    }.buttonStyle(.plain)
+                    hint(loc("内置的运维排查流程（负载/磁盘/服务/容器/安全），AI 按需载入；可开关或自定义。",
+                            "Built-in ops playbooks (load / disk / services / containers / security) the AI loads on demand; toggle or add your own."))
                 }
 
                 section(loc("MCP 工具", "MCP Tools")) {

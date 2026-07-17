@@ -242,6 +242,11 @@ struct PetChatView: View {
             }
             execute(plan.command, on: aliases, intent: plan.intent)
         } else if steps < maxSteps,
+                  case let .useSkill(id)? = WLAction.parse(from: text) {
+            let prose = stripFenced(text)
+            if !prose.isEmpty { items.append(PetChatItem(kind: .assistant, text: prose)) }
+            loadSkill(id)
+        } else if steps < maxSteps,
                   case let .mcpCall(server, tool, argsJSON)? = WLAction.parse(from: text) {
             let prose = stripFenced(text)
             if !prose.isEmpty { items.append(PetChatItem(kind: .assistant, text: prose)) }
@@ -252,6 +257,22 @@ struct PetChatView: View {
             steps = 0
             persist()
         }
+    }
+
+    // MARK: skills
+
+    private func loadSkill(_ id: String) {
+        steps += 1
+        guard let skill = SkillStore.shared.skill(id: id), skill.enabled else {
+            items.append(PetChatItem(kind: .note, text: loc("技能未找到：\(id)", "Skill not found: \(id)")))
+            modelMessages.append(AIMessage(role: .user, content: "技能 \(id) 不存在或未启用。请直接作答或改用已列出的技能。"))
+            startTurn()
+            return
+        }
+        items.append(PetChatItem(kind: .note, text: loc("📋 已载入技能：\(skill.name)", "📋 Loaded skill: \(skill.name)")))
+        modelMessages.append(AIMessage(role: .user,
+            content: "【技能：\(skill.name)】\n\(skill.body)\n\n现在据此在相关机器上执行：用 ```plan 块指定 targets 与 command。"))
+        startTurn()
     }
 
     // MARK: MCP tool calls
@@ -367,6 +388,12 @@ struct PetChatView: View {
                 s += "\n- \(ref.serverName).\(ref.tool.name)：\(d.prefix(100))"
             }
             s += "\n写操作类工具会由用户二次确认；每次仅一个动作块。\n"
+        }
+        let skills = SkillStore.shared.enabledSkills
+        if !skills.isEmpty {
+            s += "\n你还有一组运维技能：当用户需求匹配某个技能时，先输出 ```wl-action 代码块 {\"action\":\"use_skill\",\"id\":\"技能id\"}，我会把详细步骤发给你，你再用 plan 块在相关机器上执行。可用技能（id：说明）："
+            for sk in skills { s += "\n- \(sk.id)：\(sk.description)" }
+            s += "\n"
         }
         s += "主机清单：\n" + inventory()
         return s

@@ -466,6 +466,8 @@ struct AIPanelView: View {
         case let .remember(note):
             HostMemoryStore.shared.add(note, for: conversationKey)
             messages.append(AIMessage(role: .system, content: loc("🧠 已记住：\(note)", "🧠 Remembered: \(note)")))
+        case let .useSkill(id):
+            loadSkill(id)     // inject the playbook and continue the conversation
         case let .mcpCall(server, tool, argsJSON):
             // Card path (non-agent): run the tool once and show the result.
             let cap = mcpResultCap, redact = ai.redact
@@ -551,6 +553,9 @@ struct AIPanelView: View {
             } else {
                 executeAndContinue(cmd)
             }
+        } else if agentSteps < maxAgentSteps,
+                  case let .useSkill(id)? = WLAction.parse(from: text) {
+            loadSkill(id)            // inject the playbook; safe regardless of agent mode
         } else if ai.agentMode, agentSteps < maxAgentSteps,
                   case let .mcpCall(server, tool, argsJSON)? = WLAction.parse(from: text) {
             routeMCP(PendingMCPCall(server: server, tool: tool, argsJSON: argsJSON))
@@ -558,6 +563,21 @@ struct AIPanelView: View {
             isStreaming = false
             agentSteps = 0
         }
+    }
+
+    /// Pull an ops skill's full instructions into the conversation and continue.
+    private func loadSkill(_ id: String) {
+        agentSteps += 1
+        guard let skill = SkillStore.shared.skill(id: id), skill.enabled else {
+            messages.append(AIMessage(role: .system, content: loc("技能未找到：\(id)", "Skill not found: \(id)")))
+            modelMessages.append(AIMessage(role: .user, content: "技能 \(id) 不存在或未启用。请直接作答，或改用一个已列出的技能，不要重试该 id。"))
+            startTurn()
+            return
+        }
+        messages.append(AIMessage(role: .system, content: loc("📋 已载入技能：\(skill.name)", "📋 Loaded skill: \(skill.name)")))
+        modelMessages.append(AIMessage(role: .user,
+            content: "【技能：\(skill.name)】\n\(skill.body)\n\n现在按上述步骤开始（可用命令的照常用 ```bash 代码块执行）。"))
+        startTurn()
     }
 
     // MARK: MCP tool calls (agent loop)
@@ -694,6 +714,12 @@ struct AIPanelView: View {
             }
             if mcp.catalog.count > 40 { ctx += "\n（另有 \(mcp.catalog.count - 40) 个工具未列出，需要时可询问用户）" }
             ctx += "\n工具参数请严格按各工具的用途填 JSON；不确定含义时先用只读工具探查，写操作类工具会由用户二次确认。"
+        }
+        // Ops skills (progressive disclosure: ids + one-line descriptions).
+        let skills = SkillStore.shared.enabledSkills
+        if !skills.isEmpty {
+            ctx += "\n你有一组运维技能可按需调用：当用户问题匹配某个技能时，先输出 ```wl-action 块 {\"action\":\"use_skill\",\"id\":\"技能id\"}，我会把该技能的详细步骤发给你，你再据此逐步执行。可用技能（id：说明）："
+            for s in skills { ctx += "\n- \(s.id)：\(s.description)" }
         }
         let mem = HostMemoryStore.shared.facts(for: conversationKey)
         if !mem.isEmpty {

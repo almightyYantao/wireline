@@ -14,10 +14,14 @@ enum WLAction: Equatable {
     /// Call a tool on a configured MCP server. `argsJSON` keeps the arguments as a
     /// JSON string so the case stays `Equatable`.
     case mcpCall(server: String, tool: String, argsJSON: String)
+    /// Pull an ops skill's full instructions into the conversation.
+    case useSkill(id: String)
 
     @MainActor
     func summary(_ loc: Localizer) -> String {
         switch self {
+        case let .useSkill(id):
+            return loc.t("载入技能：\(id)", "Load skill: \(id)")
         case let .mcpCall(server, tool, argsJSON):
             let args = argsJSON == "{}" ? "" : "（\(argsJSON.prefix(120))）"
             return loc.t("调用 MCP 工具：\(server).\(tool)\(args)",
@@ -86,6 +90,9 @@ enum WLAction: Equatable {
                 let argsJSON = (try? JSONSerialization.data(withJSONObject: argsObj))
                     .flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
                 return .mcpCall(server: server, tool: tool, argsJSON: argsJSON)
+            case "use_skill":
+                guard let id = (obj["id"] as? String) ?? (obj["name"] as? String) else { return nil }
+                return .useSkill(id: id)
             default: return nil
             }
         }
