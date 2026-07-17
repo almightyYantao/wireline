@@ -141,23 +141,12 @@ final class WirelineTerminalView: LocalProcessTerminalView {
     /// A rolling, ANSI-stripped tail of recent terminal output, for AI context.
     private(set) var recentClean = ""
 
-    /// A rolling tail of RAW output (ANSI intact) so the scrollback can be replayed
-    /// verbatim — colors and all — after the app is closed and reopened.
-    private(set) var rawScrollback = Data()
-    private let rawScrollbackCap = 256 * 1024
-
-    /// Seed the rolling buffer with restored history so it keeps accumulating
-    /// forward (and thus persists across the *next* relaunch too).
-    func seedScrollback(_ data: Data) {
-        rawScrollback = data.count > rawScrollbackCap ? data.suffix(rawScrollbackCap) : data
-    }
+    /// The rendered visible buffer (plain text, current geometry) for cross-launch
+    /// scrollback restore. Read on demand from the emulator at save time.
+    var renderedBuffer: Data { getTerminal().getBufferAsData() }
 
     override func dataReceived(slice: ArraySlice<UInt8>) {
         super.dataReceived(slice: slice)
-        rawScrollback.append(contentsOf: slice)
-        if rawScrollback.count > rawScrollbackCap {
-            rawScrollback.removeFirst(rawScrollback.count - rawScrollbackCap)
-        }
         let chunk = String(decoding: slice, as: UTF8.self)
         detectFullScreenApp(chunk)
         let clean = Self.stripAnsi(chunk)
