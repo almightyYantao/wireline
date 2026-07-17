@@ -76,6 +76,13 @@ struct AIPanelView: View {
             Button(loc("调用", "Call")) {
                 if let p = pendingMCP { pendingMCP = nil; executeMCPAndContinue(p) }
             }
+            Button(loc("始终允许并调用", "Always allow & call")) {
+                if let p = pendingMCP {
+                    pendingMCP = nil
+                    MCPStore.shared.approve("\(p.server).\(p.tool)")
+                    executeMCPAndContinue(p)
+                }
+            }
         } message: {
             if let p = pendingMCP {
                 Text("\(p.server).\(p.tool)" + (p.argsJSON == "{}" ? "" : "\n\n" + p.argsJSON))
@@ -576,11 +583,11 @@ struct AIPanelView: View {
             startTurn()
             return
         }
-        if ref.isReadOnly {
-            executeMCPAndContinue(call)      // safe: run without prompting
-        } else {
-            pendingMCP = call                // mutating: confirm first
+        if store.requiresConfirmation(ref) {
+            pendingMCP = call                // mutating & not pre-approved: confirm first
             isStreaming = false
+        } else {
+            executeMCPAndContinue(call)      // read-only or pre-approved: run directly
         }
     }
 

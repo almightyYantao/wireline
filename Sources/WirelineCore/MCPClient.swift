@@ -52,11 +52,21 @@ public enum MCPError: Error, CustomStringConvertible, Sendable {
 public actor MCPClient {
     public let protocolVersion = "2025-06-18"
 
+    private enum Mode { case stdio, http }
+    private var mode: Mode = .stdio
+
+    // stdio transport
     private var process: Process?
     private var stdin: FileHandle?
-    private var nextID = 1
-    private var pending: [Int: CheckedContinuation<Data, Error>] = [:]
     private var readTask: Task<Void, Never>?
+    private var pending: [Int: CheckedContinuation<Data, Error>] = [:]
+
+    // http (Streamable HTTP) transport
+    private var httpURL: URL?
+    private var httpHeaders: [String: String] = [:]
+    private var sessionID: String?
+
+    private var nextID = 1
 
     public private(set) var tools: [MCPToolInfo] = []
     public private(set) var isRunning = false
@@ -96,6 +106,7 @@ public actor MCPClient {
 
         process = proc
         stdin = inPipe.fileHandleForWriting
+        mode = .stdio
         isRunning = true
         startReadLoop(outPipe.fileHandleForReading)
 
@@ -107,6 +118,19 @@ public actor MCPClient {
         try await refreshTools()
     }
 
+    /// Connect to a Streamable-HTTP MCP server. `headers` typically carries auth.
+    public func startHTTP(url: String, headers: [String: String]) async throws {
+        guard !isRunning else { return }
+        guard let u = URL(string: url) else { throw MCPError.launch("URL 无效：\(url)") }
+        httpURL = u
+        httpHeaders = headers
+        sessionID = nil
+        mode = .http
+        isRunning = true
+        try await handshake()
+        try await refreshTools()
+    }
+
     public func stop() {
         readTask?.cancel()
         readTask = nil
@@ -114,6 +138,8 @@ public actor MCPClient {
         process?.terminate()
         process = nil
         stdin = nil
+        httpURL = nil
+        sessionID = nil
         isRunning = false
         failAll(MCPError.notRunning)
     }
@@ -178,6 +204,23 @@ public actor MCPClient {
 
     private func request(method: String, params: [String: Any],
                          timeout: TimeInterval = 30) async throws -> Data {
+        switch mode {
+        case .stdio: return try await stdioRequest(method: method, params: params, timeout: timeout)
+        case .http:  return try await httpRequest(method: method, params: params, timeout: timeout)
+        }
+    }
+
+    private func notify(method: String, params: [String: Any]) throws {
+        switch mode {
+        case .stdio: try stdioNotify(method: method, params: params)
+        case .http:  Task { try? await httpNotify(method: method, params: params) }
+        }
+    }
+
+    // MARK: stdio transport
+
+    private func stdioRequest(method: String, params: [String: Any],
+                              timeout: TimeInterval) async throws -> Data {
         guard isRunning, let stdin else { throw MCPError.notRunning }
         let id = nextID; nextID += 1
         let message: [String: Any] = [
@@ -212,11 +255,90 @@ public actor MCPClient {
         }
     }
 
-    private func notify(method: String, params: [String: Any]) throws {
+    private func stdioNotify(method: String, params: [String: Any]) throws {
         guard let stdin else { throw MCPError.notRunning }
         let message: [String: Any] = ["jsonrpc": "2.0", "method": method, "params": params]
         let line = try JSONSerialization.data(withJSONObject: message) + Data("\n".utf8)
         try stdin.write(contentsOf: line)
+    }
+
+    // MARK: http (Streamable HTTP) transport
+
+    private func httpRequest(method: String, params: [String: Any],
+                             timeout: TimeInterval) async throws -> Data {
+        guard isRunning, let url = httpURL else { throw MCPError.notRunning }
+        let id = nextID; nextID += 1
+        let message: [String: Any] = ["jsonrpc": "2.0", "id": id, "method": method, "params": params]
+
+        var req = URLRequest(url: url, timeoutInterval: timeout)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("application/json, text/event-stream", forHTTPHeaderField: "Accept")
+        req.setValue(protocolVersion, forHTTPHeaderField: "MCP-Protocol-Version")
+        for (k, v) in httpHeaders where !v.isEmpty { req.setValue(v, forHTTPHeaderField: k) }
+        if let sessionID { req.setValue(sessionID, forHTTPHeaderField: "Mcp-Session-Id") }
+        req.httpBody = try JSONSerialization.data(withJSONObject: message)
+
+        let (data, response) = try await URLSession.shared.data(for: req)
+        guard let http = response as? HTTPURLResponse else { throw MCPError.transport("无 HTTP 响应") }
+        if let sid = http.value(forHTTPHeaderField: "Mcp-Session-Id") { sessionID = sid }
+        guard (200..<300).contains(http.statusCode) else {
+            throw MCPError.transport("HTTP \(http.statusCode)：\(String(data: data, encoding: .utf8)?.prefix(200) ?? "")")
+        }
+
+        let contentType = (http.value(forHTTPHeaderField: "Content-Type") ?? "").lowercased()
+        let payload: Data
+        if contentType.contains("text/event-stream") {
+            guard let obj = Self.matchingSSEObject(data, id: id) else {
+                throw MCPError.decode("SSE 中未找到 id=\(id) 的响应")
+            }
+            payload = obj
+        } else {
+            payload = data
+        }
+        return try Self.extractResult(payload)
+    }
+
+    private func httpNotify(method: String, params: [String: Any]) async throws {
+        guard isRunning, let url = httpURL else { return }
+        let message: [String: Any] = ["jsonrpc": "2.0", "method": method, "params": params]
+        var req = URLRequest(url: url, timeoutInterval: 15)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("application/json, text/event-stream", forHTTPHeaderField: "Accept")
+        req.setValue(protocolVersion, forHTTPHeaderField: "MCP-Protocol-Version")
+        for (k, v) in httpHeaders where !v.isEmpty { req.setValue(v, forHTTPHeaderField: k) }
+        if let sessionID { req.setValue(sessionID, forHTTPHeaderField: "Mcp-Session-Id") }
+        req.httpBody = try JSONSerialization.data(withJSONObject: message)
+        _ = try? await URLSession.shared.data(for: req)
+    }
+
+    /// Pull the `result` object out of a JSON-RPC response body, or throw on error.
+    private static func extractResult(_ data: Data) throws -> Data {
+        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw MCPError.decode("响应不是 JSON 对象")
+        }
+        if let err = obj["error"] as? [String: Any] {
+            throw MCPError.rpc(code: (err["code"] as? Int) ?? -1,
+                               message: (err["message"] as? String) ?? "unknown")
+        }
+        let result = obj["result"] ?? [:]
+        return (try? JSONSerialization.data(withJSONObject: result)) ?? Data("{}".utf8)
+    }
+
+    /// From an SSE body, return the JSON-RPC message whose id matches, as Data.
+    private static func matchingSSEObject(_ data: Data, id: Int) -> Data? {
+        guard let text = String(data: data, encoding: .utf8) else { return nil }
+        for line in text.split(whereSeparator: { $0 == "\n" || $0 == "\r" }) {
+            let l = line.trimmingCharacters(in: .whitespaces)
+            guard l.hasPrefix("data:") else { continue }
+            let json = l.dropFirst(5).trimmingCharacters(in: .whitespaces)
+            guard let d = json.data(using: .utf8),
+                  let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
+                  (obj["id"] as? Int) == id else { continue }
+            return d
+        }
+        return nil
     }
 
     private func startReadLoop(_ handle: FileHandle) {

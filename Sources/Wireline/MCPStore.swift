@@ -2,17 +2,54 @@ import Foundation
 import Observation
 import WirelineCore
 
-/// A user-configured MCP server. Secrets (env var values) live in the Keychain,
-/// referenced here only by name — nothing sensitive is written to disk.
+/// How a server is reached.
+enum MCPKind: String, Codable, Sendable, CaseIterable { case stdio, http }
+
+/// A user-configured MCP server. Secrets (env var values / HTTP header values)
+/// live in the Keychain, referenced here only by name — nothing sensitive is
+/// written to disk.
 struct MCPServerConfig: Identifiable, Codable, Sendable, Equatable {
     var id = UUID()
     var name: String
-    var command: String
+    var kind: MCPKind = .stdio
+
+    // stdio transport
+    var command: String = ""
     var args: [String] = []
     /// Names of environment variables whose values are stored in the Keychain
     /// under account `"<id>:<key>"`.
     var envKeys: [String] = []
+
+    // http (Streamable HTTP) transport
+    var url: String = ""
+    /// Names of HTTP headers whose values are stored in the Keychain under
+    /// account `"<id>:hdr:<name>"` (e.g. `Authorization`).
+    var headerKeys: [String] = []
+
     var enabled: Bool = true
+
+    /// Tolerant decoding so configs written by earlier versions (no `kind`,
+    /// no http fields) still load.
+    init(id: UUID = UUID(), name: String, kind: MCPKind = .stdio,
+         command: String = "", args: [String] = [], envKeys: [String] = [],
+         url: String = "", headerKeys: [String] = [], enabled: Bool = true) {
+        self.id = id; self.name = name; self.kind = kind
+        self.command = command; self.args = args; self.envKeys = envKeys
+        self.url = url; self.headerKeys = headerKeys; self.enabled = enabled
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = (try? c.decode(UUID.self, forKey: .id)) ?? UUID()
+        name = (try? c.decode(String.self, forKey: .name)) ?? ""
+        kind = (try? c.decode(MCPKind.self, forKey: .kind)) ?? .stdio
+        command = (try? c.decode(String.self, forKey: .command)) ?? ""
+        args = (try? c.decode([String].self, forKey: .args)) ?? []
+        envKeys = (try? c.decode([String].self, forKey: .envKeys)) ?? []
+        url = (try? c.decode(String.self, forKey: .url)) ?? ""
+        headerKeys = (try? c.decode([String].self, forKey: .headerKeys)) ?? []
+        enabled = (try? c.decode(Bool.self, forKey: .enabled)) ?? true
+    }
 }
 
 /// A tool bound to the server that advertises it.
@@ -64,12 +101,19 @@ final class MCPStore {
         didSet { UserDefaults.standard.set(enabled, forKey: "mcp.enabled") }
     }
 
+    /// Fully-qualified tool ids ("server.tool") the user chose to always allow,
+    /// skipping the per-call confirmation for that mutating tool.
+    private(set) var approvedTools: Set<String> {
+        didSet { UserDefaults.standard.set(Array(approvedTools), forKey: "mcp.approvedTools") }
+    }
+
     init() {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Wireline", isDirectory: true)
         try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
         fileURL = base.appendingPathComponent("mcp_servers.json")
         enabled = UserDefaults.standard.bool(forKey: "mcp.enabled")
+        approvedTools = Set(UserDefaults.standard.stringArray(forKey: "mcp.approvedTools") ?? [])
         if let data = try? Data(contentsOf: fileURL),
            let decoded = try? JSONDecoder().decode([MCPServerConfig].self, from: data) {
             servers = decoded
@@ -88,6 +132,7 @@ final class MCPStore {
 
     func remove(_ s: MCPServerConfig) {
         for key in s.envKeys { try? keychain.deletePassword(for: "\(s.id):\(key)") }
+        for h in s.headerKeys { try? keychain.deletePassword(for: "\(s.id):hdr:\(h)") }
         servers.removeAll { $0.id == s.id }
         state[s.id] = nil
         persist()
@@ -111,6 +156,13 @@ final class MCPStore {
         keychain.hasPassword(for: "\(server):\(key)")
     }
 
+    func setHeaderValue(_ value: String, name: String, server: UUID) {
+        try? keychain.setPassword(value, for: "\(server):hdr:\(name)")
+    }
+    func headerValue(name: String, server: UUID) -> String {
+        (try? keychain.password(for: "\(server):hdr:\(name)")) ?? nil ?? ""
+    }
+
     // MARK: connections
 
     /// Connect every enabled server (call at launch / when master switch flips on).
@@ -125,10 +177,17 @@ final class MCPStore {
         state[id] = .connecting
         let client = MCPClient()
         clients[id] = client
-        var env: [String: String] = [:]
-        for key in s.envKeys { env[key] = envValue(key: key, server: id) }
         do {
-            try await client.start(command: s.command, args: s.args, env: env)
+            switch s.kind {
+            case .stdio:
+                var env: [String: String] = [:]
+                for key in s.envKeys { env[key] = envValue(key: key, server: id) }
+                try await client.start(command: s.command, args: s.args, env: env)
+            case .http:
+                var headers: [String: String] = [:]
+                for h in s.headerKeys { headers[h] = headerValue(name: h, server: id) }
+                try await client.startHTTP(url: s.url, headers: headers)
+            }
             let count = await client.tools.count
             state[id] = .connected(tools: count)
         } catch {
@@ -180,4 +239,19 @@ final class MCPStore {
 
     /// Whether any tools are currently available to offer the model.
     var hasTools: Bool { enabled && !catalog.isEmpty }
+
+    // MARK: confirmation policy
+
+    func approve(_ id: String) { approvedTools.insert(id) }
+    func revokeApproval(_ id: String) { approvedTools.remove(id) }
+    func isApproved(_ id: String) -> Bool { approvedTools.contains(id) }
+
+    /// Whether a tool call must be confirmed by the user before running.
+    /// A tool explicitly flagged destructive always asks, even if pre-approved.
+    /// A read-only tool never asks. Otherwise ask unless the user pre-approved it.
+    func requiresConfirmation(_ ref: MCPToolRef) -> Bool {
+        if ref.tool.destructiveHint == true { return true }
+        if ref.isReadOnly { return false }
+        return !isApproved(ref.id)
+    }
 }

@@ -24,9 +24,11 @@ struct PetChatView: View {
     @State private var errorText: String?
     @State private var task: Task<Void, Never>?
     @State private var pendingPlan: PetPlan?           // dangerous command awaiting OK
+    @State private var pendingMCP: PendingMCPCall?     // MCP tool call awaiting OK
     @FocusState private var focused: Bool
 
     private let maxSteps = 5
+    private let mcpResultCap = 4000
     private var chats = AIChatStore.shared
     private let convoKey = "__pet__"
 
@@ -52,6 +54,24 @@ struct PetChatView: View {
         } message: {
             if let p = pendingPlan {
                 Text("\(p.command)\n\n" + loc("目标：", "Targets: ") + p.targets.joined(separator: ", "))
+            }
+        }
+        .alert(loc("调用外部工具？", "Call this external tool?"),
+               isPresented: Binding(get: { pendingMCP != nil }, set: { if !$0 { pendingMCP = nil } })) {
+            Button(loc("取消", "Cancel"), role: .cancel) { declineMCP() }
+            Button(loc("调用", "Call")) {
+                if let p = pendingMCP { pendingMCP = nil; executeMCP(p) }
+            }
+            Button(loc("始终允许并调用", "Always allow & call")) {
+                if let p = pendingMCP {
+                    pendingMCP = nil
+                    MCPStore.shared.approve("\(p.server).\(p.tool)")
+                    executeMCP(p)
+                }
+            }
+        } message: {
+            if let p = pendingMCP {
+                Text("\(p.server).\(p.tool)" + (p.argsJSON == "{}" ? "" : "\n\n" + p.argsJSON))
             }
         }
     }
@@ -221,12 +241,67 @@ struct PetChatView: View {
                 return
             }
             execute(plan.command, on: aliases, intent: plan.intent)
+        } else if steps < maxSteps,
+                  case let .mcpCall(server, tool, argsJSON)? = WLAction.parse(from: text) {
+            let prose = stripFenced(text)
+            if !prose.isEmpty { items.append(PetChatItem(kind: .assistant, text: prose)) }
+            routeMCP(PendingMCPCall(server: server, tool: tool, argsJSON: argsJSON))
         } else {
             if !text.isEmpty { items.append(PetChatItem(kind: .assistant, text: text)) }
             isBusy = false
             steps = 0
             persist()
         }
+    }
+
+    // MARK: MCP tool calls
+
+    private func routeMCP(_ call: PendingMCPCall) {
+        let store = MCPStore.shared
+        guard let ref = store.find(server: call.server, tool: call.tool) else {
+            items.append(PetChatItem(kind: .note,
+                text: loc("MCP 工具未找到：\(call.server).\(call.tool)", "MCP tool not found: \(call.server).\(call.tool)")))
+            modelMessages.append(AIMessage(role: .user,
+                content: "工具 \(call.server).\(call.tool) 不存在或未连接，请改用可用工具或用自然语言回答。"))
+            startTurn()
+            return
+        }
+        if store.requiresConfirmation(ref) {
+            pendingMCP = call
+            isBusy = false
+        } else {
+            executeMCP(call)
+        }
+    }
+
+    private func executeMCP(_ call: PendingMCPCall) {
+        steps += 1
+        isBusy = true
+        items.append(PetChatItem(kind: .note,
+            text: loc("▶︎ 调用 MCP 工具：\(call.server).\(call.tool)", "▶︎ Calling MCP tool: \(call.server).\(call.tool)")))
+        let cap = mcpResultCap, redact = ai.redact
+        task = Task {
+            let raw: String
+            do { raw = try await MCPStore.shared.callTool(server: call.server, tool: call.tool, argsJSON: call.argsJSON) }
+            catch { raw = loc("工具调用失败：", "Tool call failed: ") + ((error as? MCPError)?.description ?? error.localizedDescription) }
+            let shown = redact ? AIRedactor.redact(String(raw.prefix(cap))) : String(raw.prefix(cap))
+            await MainActor.run {
+                items.append(PetChatItem(kind: .note, text: shown))
+                modelMessages.append(AIMessage(role: .user,
+                    content: "工具 \(call.server).\(call.tool) 的结果：\n\(shown)"))
+                startTurn()
+            }
+        }
+    }
+
+    private func declineMCP() {
+        guard let p = pendingMCP else { return }
+        pendingMCP = nil
+        items.append(PetChatItem(kind: .note, text: loc("已取消工具调用。", "Tool call cancelled.")))
+        modelMessages.append(AIMessage(role: .user,
+            content: "用户拒绝了工具 \(p.server).\(p.tool)。不要重试该工具；如仍需信息，用自然语言告知用户或改用只读工具。"))
+        isBusy = false
+        steps = 0
     }
 
     private func execute(_ cmd: String, on aliases: [String], intent: String?) {
@@ -284,6 +359,15 @@ struct PetChatView: View {
         s += "command 尽量只读/幂等（如 docker ps、systemctl status、df -h、free -h）。"
         s += "拿到各机器结果后，用中文给出简明汇总（整体结论 + 逐机要点/异常点名），不要再输出 plan 块。"
         s += "若只是普通问答、无需上机执行，直接用中文回答。\n"
+        let mcp = MCPStore.shared
+        if mcp.hasTools {
+            s += "\n你还能调用外部工具(MCP)：需要时输出一个 ```wl-action 代码块 {\"action\":\"mcp_call\",\"server\":\"服务名\",\"tool\":\"工具名\",\"args\":{…}}，我会执行并把结果返回给你，再据此继续。可用工具（server.tool：说明）："
+            for ref in mcp.catalog.prefix(40) {
+                let d = ref.tool.description.split(whereSeparator: \.isNewline).first.map(String.init) ?? ""
+                s += "\n- \(ref.serverName).\(ref.tool.name)：\(d.prefix(100))"
+            }
+            s += "\n写操作类工具会由用户二次确认；每次仅一个动作块。\n"
+        }
         s += "主机清单：\n" + inventory()
         return s
     }

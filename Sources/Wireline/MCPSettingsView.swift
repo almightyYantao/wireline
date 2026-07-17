@@ -81,7 +81,7 @@ struct MCPSettingsView: View {
                 Spacer()
                 Text(statusText(store.state[s.id])).font(WL.caption).foregroundStyle(WL.textDim)
             }
-            Text("\(s.command) \(s.args.joined(separator: " "))")
+            Text(s.kind == .http ? s.url : "\(s.command) \(s.args.joined(separator: " "))")
                 .font(WL.mono(11)).foregroundStyle(WL.textDim).lineLimit(1)
             HStack(spacing: 14) {
                 Button(loc("重新连接", "Reconnect")) { Task { await store.connect(s.id) } }
@@ -126,6 +126,7 @@ private struct MCPServerEditor: View {
 
     @State private var argsText = ""
     @State private var envRows: [EnvRow] = []
+    @State private var headerRows: [EnvRow] = []
 
     private struct EnvRow: Identifiable { let id = UUID(); var key: String; var value: String }
 
@@ -140,10 +141,20 @@ private struct MCPServerEditor: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     field(loc("名称", "Name"), "github", $config.name)
-                    field(loc("命令", "Command"), "npx", $config.command)
-                    field(loc("参数（空格分隔）", "Args (space-separated)"), "-y @modelcontextprotocol/server-filesystem /path",
-                          Binding(get: { argsText }, set: { argsText = $0 }))
-                    envSection
+                    Picker("", selection: $config.kind) {
+                        Text(loc("本地 stdio", "Local stdio")).tag(MCPKind.stdio)
+                        Text("HTTP").tag(MCPKind.http)
+                    }.labelsHidden().pickerStyle(.segmented)
+
+                    if config.kind == .stdio {
+                        field(loc("命令", "Command"), "npx", $config.command)
+                        field(loc("参数（空格分隔）", "Args (space-separated)"), "-y @modelcontextprotocol/server-filesystem /path",
+                              Binding(get: { argsText }, set: { argsText = $0 }))
+                        keyValueSection(loc("环境变量（密钥存 Keychain）", "Environment (secrets go to Keychain)"), $envRows)
+                    } else {
+                        field(loc("服务地址 (URL)", "Server URL"), "https://example.com/mcp", $config.url)
+                        keyValueSection(loc("请求头（值存 Keychain，如 Authorization）", "Headers (values in Keychain, e.g. Authorization)"), $headerRows)
+                    }
                 }
                 .padding(18)
             }
@@ -153,7 +164,7 @@ private struct MCPServerEditor: View {
                 Spacer()
                 Button(loc("取消", "Cancel")) { onCancel() }.buttonStyle(.plain).foregroundStyle(WL.textDim)
                 Button(loc("保存", "Save")) { save() }.buttonStyle(.plain).foregroundStyle(WL.green)
-                    .disabled(config.name.trimmingCharacters(in: .whitespaces).isEmpty || config.command.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .disabled(!canSave)
             }
             .font(WL.small).padding(.horizontal, 18).padding(.vertical, 12)
         }
@@ -162,24 +173,23 @@ private struct MCPServerEditor: View {
         .onAppear(perform: populate)
     }
 
-    private var envSection: some View {
+    private func keyValueSection(_ title: String, _ rows: Binding<[EnvRow]>) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text(loc("环境变量（密钥存 Keychain）", "Environment (secrets go to Keychain)"))
-                    .font(WL.small).foregroundStyle(WL.textDim)
+                Text(title).font(WL.small).foregroundStyle(WL.textDim)
                 Spacer()
-                Button { envRows.append(EnvRow(key: "", value: "")) } label: {
+                Button { rows.wrappedValue.append(EnvRow(key: "", value: "")) } label: {
                     Image(systemName: "plus").font(.system(size: 10)).foregroundStyle(WL.green)
                 }.buttonStyle(.plain)
             }
-            ForEach($envRows) { $row in
+            ForEach(rows) { $row in
                 HStack(spacing: 8) {
                     TextField("KEY", text: $row.key).textFieldStyle(.plain).font(WL.mono(11))
                         .frame(width: 150).padding(6)
                         .background(WL.surface, in: RoundedRectangle(cornerRadius: WL.radius(5)))
                     SecureField(loc("值", "value"), text: $row.value).textFieldStyle(.plain).font(WL.mono(11))
                         .padding(6).background(WL.surface, in: RoundedRectangle(cornerRadius: WL.radius(5)))
-                    Button { envRows.removeAll { $0.id == row.id } } label: {
+                    Button { rows.wrappedValue.removeAll { $0.id == row.id } } label: {
                         Image(systemName: "trash").font(.system(size: 10)).foregroundStyle(.red)
                     }.buttonStyle(.plain)
                 }
@@ -202,14 +212,28 @@ private struct MCPServerEditor: View {
         argsText = config.args.joined(separator: " ")
         let store = MCPStore.shared
         envRows = config.envKeys.map { EnvRow(key: $0, value: store.envValue(key: $0, server: config.id)) }
+        headerRows = config.headerKeys.map { EnvRow(key: $0, value: store.headerValue(name: $0, server: config.id)) }
+    }
+
+    private var canSave: Bool {
+        guard !config.name.trimmingCharacters(in: .whitespaces).isEmpty else { return false }
+        return config.kind == .stdio
+            ? !config.command.trimmingCharacters(in: .whitespaces).isEmpty
+            : !config.url.trimmingCharacters(in: .whitespaces).isEmpty
     }
 
     private func save() {
-        config.args = argsText.split(separator: " ").map(String.init)
         let store = MCPStore.shared
-        let rows = envRows.filter { !$0.key.trimmingCharacters(in: .whitespaces).isEmpty }
-        config.envKeys = rows.map(\.key)
-        for r in rows { store.setEnvValue(r.value, key: r.key, server: config.id) }
+        if config.kind == .stdio {
+            config.args = argsText.split(separator: " ").map(String.init)
+            let rows = envRows.filter { !$0.key.trimmingCharacters(in: .whitespaces).isEmpty }
+            config.envKeys = rows.map(\.key)
+            for r in rows { store.setEnvValue(r.value, key: r.key, server: config.id) }
+        } else {
+            let rows = headerRows.filter { !$0.key.trimmingCharacters(in: .whitespaces).isEmpty }
+            config.headerKeys = rows.map(\.key)
+            for r in rows { store.setHeaderValue(r.value, name: r.key, server: config.id) }
+        }
         onSave(config)
     }
 }
