@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import WirelineCore
 
 struct HostEditorView: View {
@@ -19,6 +20,7 @@ struct HostEditorView: View {
     @State private var descriptionText = ""
     @State private var autoSudo = false
     @State private var launchArgs = ""
+    @State private var availableKeys: [String] = []
     @FocusState private var aliasFocused: Bool
 
     private var isEditing: Bool { context.host != nil }
@@ -59,7 +61,7 @@ struct HostEditorView: View {
                         }
                         .pickerStyle(.segmented).labelsHidden()
                         if authMethod == .key {
-                            field(loc("密钥文件", "Identity File")) { input("~/.ssh/id_ed25519", $identityFile) }
+                            field(loc("密钥文件", "Identity File")) { identityPicker }
                         } else {
                             field(loc("密码 (存入 Keychain)", "Password (stored in Keychain)")) {
                                 secure($password)
@@ -118,6 +120,63 @@ struct HostEditorView: View {
         }
     }
 
+    /// Dropdown of private keys discovered in `~/.ssh`, plus a browse escape hatch
+    /// for a key kept elsewhere. Falls back to showing the current custom path.
+    private var identityPicker: some View {
+        let options = (availableKeys + [identityFile])
+            .filter { !$0.isEmpty }
+            .reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }
+        return HStack(spacing: 8) {
+            Menu {
+                ForEach(options, id: \.self) { key in
+                    Button { identityFile = key } label: {
+                        Text(key).font(WL.body)
+                        if key == identityFile { Image(systemName: "checkmark") }
+                    }
+                }
+            } label: {
+                HStack {
+                    Text(identityFile.isEmpty ? loc("选择密钥…", "Choose a key…") : identityFile)
+                        .font(WL.body).foregroundStyle(identityFile.isEmpty ? WL.textDim : WL.textPrimary)
+                        .lineLimit(1).truncationMode(.middle)
+                    Spacer()
+                    Image(systemName: "chevron.up.chevron.down").font(.system(size: 10)).foregroundStyle(WL.textDim)
+                }
+                .padding(.horizontal, 10).padding(.vertical, 7)
+                .background(WL.surface, in: RoundedRectangle(cornerRadius: WL.radius(5)))
+                .overlay(RoundedRectangle(cornerRadius: WL.radius(5)).stroke(WL.border, lineWidth: WL.borderWidth))
+            }
+            .menuStyle(.borderlessButton).menuIndicator(.hidden)
+            Button(loc("浏览…", "Browse…")) { browseForKey() }
+                .buttonStyle(.plain).font(WL.small).foregroundStyle(WL.green)
+        }
+    }
+
+    /// Private keys in `~/.ssh` — files that have a matching `.pub`, presented as
+    /// `~/.ssh/<name>` (skipping config/known_hosts and public keys themselves).
+    private func discoverKeys() -> [String] {
+        let ssh = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".ssh", isDirectory: true)
+        let files = (try? FileManager.default.contentsOfDirectory(atPath: ssh.path)) ?? []
+        let pubs = Set(files.filter { $0.hasSuffix(".pub") }.map { String($0.dropLast(4)) })
+        let skip: Set<String> = ["config", "known_hosts", "known_hosts.old", "authorized_keys"]
+        return files
+            .filter { !$0.hasSuffix(".pub") && !skip.contains($0) && pubs.contains($0) }
+            .sorted()
+            .map { "~/.ssh/\($0)" }
+    }
+
+    private func browseForKey() {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.directoryURL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".ssh")
+        panel.showsHiddenFiles = true
+        if panel.runModal() == .OK, let url = panel.url {
+            let home = FileManager.default.homeDirectoryForCurrentUser.path
+            identityFile = url.path.hasPrefix(home) ? "~" + url.path.dropFirst(home.count) : url.path
+        }
+    }
+
     private func input(_ prompt: String, _ text: Binding<String>) -> some View {
         TextField("", text: text, prompt: Text(prompt).foregroundStyle(WL.textDim))
             .textFieldStyle(.plain).font(WL.body).foregroundStyle(WL.textPrimary)
@@ -135,9 +194,14 @@ struct HostEditorView: View {
     }
 
     private func populate() {
+        availableKeys = discoverKeys()
         guard let h = context.host else {
             // New host: pre-fill the group when added from a group's + button.
             if let g = context.defaultGroup { group = g }
+            // Default to a real, discovered key rather than a guessed path.
+            if let first = availableKeys.first(where: { $0.contains("id_ed25519") }) ?? availableKeys.first {
+                identityFile = first
+            }
             return
         }
         alias = h.alias
