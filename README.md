@@ -56,6 +56,7 @@ The thing a single-host AI terminal can't give you: operate a whole group at onc
 | Works fully local, no account | ✅ | ⚠️ account for sync/AI | ✅ (login optional since 2026) |
 | Bring-your-own AI endpoint / full local Ollama | ✅ all AI, incl. the fleet agent | ❌ cloud model only, no BYOK | ⚠️ local AI for command-gen only; agent is cloud |
 | Fleet: group → one sentence → parallel → AI aggregates to a table | ✅ | ⚠️ broadcast input (no synthesis) or cloud chat agent | ❌ no host graph |
+| MCP tools, local-first (your model calls them) | ✅ stdio + HTTP, secrets in Keychain | ❌ | ⚠️ via its cloud agent |
 | Visual SFTP browser | ✅ | ✅ | ❌ |
 | GUI port forwarding | ✅ | ✅ | ❌ |
 | AI edit remote file + change review | ✅ | ❌ | ❌ |
@@ -81,6 +82,8 @@ AI is the lever that makes the above feel effortless — not a bolt-on. In Setti
   - visible-in-terminal or out-of-band execution; **dangerous commands require confirmation**; **read-only sandbox** blocks all writes
 - **Fleet run**: select many hosts → one sentence → parallel execution → AI aggregates into a conclusion/table
 - **Copilot for the app itself**: create tunnels, add hosts, connect, open files, run snippets — all with confirmation
+- **MCP tools (local-first)**: connect local **stdio** or remote **HTTP** MCP servers (filesystem / GitHub / k8s / …); the AI calls their tools and feeds results back — model-agnostic, secrets in the Keychain, read-only tools run freely while mutating ones need confirmation (or the read-only sandbox blocks them)
+- **Built-in ops skills**: curated playbooks (load/CPU, disk, service health, container audit, security baseline) the AI loads on demand via progressive disclosure — mostly read-only investigation; add your own
 - **AI edit over SFTP**: right-click a remote file → describe the change → preview → **change review (impact + risks)** → write back
 - **Change review**: before a dangerous command runs, AI gives an impact & risk assessment to confirm
 - **Per-host memory**: the AI remembers durable facts about each machine and factors them into later answers
