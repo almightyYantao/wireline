@@ -1,6 +1,35 @@
 import SwiftUI
 import WirelineCore
 
+/// A pending file transfer (local↔remote) awaiting user confirmation.
+struct PendingTransfer: Identifiable, Equatable {
+    var id = UUID()
+    var isUpload: Bool          // true: local→remote (scp up); false: remote→local (scp down)
+    var localPath: String
+    var host: String
+    var remotePath: String
+    /// Whether to feed the result back to the model afterwards (agent loop).
+    var continueAgent: Bool
+
+    @MainActor
+    func summary(_ loc: Localizer) -> String {
+        isUpload
+            ? loc.t("上传：\(localPath) → \(host):\(remotePath)", "Upload: \(localPath) → \(host):\(remotePath)")
+            : loc.t("下载：\(host):\(remotePath) → \(localPath)", "Download: \(host):\(remotePath) → \(localPath)")
+    }
+
+    /// Build from an upload/download action (nil for any other action).
+    static func from(_ action: WLAction?, continueAgent: Bool) -> PendingTransfer? {
+        switch action {
+        case let .upload(local, host, remote):
+            return PendingTransfer(isUpload: true, localPath: local, host: host, remotePath: remote, continueAgent: continueAgent)
+        case let .download(host, remote, local):
+            return PendingTransfer(isUpload: false, localPath: local, host: host, remotePath: remote, continueAgent: continueAgent)
+        default: return nil
+        }
+    }
+}
+
 /// An action the AI can ask Wireline to perform on itself (not on the shell).
 /// The model emits a ```wl-action fenced JSON block; the user confirms before
 /// anything happens.
@@ -16,10 +45,20 @@ enum WLAction: Equatable {
     case mcpCall(server: String, tool: String, argsJSON: String)
     /// Pull an ops skill's full instructions into the conversation.
     case useSkill(id: String)
+    /// Transfer a file/directory between the local machine and a host (scp). The
+    /// AI *can* do this — the local machine is the source/destination.
+    case upload(localPath: String, host: String, remotePath: String)
+    case download(host: String, remotePath: String, localPath: String)
 
     @MainActor
     func summary(_ loc: Localizer) -> String {
         switch self {
+        case let .upload(localPath, host, remotePath):
+            return loc.t("上传：\(localPath) → \(host):\(remotePath)",
+                         "Upload: \(localPath) → \(host):\(remotePath)")
+        case let .download(host, remotePath, localPath):
+            return loc.t("下载：\(host):\(remotePath) → \(localPath)",
+                         "Download: \(host):\(remotePath) → \(localPath)")
         case let .useSkill(id):
             return loc.t("载入技能：\(id)", "Load skill: \(id)")
         case let .mcpCall(server, tool, argsJSON):
@@ -93,6 +132,16 @@ enum WLAction: Equatable {
             case "use_skill":
                 guard let id = (obj["id"] as? String) ?? (obj["name"] as? String) else { return nil }
                 return .useSkill(id: id)
+            case "upload":
+                guard let local = obj["localPath"] as? String,
+                      let host = obj["host"] as? String,
+                      let remote = obj["remotePath"] as? String else { return nil }
+                return .upload(localPath: local, host: host, remotePath: remote)
+            case "download":
+                guard let host = obj["host"] as? String,
+                      let remote = obj["remotePath"] as? String,
+                      let local = obj["localPath"] as? String else { return nil }
+                return .download(host: host, remotePath: remote, localPath: local)
             default: return nil
             }
         }

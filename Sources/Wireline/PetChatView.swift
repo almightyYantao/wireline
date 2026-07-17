@@ -25,6 +25,7 @@ struct PetChatView: View {
     @State private var task: Task<Void, Never>?
     @State private var pendingPlan: PetPlan?           // dangerous command awaiting OK
     @State private var pendingMCP: PendingMCPCall?     // MCP tool call awaiting OK
+    @State private var pendingTransfer: PendingTransfer?  // upload/download awaiting OK
     @FocusState private var focused: Bool
 
     private let maxSteps = 5
@@ -74,6 +75,20 @@ struct PetChatView: View {
                 Text("\(p.server).\(p.tool)" + (p.argsJSON == "{}" ? "" : "\n\n" + p.argsJSON))
             }
         }
+        .alert(pendingTransfer?.isUpload == true ? loc("确认上传？", "Confirm upload?")
+                                                 : loc("确认下载？", "Confirm download?"),
+               isPresented: Binding(get: { pendingTransfer != nil }, set: { if !$0 { pendingTransfer = nil } })) {
+            Button(loc("取消", "Cancel"), role: .cancel) {
+                pendingTransfer = nil
+                items.append(PetChatItem(kind: .note, text: loc("已取消传输。", "Transfer cancelled.")))
+                isBusy = false; steps = 0
+            }
+            Button(loc("传输", "Transfer")) {
+                if let t = pendingTransfer { pendingTransfer = nil; executeTransfer(t) }
+            }
+        } message: {
+            if let t = pendingTransfer { Text(t.summary(loc)) }
+        }
     }
 
     // MARK: header
@@ -102,7 +117,7 @@ struct PetChatView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 10) {
                     if items.isEmpty && streaming.isEmpty { emptyState }
-                    ForEach(items) { item in PetItemView(item: item, loc: loc) }
+                    ForEach(items) { item in PetItemView(item: item, loc: loc, onCopy: copyToClipboard, onRetry: resend) }
                     if isBusy || !streaming.isEmpty {
                         PetItemView(item: PetChatItem(kind: .assistant, text: streaming.isEmpty ? "…" : streaming), loc: loc)
                             .id("streaming")
@@ -188,6 +203,17 @@ struct PetChatView: View {
         let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !isBusy else { return }
         input = ""
+        resend(text)
+    }
+
+    private func copyToClipboard(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+    }
+
+    /// Re-ask a message (from the input box, or a retried past message).
+    private func resend(_ text: String) {
+        guard !isBusy else { return }
         errorText = nil
         steps = 0
         items.append(PetChatItem(kind: .user, text: text))
@@ -257,6 +283,11 @@ struct PetChatView: View {
             let prose = stripFenced(text)
             if !prose.isEmpty { items.append(PetChatItem(kind: .assistant, text: prose)) }
             routeMCP(PendingMCPCall(server: server, tool: tool, argsJSON: argsJSON))
+        } else if steps < maxSteps,
+                  let t = PendingTransfer.from(WLAction.parse(from: text), continueAgent: true) {
+            let prose = stripFenced(text)
+            if !prose.isEmpty { items.append(PetChatItem(kind: .assistant, text: prose)) }
+            requestTransfer(t)
         } else {
             if !text.isEmpty { items.append(PetChatItem(kind: .assistant, text: text)) }
             isBusy = false
@@ -279,6 +310,36 @@ struct PetChatView: View {
         modelMessages.append(AIMessage(role: .user,
             content: "【技能：\(skill.name)】\n\(skill.body)\n\n现在据此在相关机器上执行：用 ```plan 块指定 targets 与 command。"))
         startTurn()
+    }
+
+    // MARK: file transfer
+
+    private func requestTransfer(_ t: PendingTransfer) {
+        if t.isUpload, !FileManager.default.fileExists(atPath: (t.localPath as NSString).expandingTildeInPath) {
+            items.append(PetChatItem(kind: .note, text: loc("本地路径不存在：\(t.localPath)", "Local path not found: \(t.localPath)")))
+            modelMessages.append(AIMessage(role: .user, content: "本地路径 \(t.localPath) 不存在，无法上传。请确认路径或询问用户。"))
+            steps += 1; startTurn()
+            return
+        }
+        pendingTransfer = t
+        isBusy = false
+    }
+
+    private func executeTransfer(_ t: PendingTransfer) {
+        steps += 1
+        isBusy = true
+        items.append(PetChatItem(kind: .note, text: "▶︎ " + t.summary(loc)))
+        let local = (t.localPath as NSString).expandingTildeInPath
+        task = Task {
+            let r = t.isUpload
+                ? await FleetRunner.upload(localPath: local, to: t.host, remotePath: t.remotePath)
+                : await FleetRunner.download(from: t.host, remotePath: t.remotePath, localPath: local)
+            await MainActor.run {
+                items.append(PetChatItem(kind: .note, text: r.output))
+                modelMessages.append(AIMessage(role: .user, content: "文件传输结果（退出码 \(r.exitCode)）：\n\(r.output)\n请据此继续或给出结论。"))
+                startTurn()
+            }
+        }
     }
 
     // MARK: MCP tool calls
@@ -386,6 +447,7 @@ struct PetChatView: View {
         s += "command 尽量只读/幂等（如 docker ps、systemctl status、df -h、free -h）。"
         s += "拿到各机器结果后，用中文给出简明汇总（整体结论 + 逐机要点/异常点名），不要再输出 plan 块。"
         s += "若只是普通问答、无需上机执行，直接用中文回答。\n"
+        s += "你还**能**在本机与主机之间传文件(别说做不到)：上传输出 ```wl-action {\"action\":\"upload\",\"localPath\":\"/Users/x/proj\",\"host\":\"别名\",\"remotePath\":\"/opt/proj\"}；下载输出 {\"action\":\"download\",\"host\":\"别名\",\"remotePath\":\"/opt/x\",\"localPath\":\"/Users/x/Downloads/\"}，用户确认后执行。\n"
         let mcp = MCPStore.shared
         if mcp.hasTools {
             s += "\n你还能调用外部工具(MCP)：需要时输出一个 ```wl-action 代码块 {\"action\":\"mcp_call\",\"server\":\"服务名\",\"tool\":\"工具名\",\"args\":{…}}，我会执行并把结果返回给你，再据此继续。可用工具（server.tool：说明）："
@@ -514,14 +576,23 @@ struct PetChatItem: Identifiable {
 private struct PetItemView: View {
     let item: PetChatItem
     let loc: Localizer
+    var onCopy: (String) -> Void = { _ in }
+    var onRetry: (String) -> Void = { _ in }
 
     var body: some View {
         switch item.kind {
         case .user:
-            Text(item.text)
-                .font(WL.mono(13)).foregroundStyle(WL.textPrimary)
-                .padding(8).frame(maxWidth: .infinity, alignment: .leading)
-                .background(WL.green.opacity(0.12), in: RoundedRectangle(cornerRadius: WL.radius(6)))
+            VStack(alignment: .leading, spacing: 4) {
+                Text(item.text)
+                    .font(WL.mono(13)).foregroundStyle(WL.textPrimary).textSelection(.enabled)
+                    .padding(8).frame(maxWidth: .infinity, alignment: .leading)
+                    .background(WL.green.opacity(0.12), in: RoundedRectangle(cornerRadius: WL.radius(6)))
+                HStack(spacing: 10) {
+                    Spacer()
+                    BracketButton(loc.t("复制", "Copy")) { onCopy(item.text) }
+                    BracketButton(loc.t("重试", "Retry")) { onRetry(item.text) }
+                }
+            }
         case .assistant:
             // Split on ``` fences so fenced code renders as a real, multi-line
             // monospace block (inline markdown alone collapses newlines and never

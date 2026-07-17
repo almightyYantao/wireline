@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import WirelineCore
 
 /// The AI assistant panel: a context-aware chat with quick actions for the four
@@ -32,6 +33,7 @@ struct AIPanelView: View {
     @State private var pendingDanger: String?           // command awaiting confirmation
     @State private var dangerReview = ""                 // AI impact assessment for it
     @State private var pendingMCP: PendingMCPCall?       // MCP tool call awaiting confirmation
+    @State private var pendingTransfer: PendingTransfer? // file upload/download awaiting confirmation
     @FocusState private var inputFocused: Bool
 
     private let maxAgentSteps = 8
@@ -94,6 +96,27 @@ struct AIPanelView: View {
                 Text("\(p.server).\(p.tool)" + (p.argsJSON == "{}" ? "" : "\n\n" + p.argsJSON))
             }
         }
+        .alert(pendingTransfer?.isUpload == true ? loc("确认上传？", "Confirm upload?")
+                                                 : loc("确认下载？", "Confirm download?"),
+               isPresented: Binding(get: { pendingTransfer != nil },
+                                    set: { if !$0 { pendingTransfer = nil } })) {
+            Button(loc("取消", "Cancel"), role: .cancel) { declineTransfer() }
+            Button(loc("传输", "Transfer")) {
+                if let t = pendingTransfer { pendingTransfer = nil; executeTransfer(t) }
+            }
+        } message: {
+            if let t = pendingTransfer { Text(t.summary(loc)) }
+        }
+    }
+
+    private func declineTransfer() {
+        guard let t = pendingTransfer else { return }
+        pendingTransfer = nil
+        messages.append(AIMessage(role: .system, content: loc("已取消传输。", "Transfer cancelled.")))
+        if t.continueAgent {
+            modelMessages.append(AIMessage(role: .user, content: "用户取消了这次文件传输，请不要重试，改用自然语言说明或询问用户。"))
+        }
+        isStreaming = false; agentSteps = 0
     }
 
     private func declineMCP() {
@@ -225,7 +248,8 @@ struct AIPanelView: View {
                     }
                     ForEach(messages) { msg in
                         MessageBubble(message: msg, session: session, loc: loc,
-                                      fontSize: ai.fontSize, onSave: saveAsSnippet, onAction: executeAction)
+                                      fontSize: ai.fontSize, onSave: saveAsSnippet, onAction: executeAction,
+                                      onCopy: copyToClipboard, onRetry: retryUserMessage)
                     }
                     if isStreaming || !streaming.isEmpty {
                         MessageBubble(message: AIMessage(role: .assistant, content: streaming.isEmpty ? "…" : streaming),
@@ -474,6 +498,8 @@ struct AIPanelView: View {
             messages.append(AIMessage(role: .system, content: loc("🧠 已记住：\(note)", "🧠 Remembered: \(note)")))
         case let .useSkill(id):
             loadSkill(id)     // inject the playbook and continue the conversation
+        case .upload, .download:
+            if let t = PendingTransfer.from(action, continueAgent: false) { requestTransfer(t) }
         case let .mcpCall(server, tool, argsJSON):
             // Card path (non-agent): run the tool once and show the result.
             let cap = mcpResultCap, redact = ai.redact
@@ -501,6 +527,17 @@ struct AIPanelView: View {
     }
 
     // MARK: conversation loop
+
+    private func copyToClipboard(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+    }
+
+    /// Re-ask a previous user message (runs it again as a fresh turn).
+    private func retryUserMessage(_ content: String) {
+        guard !isStreaming else { return }
+        send(userVisible: content, promptForModel: content)
+    }
 
     private func send(userVisible: String, promptForModel: String) {
         guard !isStreaming else { return }
@@ -573,9 +610,48 @@ struct AIPanelView: View {
         } else if ai.agentMode, agentSteps < maxAgentSteps,
                   case let .mcpCall(server, tool, argsJSON)? = WLAction.parse(from: text) {
             routeMCP(PendingMCPCall(server: server, tool: tool, argsJSON: argsJSON))
+        } else if ai.agentMode, agentSteps < maxAgentSteps,
+                  let t = PendingTransfer.from(WLAction.parse(from: text), continueAgent: true) {
+            requestTransfer(t)
         } else {
             isStreaming = false
             agentSteps = 0
+        }
+    }
+
+    /// Validate a transfer, then ask the user to confirm (outbound/inbound data).
+    private func requestTransfer(_ t: PendingTransfer) {
+        if t.isUpload, !FileManager.default.fileExists(atPath: (t.localPath as NSString).expandingTildeInPath) {
+            messages.append(AIMessage(role: .system, content: loc("本地路径不存在：\(t.localPath)", "Local path not found: \(t.localPath)")))
+            if t.continueAgent {
+                agentSteps += 1
+                modelMessages.append(AIMessage(role: .user, content: "本地路径 \(t.localPath) 不存在，无法上传。请确认路径或询问用户。"))
+                startTurn()
+            } else { isStreaming = false }
+            return
+        }
+        pendingTransfer = t
+        isStreaming = false
+    }
+
+    private func executeTransfer(_ t: PendingTransfer) {
+        if t.continueAgent { agentSteps += 1 }
+        isStreaming = true
+        messages.append(AIMessage(role: .system, content: "▶︎ " + t.summary(loc)))
+        let local = (t.localPath as NSString).expandingTildeInPath
+        task = Task {
+            let r = t.isUpload
+                ? await FleetRunner.upload(localPath: local, to: t.host, remotePath: t.remotePath)
+                : await FleetRunner.download(from: t.host, remotePath: t.remotePath, localPath: local)
+            await MainActor.run {
+                messages.append(AIMessage(role: .system, content: r.output))
+                if t.continueAgent {
+                    modelMessages.append(AIMessage(role: .user, content: "文件传输结果（退出码 \(r.exitCode)）：\n\(r.output)\n请据此继续或给出结论。"))
+                    startTurn()
+                } else {
+                    isStreaming = false
+                }
+            }
         }
     }
 
@@ -745,7 +821,9 @@ struct AIPanelView: View {
         ctx += "连接主机 {\"action\":\"connect\",\"host\":\"别名\"}；"
         ctx += "打开文件浏览器 {\"action\":\"open_files\",\"host\":\"别名\"}；"
         ctx += "运行片段 {\"action\":\"run_snippet\",\"name\":\"片段名\"}；"
-        ctx += "记住本主机的持久事实(仅在确认了解到稳定信息时) {\"action\":\"remember\",\"note\":\"该机用 systemd / nginx 配置在 /etc/nginx\"}。每次仅一个 wl-action 块，并附一句简短说明。"
+        ctx += "记住本主机的持久事实(仅在确认了解到稳定信息时) {\"action\":\"remember\",\"note\":\"该机用 systemd / nginx 配置在 /etc/nginx\"}；"
+        ctx += "上传本地文件/目录到主机(你**能**做，别说做不到) {\"action\":\"upload\",\"localPath\":\"/Users/x/proj\",\"host\":\"别名\",\"remotePath\":\"/opt/proj\"}；"
+        ctx += "从主机下载到本地 {\"action\":\"download\",\"host\":\"别名\",\"remotePath\":\"/opt/proj/log\",\"localPath\":\"/Users/x/Downloads/\"}。每次仅一个 wl-action 块，并附一句简短说明。"
         // MCP tool catalog (progressive disclosure: names + one-line descriptions).
         let mcp = MCPStore.shared
         if mcp.hasTools {
@@ -788,6 +866,8 @@ private struct MessageBubble: View {
     let fontSize: Double
     var onSave: (String) -> Void = { _ in }
     var onAction: (WLAction) -> Void = { _ in }
+    var onCopy: (String) -> Void = { _ in }
+    var onRetry: (String) -> Void = { _ in }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -795,9 +875,15 @@ private struct MessageBubble: View {
             case .user:
                 Text(message.content)
                     .font(WL.mono(fontSize)).foregroundStyle(WL.textPrimary)
+                    .textSelection(.enabled)
                     .padding(8)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(WL.green.opacity(0.12), in: RoundedRectangle(cornerRadius: WL.radius(6)))
+                HStack(spacing: 10) {
+                    Spacer()
+                    BracketButton(loc.t("复制", "Copy")) { onCopy(message.content) }
+                    BracketButton(loc.t("重试", "Retry")) { onRetry(message.content) }
+                }
             case .system:
                 // Agent execution trace: the run command (▶︎ …) and its output.
                 Text(message.content)
