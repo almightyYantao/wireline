@@ -129,9 +129,17 @@ final class TerminalSession: Identifiable {
     /// SSH ControlMaster socket path, for out-of-band stats polling.
     private let controlSocket = NSTemporaryDirectory() + "wl-\(UUID().uuidString.prefix(8)).sock"
 
+    /// Stable key for this session's persisted scrollback file (survives relaunch
+    /// via the snapshot). Defaults to the session id; overwritten on restore.
+    var scrollbackKey: String = ""
+    /// Raw output from a previous run, fed into the terminal on `start()` so the
+    /// history reappears as if the app was never closed.
+    var pendingScrollback: Data?
+
     init(kind: SessionKind, title: String) {
         self.kind = kind
         self.title = title
+        self.scrollbackKey = id.uuidString
         switch kind {
         case .ssh(let a, _, _, _, _): self.alias = a
         case .sftp(let a, _, _): self.alias = a
@@ -214,6 +222,15 @@ final class TerminalSession: Identifiable {
     }
 
     func start() {
+        // Replay prior scrollback (with colors) so a reopened tab looks untouched,
+        // then a dim separator before the fresh live session begins.
+        if let sb = pendingScrollback, !sb.isEmpty {
+            terminalView.feed(byteArray: ArraySlice(sb))
+            terminalView.feed(text: "\r\n\u{1b}[2m──────── 已恢复上次会话 / restored ────────\u{1b}[0m\r\n")
+            terminalView.seedScrollback(sb)   // keep it so it persists forward, not just this run
+            pendingScrollback = nil
+        }
+
         var env = Terminal.getEnvironmentVariables(termName: "xterm-256color")
         // Preserve the user's locale so remote/local shells render UTF-8 correctly.
         if let lang = ProcessInfo.processInfo.environment["LANG"] { env.append("LANG=\(lang)") }
@@ -266,6 +283,16 @@ final class TerminalSession: Identifiable {
             )
             startBusyPolling()
         }
+    }
+
+    /// Persist this session's raw scrollback so it can be replayed next launch.
+    /// Writes to `<dir>/<scrollbackKey>.raw`; removes the file when empty.
+    func saveScrollback(dir: URL) {
+        guard !scrollbackKey.isEmpty else { return }
+        let url = dir.appendingPathComponent("\(scrollbackKey).raw")
+        let data = terminalView.rawScrollback
+        if data.isEmpty { try? FileManager.default.removeItem(at: url) }
+        else { try? data.write(to: url, options: .atomic) }
     }
 
     /// Whether this session is recording its output to a log file, and where.
@@ -323,6 +350,8 @@ struct SessionSnapshot: Codable, Sendable {
     var kind: Kind
     var alias: String
     var title: String
+    /// Key locating this session's persisted scrollback file (empty for older data).
+    var scrollbackKey: String = ""
 }
 
 /// How the terminal area is split into panes.
@@ -542,10 +571,36 @@ final class SessionStore {
 
     // MARK: - Persistence / restore
 
-    private func persist() {
+    /// Where per-session scrollback files live.
+    static let scrollbackDir: URL = {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Wireline/scrollback", isDirectory: true)
+        try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        return base
+    }()
+
+    private func loadScrollback(_ key: String) -> Data? {
+        guard !key.isEmpty else { return nil }
+        return try? Data(contentsOf: Self.scrollbackDir.appendingPathComponent("\(key).raw"))
+    }
+
+    /// Persist open sessions AND their scrollback, so a relaunch restores the tabs
+    /// with their history intact. Prunes scrollback files for closed sessions.
+    func persist() {
         let snaps = sessions.map(snapshot(of:))
         if let data = try? JSONEncoder().encode(snaps) {
             UserDefaults.standard.set(data, forKey: Self.persistKey)
+        }
+        for s in sessions { s.saveScrollback(dir: Self.scrollbackDir) }
+        pruneScrollback(keeping: Set(sessions.map(\.scrollbackKey)))
+    }
+
+    private func pruneScrollback(keeping keys: Set<String>) {
+        let dir = Self.scrollbackDir
+        guard let files = try? FileManager.default.contentsOfDirectory(atPath: dir.path) else { return }
+        for f in files where f.hasSuffix(".raw") {
+            let key = String(f.dropLast(4))
+            if !keys.contains(key) { try? FileManager.default.removeItem(at: dir.appendingPathComponent(f)) }
         }
     }
 
@@ -557,7 +612,7 @@ final class SessionStore {
         case .sftp:       kind = .sftp
         case .localShell: kind = .local
         }
-        return SessionSnapshot(kind: kind, alias: s.alias, title: s.title)
+        return SessionSnapshot(kind: kind, alias: s.alias, title: s.title, scrollbackKey: s.scrollbackKey)
     }
 
     /// Reopen (and reconnect) the sessions that were open at last quit. Runs once.
@@ -568,21 +623,28 @@ final class SessionStore {
         guard let data = UserDefaults.standard.data(forKey: Self.persistKey),
               let snaps = try? JSONDecoder().decode([SessionSnapshot].self, from: data) else { return }
         for snap in snaps {
+            let built: TerminalSession?
             switch snap.kind {
             case .ssh:
-                if let h = store.hosts.first(where: { $0.alias == snap.alias }) {
-                    let id = open(host: h, password: store.password(for: h), sudoPassword: store.sudoPassword(for: h))
-                    session(id)?.title = snap.title
+                built = store.hosts.first { $0.alias == snap.alias }.map { h in
+                    TerminalSession(kind: .ssh(alias: h.alias, password: store.password(for: h),
+                                               sudoPassword: store.sudoPassword(for: h),
+                                               autoSudo: h.autoSudo, args: h.launchArgTokens), title: snap.title)
                 }
             case .sftp:
-                if let h = store.hosts.first(where: { $0.alias == snap.alias }) {
-                    let id = openSFTP(host: h, password: store.password(for: h))
-                    session(id)?.title = snap.title
+                built = store.hosts.first { $0.alias == snap.alias }.map { h in
+                    TerminalSession(kind: .sftp(alias: h.alias, password: store.password(for: h),
+                                                args: h.launchArgTokens), title: snap.title)
                 }
             case .local:
-                let id = openLocalShell()
-                session(id)?.title = snap.title
+                built = TerminalSession(kind: .localShell, title: snap.title)
             }
+            guard let s = built else { continue }
+            // Reuse the persisted key so we load THIS session's saved scrollback.
+            if !snap.scrollbackKey.isEmpty { s.scrollbackKey = snap.scrollbackKey }
+            s.pendingScrollback = loadScrollback(s.scrollbackKey)
+            s.title = snap.title
+            _ = add(s)                      // spawns + starts (start() replays scrollback first)
         }
         persist()
     }

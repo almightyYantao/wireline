@@ -40,6 +40,12 @@ struct WirelineApp: App {
                     Notifier.requestAuthorization()
                     // Reopen the tabs that were open at last quit (reconnects).
                     sessions.restoreIfNeeded(store: store)
+                    // Flush scrollback (and snapshots) on quit so the very last
+                    // output is restored next launch, not just up to the last tab change.
+                    NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification,
+                                                           object: nil, queue: .main) { [sessions] _ in
+                        MainActor.assumeIsolated { sessions.persist() }
+                    }
                     if store.autoCheckOnLaunch { await store.checkAll() }
                     store.startMonitoring()
                     store.startAutoBackup()
