@@ -60,11 +60,30 @@ cat > "${OUT}/Contents/Info.plist" <<PLIST
     <key>NSPrincipalClass</key><string>NSApplication</string>
     <key>NSHighResolutionCapable</key><true/>
     <key>NSHumanReadableCopyright</key><string>Wireline</string>
+    <!-- Sparkle auto-update -->
+    <key>SUFeedURL</key><string>https://almightyyantao.github.io/wireline/appcast.xml</string>
+    <key>SUPublicEDKey</key><string>287T2lrvbuglzkTSFgQ7ROtOoxWT2EdBr+vdO82Xosc=</string>
+    <key>SUEnableAutomaticChecks</key><true/>
+    <key>SUScheduledCheckInterval</key><integer>86400</integer>
     <!-- Uncomment to run as a menu-bar-only agent (no Dock icon):
     <key>LSUIElement</key><true/> -->
 </dict>
 </plist>
 PLIST
+
+# Embed Sparkle.framework (auto-update) so the app can update itself in place,
+# and point the executable's rpath at Contents/Frameworks. Must happen before
+# signing (modifying the binary after signing would invalidate it).
+BINDIR="$(dirname "${BIN}")"
+if [[ -d "${BINDIR}/Sparkle.framework" ]]; then
+    echo "▸ Embedding Sparkle.framework…"
+    mkdir -p "${OUT}/Contents/Frameworks"
+    rm -rf "${OUT}/Contents/Frameworks/Sparkle.framework"
+    cp -R "${BINDIR}/Sparkle.framework" "${OUT}/Contents/Frameworks/"
+    # The binary already has an @loader_path rpath (= MacOS/); add Frameworks too.
+    install_name_tool -add_rpath "@executable_path/../Frameworks" \
+        "${OUT}/Contents/MacOS/${APP_NAME}" 2>/dev/null || true
+fi
 
 # Code signing.
 #

@@ -40,10 +40,28 @@ ln -s /Applications "$STAGE/Applications"          # drag-to-install target
 hdiutil create -volname "Wireline" -srcfolder "$STAGE" -ov -format UDZO "$DMG" >/dev/null
 rm -rf "$STAGE"
 
+echo "▸ Generating signed appcast (Sparkle)…"
+GEN=".build/artifacts/sparkle/Sparkle/bin/generate_appcast"
+if [[ -x "$GEN" ]]; then
+    APPCAST_DIR="build/appcast"
+    rm -rf "$APPCAST_DIR"; mkdir -p "$APPCAST_DIR"
+    cp "$ZIP" "$APPCAST_DIR/"
+    # Each release is hosted under its own GitHub release tag, so the enclosure
+    # URL prefix is version-specific. The appcast advertises the current build;
+    # older versions stay downloadable but drop off the feed.
+    "$GEN" "$APPCAST_DIR" \
+        --download-url-prefix "https://github.com/almightyYantao/wireline/releases/download/v${VERSION}/"
+    cp "$APPCAST_DIR/appcast.xml" docs/appcast.xml
+    echo "   ✓ docs/appcast.xml (commit + push so GitHub Pages serves it)"
+else
+    echo "   ⚠ generate_appcast not found — run 'swift build' first, or skip auto-update for this release."
+fi
+
 echo ""
 echo "✓ Done:"
 echo "   $DMG"
 echo "   $ZIP"
+echo "   docs/appcast.xml"
 echo ""
 echo "Recipients (unsigned/ad-hoc): mount the DMG, drag Wireline to Applications,"
 echo "then first launch via right-click → Open (or run: xattr -cr /Applications/Wireline.app)."

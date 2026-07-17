@@ -158,6 +158,21 @@ struct SettingsView: View {
                             "Sends a system notification when a host goes offline or comes back."))
                 }
 
+                section(loc("更新", "Updates")) {
+                    HStack(spacing: 12) {
+                        Button(loc("检查更新", "Check for Updates")) { Updater.shared.checkForUpdates() }
+                            .buttonStyle(.plain).font(WL.body).foregroundStyle(WL.green)
+                        Text("v0.7.0").font(WL.small).foregroundStyle(WL.textDim)
+                        Spacer()
+                    }
+                    Toggle(isOn: Binding(get: { Updater.shared.automaticChecks },
+                                         set: { Updater.shared.automaticChecks = $0 })) {
+                        Text(loc("自动检查更新", "Check for updates automatically")).font(WL.body).foregroundStyle(WL.textPrimary)
+                    }.toggleStyle(.checkbox).tint(WL.green)
+                    hint(loc("通过 Sparkle 检查签名后的更新（appcast 托管在项目站点，无服务端）。",
+                            "Signed updates via Sparkle (appcast hosted on the project site, no backend)."))
+                }
+
                 section(loc("配置文件", "Config File")) {
                     Text(store.repository.url.path).font(WL.small).foregroundStyle(WL.textDim).textSelection(.enabled)
                     hint(loc("Wireline 直接读写这份标准 OpenSSH 配置；卸载后它在命令行下依然完全可用。",

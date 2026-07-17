@@ -141,6 +141,9 @@ struct WirelineApp: App {
                 Button("Settings…") { openWindow(id: "settings") }
                     .keyboardShortcut(",", modifiers: [.command])
             }
+            CommandGroup(after: .appInfo) {
+                Button("检查更新…") { Updater.shared.checkForUpdates() }
+            }
         }
 
         // Custom settings window styled like the main window (hidden title bar,
