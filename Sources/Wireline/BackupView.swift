@@ -24,6 +24,7 @@ struct BackupView: View {
                 .padding(.horizontal, 20).padding(.top, 22).padding(.bottom, 14)
             Rectangle().fill(WL.border).frame(height: 1)
 
+            ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 Picker("", selection: $mode) {
                     Text(loc("导出", "Export")).tag(Mode.export)
@@ -75,8 +76,9 @@ struct BackupView: View {
                 }
             }
             .padding(20)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            }
 
-            Spacer()
             Rectangle().fill(WL.border).frame(height: 1)
             HStack(spacing: 18) {
                 if busy { Text(loc("处理中…", "Working…")).font(WL.small).foregroundStyle(WL.amber) }

@@ -5,17 +5,20 @@
 #
 # Output: build/Wireline-<version>.dmg  and  build/Wireline-<version>.zip
 #
-# NOTE: the app is ad-hoc signed (no paid Apple Developer account required).
-# Gatekeeper will warn on other Macs the first time — recipients open it via
-# right-click → Open, or `xattr -cr /Applications/Wireline.app`. For friction-
-# free distribution, sign with a Developer ID certificate and notarize (see the
-# bottom of this script).
+# SIGNING: bundle.sh signs with a stable "Developer ID Application" identity
+# when one is available (MACOS_SIGN_IDENTITY, or auto-detected from the
+# keychain). A stable identity is what lets saved Keychain passwords survive
+# version updates — ad-hoc builds lose them on every rebuild. Without any
+# Developer ID cert it falls back to ad-hoc, and Gatekeeper will warn on other
+# Macs the first time (recipients open via right-click → Open, or
+# `xattr -cr /Applications/Wireline.app`). For friction-free distribution,
+# also notarize (see the bottom of this script).
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
 export DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
 
-VERSION="0.5.0"
+VERSION="0.6.0"
 APP="build/Wireline.app"
 
 echo "▸ Forcing a clean release build (avoids stale-cache bundles)…"
@@ -46,9 +49,9 @@ echo "Recipients (unsigned/ad-hoc): mount the DMG, drag Wireline to Applications
 echo "then first launch via right-click → Open (or run: xattr -cr /Applications/Wireline.app)."
 
 # ---------------------------------------------------------------------------
-# Optional: Developer ID signing + notarization (needs a paid Apple account).
-#   codesign --deep --force --options runtime \
-#     --sign "Developer ID Application: YOUR NAME (TEAMID)" "$APP"
+# Signing is handled automatically in bundle.sh (Developer ID when available).
+# Optional extra step — notarization, for warning-free launch on other Macs
+# (needs a paid Apple account):
 #   xcrun notarytool submit "$ZIP" --apple-id you@example.com \
 #     --team-id TEAMID --password APP_SPECIFIC_PASSWORD --wait
 #   xcrun stapler staple "$APP"

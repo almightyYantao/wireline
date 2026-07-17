@@ -54,9 +54,14 @@ struct PetView: View {
         .background(WindowAccessor { chrome.configure($0) })
         .preferredColorScheme(.dark)
         .onReceive(NotificationCenter.default.publisher(for: .focusPet)) { _ in
-            let willExpand = !expanded
             withAnimation(spring) { expanded.toggle() }
-            if willExpand { chrome.focus() }   // bring forward & make key only when opening
+        }
+        // Grab key focus when the chat opens; hand it back to the terminal when it
+        // collapses — via any path (chevron, tap, context menu, ⌘J). Otherwise the
+        // sprite window stays key with nothing to focus, and ⌘J routing gets stuck
+        // until you click.
+        .onChange(of: expanded) { _, now in
+            if now { chrome.focus() } else { chrome.releaseFocus() }
         }
     }
 
@@ -201,6 +206,9 @@ private struct CableTail: Shape {
 @MainActor
 final class PetWindowChrome {
     private weak var window: NSWindow?
+    /// The window that was key before the pet grabbed focus — restored on collapse
+    /// so typing goes back to the terminal instead of the content-less sprite.
+    private weak var previousKey: NSWindow?
     /// The bottom-right corner (screen coords) we keep pinned across resizes.
     private var anchor: CGPoint = .zero
     private var lastSize: CGSize = .zero
@@ -238,8 +246,22 @@ final class PetWindowChrome {
     /// Bring the pet window forward and make it key so its input can accept text.
     func focus() {
         guard let window else { return }
+        if let key = NSApp.keyWindow, key !== window { previousKey = key }
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
+    }
+
+    /// Hand key focus back to whatever window had it before the pet opened (the
+    /// terminal), so keystrokes resume there. The sprite stays visible since it
+    /// floats above normal windows regardless of key status.
+    func releaseFocus() {
+        guard let window, window.isKeyWindow else { return }
+        window.resignKey()
+        let target = previousKey ?? NSApp.windows.first {
+            $0 !== window && $0.canBecomeKey && $0.isVisible && $0.level == .normal
+        }
+        target?.makeKeyAndOrderFront(nil)
+        previousKey = nil
     }
 
     /// Keep the bottom-right corner fixed on a content resize (grow upward); on a

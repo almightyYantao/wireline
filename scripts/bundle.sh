@@ -54,8 +54,8 @@ cat > "${OUT}/Contents/Info.plist" <<PLIST
     <key>CFBundleExecutable</key><string>${APP_NAME}</string>
     <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>0.5.0</string>
-    <key>CFBundleVersion</key><string>5</string>
+    <key>CFBundleShortVersionString</key><string>0.6.0</string>
+    <key>CFBundleVersion</key><string>6</string>
     <key>LSMinimumSystemVersion</key><string>14.0</string>
     <key>NSPrincipalClass</key><string>NSApplication</string>
     <key>NSHighResolutionCapable</key><true/>
@@ -66,10 +66,38 @@ cat > "${OUT}/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-# Ad-hoc sign so Keychain access and Gatekeeper behave on the local machine.
-echo "▸ Ad-hoc signing…"
-codesign --force --deep --sign - "${OUT}" >/dev/null 2>&1 || \
-    echo "  (codesign skipped — Keychain may prompt on first run)"
+# Code signing.
+#
+# Keychain items are ACL-bound to the app's *code signing identity*. An ad-hoc
+# signature (`--sign -`) has no stable designated requirement, so every rebuild
+# looks like a different app to the Keychain and saved passwords become
+# unreadable after an update (user is forced to re-enter them). Signing with a
+# stable "Developer ID Application" cert keeps that identity constant, so saved
+# passwords survive version updates.
+#
+# Resolution order:
+#   1. MACOS_SIGN_IDENTITY if set (same env var as the lb-clash build scripts):
+#        MACOS_SIGN_IDENTITY="Developer ID Application: NAME (TEAMID)" ./scripts/bundle.sh
+#   2. else auto-pick the first "Developer ID Application" identity in the keychain
+#   3. else fall back to ad-hoc (passwords WILL be lost on the next rebuild)
+SIGN_IDENTITY="${MACOS_SIGN_IDENTITY:-}"
+if [[ -z "${SIGN_IDENTITY}" ]]; then
+    SIGN_IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null \
+        | grep -o '"Developer ID Application:[^"]*"' | head -1 | tr -d '"')"
+fi
+
+if [[ -n "${SIGN_IDENTITY}" ]]; then
+    echo "▸ Signing with stable identity: ${SIGN_IDENTITY}"
+    codesign --force --deep --options runtime \
+        --sign "${SIGN_IDENTITY}" "${OUT}"
+    codesign --verify --strict --verbose=2 "${OUT}" >/dev/null 2>&1 \
+        && echo "  ✓ signature verified" || echo "  ⚠ signature verify reported issues"
+else
+    echo "▸ Ad-hoc signing (unstable identity — saved passwords won't survive updates)…"
+    echo "  Set MACOS_SIGN_IDENTITY, or install a Developer ID cert, to keep Keychain passwords across versions."
+    codesign --force --deep --sign - "${OUT}" >/dev/null 2>&1 || \
+        echo "  (codesign skipped — Keychain may prompt on first run)"
+fi
 
 echo "✓ Built ${OUT}"
 if [[ "${1:-}" == "--run" ]]; then

@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import WirelineCore
 
 @main
@@ -44,6 +45,18 @@ struct WirelineApp: App {
                     store.startAutoBackup()
                     // Float the desktop pet on launch (unless the user disabled it).
                     if AIConfig.shared.petEnabled { openWindow(id: "pet") }
+                    // System-wide hotkeys: summon the pet / Quick Connect from any
+                    // app. The Carbon handler activates us, then these post the UI.
+                    GlobalHotKeys.shared.start([
+                        .showPet: {
+                            NSApp.activate(ignoringOtherApps: true)
+                            NotificationCenter.default.post(name: .summonPet, object: nil)
+                        },
+                        .quickConnect: {
+                            NSApp.activate(ignoringOtherApps: true)
+                            NotificationCenter.default.post(name: .summonQuickConnect, object: nil)
+                        },
+                    ])
                 }
         }
         .windowStyle(.hiddenTitleBar)   // SwiftUI-managed, so it survives sheets & window switches

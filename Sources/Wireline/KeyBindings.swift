@@ -116,7 +116,7 @@ enum ShortcutAction: String, CaseIterable, Identifiable {
         switch self {
         case .newConnection:    return KeyShortcut(key: "n")
         case .newLocalTerminal: return KeyShortcut(key: "t")
-        case .quickConnect:     return KeyShortcut(key: "k")
+        case .quickConnect:     return KeyShortcut(key: "k", option: true)
         case .refreshStatuses:  return KeyShortcut(key: "r")
         case .find:             return KeyShortcut(key: "f")
         case .toggleSidebar:    return KeyShortcut(key: "s")
@@ -129,7 +129,7 @@ enum ShortcutAction: String, CaseIterable, Identifiable {
         case .focusNextPane:    return KeyShortcut(key: "]")
         case .focusPrevPane:    return KeyShortcut(key: "[")
         case .commandPalette:   return KeyShortcut(key: "p")
-        case .showPet:          return KeyShortcut(key: "j")
+        case .showPet:          return KeyShortcut(key: "j", option: true)
         }
     }
 }
@@ -189,5 +189,6 @@ final class KeyBindingStore: @unchecked Sendable {
             UserDefaults.standard.set(data, forKey: defaultsKey)
         }
         version += 1
+        NotificationCenter.default.post(name: .keyBindingsChanged, object: nil)
     }
 }

@@ -54,7 +54,7 @@ In Settings → AI, enter an **OpenAI-compatible endpoint + key** (a relay or di
 
 ## 🐾 Desktop Pet
 
-A draggable, always-on-top little sprite that floats over your desktop the moment you open Wireline — its own AI conversation window, distinct from the terminal panel. Summon or dismiss it with **⌘J** (remappable), or click it.
+A draggable, always-on-top little sprite that floats over your desktop the moment you open Wireline — its own AI conversation window, distinct from the terminal panel. Summon or dismiss it with **⌥⌘J** — a **system-wide** hotkey, so it works from any app, not just when Wireline is frontmost — or click it. Closing the chat hands keyboard focus back to your terminal.
 
 - **Talk in plain language, it picks the target(s)**: "summarize the running docker containers on `fn`", or "summarize Docker status across all `IAI` hosts" — it resolves the machine(s) **by alias or by group**, runs the command across them in parallel (via the same non-interactive fleet engine — **no need to connect first**), and hands you one summary
 - **Multi-host by default**: one sentence can fan out to a whole group; per-host results are collapsible, with an overall AI conclusion on top
@@ -85,7 +85,7 @@ Data lives only in a local `todos.json` (plus the opt-in encrypted backup); it n
 ## ✨ Features
 
 **Connect & manage**
-- 🔍 Global quick-connect (⌘K): Spotlight-style fuzzy search over alias/description/group
+- 🔍 Global quick-connect (⌥⌘K): a **system-wide** hotkey that activates Wireline from any app and opens a Spotlight-style fuzzy search over alias/description/group
 - 🗂 Merged host list in the sidebar: grouped, collapsible (remembered), drag-into-group, right-click new/delete group
 - 🟢 Reachability checks: `online / offline / checking`; optional background monitoring + notifications
 - 🔑 Auth auto-detection: key / password; passwords stored in the **macOS Keychain**, never in plaintext

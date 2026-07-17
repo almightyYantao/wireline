@@ -22,6 +22,12 @@ extension Notification.Name {
     static let moveTab = Notification.Name("wireline.moveTab")
     static let zoomFont = Notification.Name("wireline.zoomFont")
     static let focusPet = Notification.Name("wireline.focusPet")
+    /// Fired by the global hotkeys: bring Wireline forward, then open/focus the
+    /// pet or the Quick Connect palette (from any app).
+    static let summonPet = Notification.Name("wireline.summonPet")
+    static let summonQuickConnect = Notification.Name("wireline.summonQuickConnect")
+    /// Posted whenever a key binding changes, so global hotkeys can re-register.
+    static let keyBindingsChanged = Notification.Name("wireline.keyBindingsChanged")
 }
 
 /// Right-panel mode. `nil` = SSH (terminal sessions).
@@ -118,6 +124,20 @@ struct ContentView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .showQuickConnect)) { _ in
             showQuickConnect = true
+        }
+        // Global-hotkey entry points: the app was just activated by the Carbon
+        // handler; bring the right window forward and open the surface.
+        .onReceive(NotificationCenter.default.publisher(for: .summonQuickConnect)) { _ in
+            openWindow(id: "main")
+            showQuickConnect = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .summonPet)) { _ in
+            openWindow(id: "pet")
+            // Give a freshly-opened pet window a moment to mount & subscribe
+            // before toggling it (mirrors the menu command).
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+                NotificationCenter.default.post(name: .focusPet, object: nil)
+            }
         }
         .modifier(PaletteTabHandlers(store: store, sessions: sessions, showCommandPalette: $showCommandPalette))
         .alert("Something went wrong", isPresented: .constant(store.lastError != nil)) {
