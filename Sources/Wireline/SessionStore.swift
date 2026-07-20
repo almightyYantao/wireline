@@ -225,10 +225,10 @@ final class TerminalSession: Identifiable {
         // Replay prior scrollback (with colors) so a reopened tab looks untouched,
         // then a dim separator before the fresh live session begins.
         if let sb = pendingScrollback, !sb.isEmpty {
-            // Replay the previously rendered text lines (layout already resolved, so
-            // right-prompts stay put). \n → \r\n so lines don't stair-step.
-            let text = String(decoding: sb, as: UTF8.self).replacingOccurrences(of: "\n", with: "\r\n")
-            terminalView.feed(text: text)
+            // The snapshot is a self-contained stream of SGR + text + CRLF (see
+            // Terminal.serializeColored), so feed the raw bytes — colors and styles
+            // come back intact and there are no cursor moves to disturb the session.
+            terminalView.feed(byteArray: ArraySlice([UInt8](sb)))
             terminalView.feed(text: "\r\n\u{1b}[2m──────── 已恢复上次会话 / restored ────────\u{1b}[0m\r\n")
             pendingScrollback = nil
         }
@@ -293,19 +293,17 @@ final class TerminalSession: Identifiable {
     func saveScrollback(dir: URL) {
         guard !scrollbackKey.isEmpty, isRunning else { return }
         let url = dir.appendingPathComponent("\(scrollbackKey).txt")
-        var data = terminalView.renderedBuffer
-        // Empty cells come back as NUL (\0), which the terminal drops on replay —
-        // collapsing the gap that keeps a right-prompt at the right edge. Turn them
-        // into real spaces so columns (and thus right-aligned prompts) survive.
-        data = Data(data.map { $0 == 0 ? 0x20 : $0 })
-        // Cap to a sane tail.
-        let cap = 256 * 1024
-        if data.count > cap { data = data.suffix(cap) }
-        // Drop prior restore-banner lines so they don't stack up launch after launch.
+        let data = terminalView.renderedBuffer
+        // Empty means a full-screen app owned the alternate screen at save time —
+        // keep the previous snapshot rather than clobbering it with a blank one.
+        guard !data.isEmpty else { return }
+        // The stream is colored SGR + text with CRLF line breaks. Drop prior
+        // restore-banner lines (they get re-serialized after each launch) while
+        // preserving CRLF and escape sequences, so the tail stays replayable.
         let text = String(decoding: data, as: UTF8.self)
-            .split(separator: "\n", omittingEmptySubsequences: false)
+            .components(separatedBy: "\r\n")
             .filter { !$0.contains("已恢复上次会话") }
-            .joined(separator: "\n")
+            .joined(separator: "\r\n")
             .trimmingCharacters(in: .newlines)
         if text.isEmpty { try? FileManager.default.removeItem(at: url) }
         else { try? Data(text.utf8).write(to: url, options: .atomic) }
@@ -573,10 +571,15 @@ final class SessionStore {
     }
 
     /// Focus the active session's terminal so keystrokes go straight to the PTY —
-    /// used by the "focus terminal" shortcut after the command bar / AI panel.
+    /// used by the "focus terminal" shortcut after the command bar / AI panel, and
+    /// after launch restore. Must make the window *key* (not just set first
+    /// responder): the floating desktop pet grabs key status on launch, so a bare
+    /// makeFirstResponder on a non-key window would never receive keystrokes.
     func focusActiveTerminal() {
-        guard let term = activeSession?.terminalView else { return }
-        term.window?.makeFirstResponder(term)
+        guard let term = activeSession?.terminalView, let window = term.window else { return }
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+        window.makeFirstResponder(term)
     }
 
     /// Send the same text to every open session's terminal (the broadcast bar).
@@ -663,5 +666,7 @@ final class SessionStore {
             _ = add(s)                      // spawns + starts (start() replays scrollback first)
         }
         persist()
+        // Focus is re-asserted from WirelineApp's .task after the pet window opens
+        // (which grabs key status), so we don't fight it with a racing call here.
     }
 }

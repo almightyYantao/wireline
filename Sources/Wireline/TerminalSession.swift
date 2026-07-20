@@ -124,6 +124,9 @@ final class WirelineTerminalView: LocalProcessTerminalView {
         self.sudoPassword = sudoPassword
         self.autoSudo = autoSudo
         super.init(frame: frame)
+        // Default SwiftTerm scrollback is 500 lines; deepen it so cross-launch
+        // restore (and in-session scrollback) keeps a meaningful amount of history.
+        getTerminal().changeScrollback(4000)
         if let font = TerminalFont.preferred(size: 13) { self.font = font }
         // Green-on-black to match the app's console theme.
         nativeBackgroundColor = NSColor(red: 0.039, green: 0.055, blue: 0.039, alpha: 1)
@@ -169,9 +172,11 @@ final class WirelineTerminalView: LocalProcessTerminalView {
     /// A rolling, ANSI-stripped tail of recent terminal output, for AI context.
     private(set) var recentClean = ""
 
-    /// The rendered visible buffer (plain text, current geometry) for cross-launch
-    /// scrollback restore. Read on demand from the emulator at save time.
-    var renderedBuffer: Data { getTerminal().getBufferAsData() }
+    /// The full buffer (scrollback + screen) serialized WITH colors and styles,
+    /// for cross-launch scrollback restore. Read on demand at save time. Returns
+    /// empty while a full-screen app owns the alternate screen (see
+    /// `serializeColored`), so callers should keep the prior snapshot in that case.
+    var renderedBuffer: Data { getTerminal().serializeColored() }
 
     override func dataReceived(slice: ArraySlice<UInt8>) {
         super.dataReceived(slice: slice)

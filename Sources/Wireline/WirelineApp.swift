@@ -52,7 +52,12 @@ struct WirelineApp: App {
                     // Reconnect enabled MCP servers so their tools are available to the AI.
                     await MCPStore.shared.connectEnabled()
                     // Float the desktop pet on launch (unless the user disabled it).
+                    // It grabs key status when opened, so re-assert terminal focus
+                    // afterwards — otherwise a restored session starts unfocused.
                     if AIConfig.shared.petEnabled { openWindow(id: "pet") }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [sessions] in
+                        sessions.focusActiveTerminal()
+                    }
                     // System-wide hotkeys: summon the pet / Quick Connect from any
                     // app. The Carbon handler activates us, then these post the UI.
                     GlobalHotKeys.shared.start([
