@@ -34,7 +34,8 @@ struct AIPanelView: View {
     @State private var dangerReview = ""                 // AI impact assessment for it
     @State private var pendingMCP: PendingMCPCall?       // MCP tool call awaiting confirmation
     @State private var pendingTransfer: PendingTransfer? // file upload/download awaiting confirmation
-    @FocusState private var inputFocused: Bool
+    // Owned by RightPanel so ⌘I / tab switches can query and re-assert focus.
+    @FocusState.Binding var inputFocused: Bool
 
     private let maxAgentSteps = 8
     private let mcpResultCap = 4000                      // chars of tool output fed back
@@ -271,11 +272,24 @@ struct AIPanelView: View {
             .onChange(of: streaming) { stickToBottom(proxy) }
             .onChange(of: messages.count) { stickToBottom(proxy) }
             .onChange(of: errorText) { stickToBottom(proxy) }
-            .onAppear { stickToBottom(proxy) }
+            .onChange(of: conversationKey) {
+                // Switched to another host's conversation: land at the bottom
+                // instantly (after loadConvo swaps the messages in) so switching
+                // back never replays the top→bottom scroll animation.
+                DispatchQueue.main.async { proxy.scrollTo("bottom", anchor: .bottom) }
+            }
+            .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
         }
     }
 
     private func stickToBottom(_ proxy: ScrollViewProxy) {
+        // Animate the stick only while a reply is actively streaming in — that's
+        // the only case where the smooth follow reads well. On reloads / switches
+        // isStreaming is false, so we snap to the bottom with no visible scroll.
+        guard isStreaming else {
+            proxy.scrollTo("bottom", anchor: .bottom)
+            return
+        }
         withAnimation(.easeOut(duration: 0.12)) { proxy.scrollTo("bottom", anchor: .bottom) }
     }
 

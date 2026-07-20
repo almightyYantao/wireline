@@ -58,6 +58,10 @@ struct TerminalHostView: NSViewRepresentable {
         term.installColors(theme.ansiTermColors)
         term.nativeForegroundColor = theme.foregroundNS
         term.caretColor = theme.cursorNS
+        // The IME composition overlay can't use the (clear) native background, so
+        // give it the theme's real, opaque background to sit on. See
+        // WirelineTerminalView.restyleMarkedTextOverlay.
+        term.markedTextBackground = theme.backgroundNS
 
         // Font.
         if let name = store.terminalFontName, let f = NSFont(name: name, size: store.terminalFontSize) {

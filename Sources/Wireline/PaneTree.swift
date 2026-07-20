@@ -135,20 +135,23 @@ func paneEdge(for point: CGPoint, in size: CGSize) -> PaneEdge {
 /// axis with a divider; leaves render a terminal pane.
 struct PaneTreeView: View {
     let node: PaneNode
+    /// When the AI panel is open, panes don't auto-grab first responder so focus
+    /// can stay in the AI input across pane switches.
+    var aiOpen: Bool = false
 
     var body: some View {
         switch node {
         case .leaf(let paneID, let session):
-            PaneLeafView(paneID: paneID, sessionID: session)
+            PaneLeafView(paneID: paneID, sessionID: session, aiOpen: aiOpen)
         case .branch(_, let axis, let first, let second):
             let layout = axis == .vertical
                 ? AnyLayout(VStackLayout(spacing: 0)) : AnyLayout(HStackLayout(spacing: 0))
             layout {
-                PaneTreeView(node: first)
+                PaneTreeView(node: first, aiOpen: aiOpen)
                 Rectangle().fill(WL.border)
                     .frame(width: axis == .horizontal ? 1 : nil,
                            height: axis == .vertical ? 1 : nil)
-                PaneTreeView(node: second)
+                PaneTreeView(node: second, aiOpen: aiOpen)
             }
         }
     }
@@ -161,6 +164,7 @@ struct PaneLeafView: View {
     @Environment(Localizer.self) private var loc
     let paneID: UUID
     let sessionID: UUID
+    var aiOpen: Bool = false
     @State private var targeted = false
     // Measured via a background reader so it never distorts the pane's layout.
     // A GeometryReader in the layout path gives the terminal an unstable size,
@@ -174,7 +178,7 @@ struct PaneLeafView: View {
             VStack(spacing: 0) {
                 header(session)
                 Rectangle().fill(WL.border).frame(height: 1)
-                TerminalHostView(session: session, autoFocus: focused).id(session.id)
+                TerminalHostView(session: session, autoFocus: focused && !aiOpen).id(session.id)
                     .overlay(alignment: .topTrailing) {
                         if session.activeEditor == "vim" { VimHintView() }
                     }

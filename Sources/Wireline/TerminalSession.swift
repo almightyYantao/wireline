@@ -60,6 +60,13 @@ final class WirelineTerminalView: LocalProcessTerminalView {
     /// prompt, so the initial connect/login phase doesn't count as a "run".
     var onBusyChange: ((Bool, TimeInterval) -> Void)?
 
+    /// Opaque background for the IME marked-text (composition) overlay. SwiftTerm
+    /// styles that floating preview with `nativeBackgroundColor`, but we force the
+    /// terminal's native background to `.clear` for wallpaper translucency — and
+    /// `.clear` faded to 0.9 alpha renders as an ugly opaque black box. So we hand
+    /// the overlay a real, opaque theme color instead. Set from the active theme.
+    var markedTextBackground: NSColor = NSColor(srgbRed: 0.11, green: 0.12, blue: 0.14, alpha: 1)
+
     // Session logging: append ANSI-stripped output to a file while active.
     private var logHandle: FileHandle?
 
@@ -136,6 +143,27 @@ final class WirelineTerminalView: LocalProcessTerminalView {
             return true
         }
         return super.performKeyEquivalent(with: event)
+    }
+
+    /// SwiftTerm draws the IME composition preview as a floating `NSTextField`
+    /// whose background is `nativeBackgroundColor.withAlphaComponent(0.9)`. Since
+    /// we keep the native background `.clear` for translucency, that resolves to a
+    /// solid black box. Re-skin the overlay with an opaque theme color and a subtle
+    /// rounded border so composing text (e.g. Pinyin) reads as an intentional pill.
+    override func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
+        super.setMarkedText(string, selectedRange: selectedRange, replacementRange: replacementRange)
+        restyleMarkedTextOverlay()
+    }
+
+    private func restyleMarkedTextOverlay() {
+        for case let field as NSTextField in subviews where field.drawsBackground {
+            field.backgroundColor = markedTextBackground
+            field.wantsLayer = true
+            field.layer?.backgroundColor = markedTextBackground.cgColor
+            field.layer?.cornerRadius = 4
+            field.layer?.borderWidth = 1
+            field.layer?.borderColor = NSColor.white.withAlphaComponent(0.14).cgColor
+        }
     }
 
     /// A rolling, ANSI-stripped tail of recent terminal output, for AI context.

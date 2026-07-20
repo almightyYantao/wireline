@@ -18,6 +18,9 @@ struct RightPanel: View {
     var sidebarCollapsed: Bool = false
     @State private var ai = AIConfig.shared
     @State private var showAI = false
+    // Lifted out of AIPanelView so the ⌘I handler and tab switches can tell
+    // whether the panel currently holds keyboard focus, and grab it if not.
+    @FocusState private var aiFocused: Bool
     // Broadcast bar (type once → send to every session).
     @State private var showBroadcast = false
     @State private var broadcastText = ""
@@ -58,7 +61,25 @@ struct RightPanel: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(WL.bg.opacity(store.terminalOpacity * WL.chromeOpacity))
         .onReceive(NotificationCenter.default.publisher(for: .toggleAI)) { _ in
-            if ai.enabled { showAI.toggle() }
+            guard ai.enabled else { return }
+            if showAI {
+                // Open but not focused → just focus it (don't hide). Only hide
+                // when it already has focus, so ⌘I acts as "bring me to the AI".
+                if aiFocused {
+                    showAI = false
+                    sessions.focusActiveTerminal()
+                } else {
+                    aiFocused = true
+                }
+            } else {
+                showAI = true   // AIPanelView.onAppear takes focus on appear.
+            }
+        }
+        .onChange(of: sessions.activeID) { _, _ in
+            // Switching tab / pane while the AI panel is open keeps focus in the
+            // panel — the terminal is built with autoFocus off (see below), so it
+            // won't steal first responder, and we re-assert focus on the input.
+            if showAI { aiFocused = true }
         }
         .onReceive(NotificationCenter.default.publisher(for: .focusTerminal)) { _ in
             sessions.focusActiveTerminal()
@@ -92,7 +113,8 @@ struct RightPanel: View {
                 Rectangle().fill(WL.border).frame(width: 1)
                 AIPanelView(session: sessions.activeSession,
                             host: activeHost,
-                            onClose: { showAI = false })
+                            onClose: { showAI = false; sessions.focusActiveTerminal() },
+                            inputFocused: $aiFocused)
             }
         }
         // The AI panel opens only via its keyboard shortcut (Toggle AI Panel) or
@@ -118,12 +140,12 @@ struct RightPanel: View {
             }
             if let tab = sessions.activeTab, tab.sessionIDs.count > 1 {
                 // A merged tab: render its split layout.
-                PaneTreeView(node: tab)
+                PaneTreeView(node: tab, aiOpen: showAI)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let session = sessions.activeSession {
                 ConnectionInfoBar(session: session)
                 Rectangle().fill(WL.border).frame(height: 1)
-                TerminalHostView(session: session).id(session.id)
+                TerminalHostView(session: session, autoFocus: !showAI).id(session.id)
                     .overlay(alignment: .top) {
                         if showSearch { terminalSearchBar(session) }
                     }
