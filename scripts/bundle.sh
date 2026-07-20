@@ -54,8 +54,8 @@ cat > "${OUT}/Contents/Info.plist" <<PLIST
     <key>CFBundleExecutable</key><string>${APP_NAME}</string>
     <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>0.8.2</string>
-    <key>CFBundleVersion</key><string>10</string>
+    <key>CFBundleShortVersionString</key><string>0.8.3</string>
+    <key>CFBundleVersion</key><string>11</string>
     <key>LSMinimumSystemVersion</key><string>14.0</string>
     <key>NSPrincipalClass</key><string>NSApplication</string>
     <key>NSHighResolutionCapable</key><true/>
@@ -64,7 +64,7 @@ cat > "${OUT}/Contents/Info.plist" <<PLIST
     <key>SUFeedURL</key><string>https://almightyyantao.github.io/wireline/appcast.xml</string>
     <key>SUPublicEDKey</key><string>287T2lrvbuglzkTSFgQ7ROtOoxWT2EdBr+vdO82Xosc=</string>
     <key>SUEnableAutomaticChecks</key><true/>
-    <key>SUScheduledCheckInterval</key><integer>86400</integer>
+    <key>SUScheduledCheckInterval</key><integer>3600</integer>
     <!-- Uncomment to run as a menu-bar-only agent (no Dock icon):
     <key>LSUIElement</key><true/> -->
 </dict>
