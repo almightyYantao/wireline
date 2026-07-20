@@ -11,6 +11,7 @@ struct AIPanelView: View {
     @Environment(HostStore.self) private var store
     @Environment(SnippetStore.self) private var snippets
     @Environment(ForwardStore.self) private var forwards
+    @Environment(SessionStore.self) private var sessions
     @State private var ai = AIConfig.shared
     let session: TerminalSession?
     let host: Host?
@@ -45,6 +46,22 @@ struct AIPanelView: View {
     @State private var repeatStreak = 0
     private let maxTimeoutStreak = 2
     private let maxRepeatStreak = 2
+
+    // Scroll following: whether the transcript is pinned to the bottom (so new
+    // output follows) vs. the user has scrolled up to read history (so we leave
+    // them be). Derived from measured geometry — see `distanceFromBottom`.
+    @State private var atBottom = true
+    @State private var viewportH: CGFloat = 0
+    @State private var contentH: CGFloat = 0
+    @State private var contentTopY: CGFloat = 0
+    /// Bumped when the user sends a turn, to force the view back to the bottom
+    /// even if they'd scrolled up.
+    @State private var forceStickToken = 0
+    /// How close (pt) to the bottom still counts as "following".
+    private static let stickThreshold: CGFloat = 40
+    /// Distance in points from the current viewport bottom to the content bottom
+    /// (0 when pinned to the bottom, grows as you scroll up).
+    private var distanceFromBottom: CGFloat { contentH + contentTopY - viewportH }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -248,13 +265,13 @@ struct AIPanelView: View {
                         emptyState
                     }
                     ForEach(messages) { msg in
-                        MessageBubble(message: msg, session: session, loc: loc,
+                        MessageBubble(message: msg, session: session, runTargets: runTargets, loc: loc,
                                       fontSize: ai.fontSize, onSave: saveAsSnippet, onAction: executeAction,
                                       onCopy: copyToClipboard, onRetry: retryUserMessage)
                     }
                     if isStreaming || !streaming.isEmpty {
                         MessageBubble(message: AIMessage(role: .assistant, content: streaming.isEmpty ? "…" : streaming),
-                                      session: session, loc: loc, fontSize: ai.fontSize,
+                                      session: session, runTargets: runTargets, loc: loc, fontSize: ai.fontSize,
                                       onSave: saveAsSnippet, onAction: { _ in })
                             .id("streaming")
                     }
@@ -268,29 +285,87 @@ struct AIPanelView: View {
                     Color.clear.frame(height: 1).id("bottom")
                 }
                 .padding(12)
+                // Measure the content: its total height, and where its top sits in
+                // the viewport. Growth changes only the height (top stays put), so
+                // we can tell "new output arrived" from "the user scrolled".
+                .background(GeometryReader { g in
+                    Color.clear
+                        .preference(key: ContentHeightKey.self, value: g.size.height)
+                        .preference(key: ContentTopKey.self, value: g.frame(in: .named("conv")).minY)
+                })
             }
-            .onChange(of: streaming) { stickToBottom(proxy) }
-            .onChange(of: messages.count) { stickToBottom(proxy) }
-            .onChange(of: errorText) { stickToBottom(proxy) }
-            .onChange(of: conversationKey) {
-                // Switched to another host's conversation: land at the bottom
-                // instantly (after loadConvo swaps the messages in) so switching
-                // back never replays the top→bottom scroll animation.
-                DispatchQueue.main.async { proxy.scrollTo("bottom", anchor: .bottom) }
+            .coordinateSpace(name: "conv")
+            .background(GeometryReader { g in
+                Color.clear.preference(key: ViewportHeightKey.self, value: g.size.height)
+            })
+            // Reliable content-change triggers drive the actual follow — these
+            // always fire, unlike a background GeometryReader's height preference.
+            // Follow only if the user is still pinned to the bottom.
+            .onChange(of: streaming) { followIfPinned(proxy) }
+            .onChange(of: messages.count) { followIfPinned(proxy) }
+            .onChange(of: errorText) { followIfPinned(proxy) }
+            // The user sent a turn, switched conversation, or just appeared: always
+            // snap back to the bottom to follow.
+            .onChange(of: forceStickToken) { snapToBottom(proxy) }
+            .onChange(of: conversationKey) { snapToBottom(proxy) }
+            .onAppear { snapToBottom(proxy) }
+            // Geometry probes: keep the measured sizes current, and detect a real
+            // user scroll-up by the *direction* the content top moves. Content
+            // growth moves only the height (top stays), so it never trips this;
+            // and we never latch to "scrolled up" off a stale distance.
+            .onPreferenceChange(ViewportHeightKey.self) { viewportH = $0 }
+            .onPreferenceChange(ContentHeightKey.self) { contentH = $0 }
+            .onPreferenceChange(ContentTopKey.self) { y in
+                let movedDown = y > contentTopY + 0.5   // content slid down = user scrolled up
+                contentTopY = y
+                guard viewportH > 0 else { return }
+                if distanceFromBottom <= Self.stickThreshold {
+                    atBottom = true             // at/near the bottom → keep following
+                } else if movedDown {
+                    atBottom = false            // pulled up into history → stop following
+                }
             }
-            .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
+            // "Jump to bottom" affordance — only while the user is scrolled up.
+            .overlay(alignment: .bottomTrailing) {
+                if !atBottom { jumpToBottomButton(proxy) }
+            }
         }
     }
 
-    private func stickToBottom(_ proxy: ScrollViewProxy) {
-        // Animate the stick only while a reply is actively streaming in — that's
-        // the only case where the smooth follow reads well. On reloads / switches
-        // isStreaming is false, so we snap to the bottom with no visible scroll.
-        guard isStreaming else {
-            proxy.scrollTo("bottom", anchor: .bottom)
-            return
+    /// Follow new output to the bottom, but only while the user is pinned there.
+    /// Deferred one runloop tick so SwiftUI finishes laying out the freshly grown
+    /// content (a completed code fence, a big command-output message) before we
+    /// compute the bottom offset — otherwise we'd land mid-content.
+    private func followIfPinned(_ proxy: ScrollViewProxy) {
+        guard atBottom else { return }
+        DispatchQueue.main.async { proxy.scrollTo("bottom", anchor: .bottom) }
+    }
+
+    /// Force the transcript back to the bottom (user sent a turn / switched / first
+    /// appeared) and resume following, regardless of where they'd scrolled.
+    private func snapToBottom(_ proxy: ScrollViewProxy) {
+        atBottom = true
+        DispatchQueue.main.async { proxy.scrollTo("bottom", anchor: .bottom) }
+    }
+
+    private func jumpToBottomButton(_ proxy: ScrollViewProxy) -> some View {
+        Button {
+            atBottom = true
+            withAnimation(.easeOut(duration: 0.18)) { proxy.scrollTo("bottom", anchor: .bottom) }
+        } label: {
+            Image(systemName: isStreaming ? "arrow.down.circle.fill" : "arrow.down")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(WL.bg)
+                .frame(width: 28, height: 28)
+                .background(WL.green, in: Circle())
+                .overlay(Circle().stroke(WL.bg.opacity(0.25), lineWidth: 1))
+                .shadow(color: .black.opacity(0.3), radius: 4, y: 1)
         }
-        withAnimation(.easeOut(duration: 0.12)) { proxy.scrollTo("bottom", anchor: .bottom) }
+        .buttonStyle(.plain)
+        .help(loc("回到底部", "Jump to bottom"))
+        .padding(.trailing, 14)
+        .padding(.bottom, 12)
+        .transition(.opacity.combined(with: .scale(scale: 0.8)))
     }
 
     private var emptyState: some View {
@@ -306,9 +381,14 @@ struct AIPanelView: View {
                 Text(loc("生成的命令会以代码块给出，点「插入 / 运行」由你决定执行。",
                         "Commands come as code blocks — Insert or Run as you decide."))
                     .font(WL.caption).foregroundStyle(WL.textDim)
-                Text(loc("可用 @输出 引用终端输出、@主机 引用主机信息、@历史 引用命令历史。",
-                        "Use @output, @host, or @history to inject that context."))
+                Text(loc("可用 @输出 引用终端输出、@主机 引用主机信息、@历史 引用命令历史、@别名 引用其他已连主机的输出。",
+                        "Use @output, @host, @history, or @<alias> to inject that context."))
                     .font(WL.caption).foregroundStyle(WL.textDim)
+                if runTargets.count > 1 {
+                    Text(loc("已连接多台主机——命令代码块的「运行 ▾」可选择在哪台执行。",
+                            "Multiple hosts connected — a command's Run ▾ menu lets you pick which one."))
+                        .font(WL.caption).foregroundStyle(WL.textDim)
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -346,6 +426,15 @@ struct AIPanelView: View {
     /// Conversation key: each host keeps its own history; local shells share one.
     private var conversationKey: String { host?.alias ?? "__local__" }
 
+    /// Connected sessions the AI can run a proposed command on — the active one
+    /// first. Lets one conversation drive multiple hosts, with manual per-command
+    /// targeting via the Run menu.
+    private var runTargets: [TerminalSession] {
+        let connected = sessions.sessions.filter(\.isRunning)
+        guard let active = session else { return connected }
+        return [active] + connected.filter { $0.id != active.id }
+    }
+
     private func loadConvo() {
         // Save the previous conversation before switching.
         if let loadedKey, loadedKey != conversationKey {
@@ -381,6 +470,16 @@ struct AIPanelView: View {
             out = out.replacingOccurrences(of: #"@(主机|host)"#,
                                            with: "\n\n[当前主机] " + info,
                                            options: .regularExpression)
+        }
+        // @<别名>: pull another connected host's recent output into context, so one
+        // conversation can reason across hosts. Longest aliases first so `@web` in a
+        // message can't shadow `@web1`.
+        for s in sessions.sessions.filter(\.isRunning).sorted(by: { $0.alias.count > $1.alias.count }) {
+            let token = "@" + s.alias
+            guard !s.alias.isEmpty, out.contains(token) else { continue }
+            let clean = String(s.recentOutput.suffix(3000))
+            let body = ai.redact ? AIRedactor.redact(clean) : clean
+            out = out.replacingOccurrences(of: token, with: "\n\n[主机 \(s.alias) 最近输出]\n" + body)
         }
         return out
     }
@@ -565,6 +664,9 @@ struct AIPanelView: View {
         agentSteps = 0
         timeoutStreak = 0; repeatStreak = 0; lastAgentCmd = nil
         messages.append(AIMessage(role: .user, content: userVisible))
+        // Sending a turn always snaps the transcript back to the bottom to follow
+        // the reply, even if the user had scrolled up in the previous answer.
+        forceStickToken += 1
     }
 
     private func startTurn() {
@@ -867,15 +969,42 @@ struct AIPanelView: View {
         } else {
             ctx += "\n当前是本地 shell（macOS）。"
         }
+        // Multi-host: list the other connected sessions so the assistant knows it
+        // can reason across them. Command execution is targeted manually by the
+        // user (the Run button offers a per-host menu), so proposed commands should
+        // note which host they're meant for when it isn't the current one.
+        let others = sessions.sessions.filter { $0.isRunning && $0.alias != host?.alias && !$0.alias.isEmpty }
+        if !others.isEmpty {
+            ctx += "\n另外还连接着这些主机（用户可用 @别名 引用其输出，并在“运行”菜单里选择在哪台执行）："
+            ctx += others.map(\.alias).joined(separator: "、")
+            ctx += "。跨主机操作时，请在命令说明里点明目标主机。"
+        }
         return ctx
     }
 }
 
 /// One chat message. Assistant messages are split into prose + fenced code
 /// blocks; each code block gets an "insert into terminal" button.
+// Geometry probes for scroll-follow tracking in the conversation view.
+private struct ContentHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+private struct ContentTopKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+private struct ViewportHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
 private struct MessageBubble: View {
     let message: AIMessage
     let session: TerminalSession?
+    /// Connected sessions a proposed command can be run on (active first). When
+    /// more than one, the Run button becomes a per-host menu.
+    var runTargets: [TerminalSession] = []
     let loc: Localizer
     let fontSize: Double
     var onSave: (String) -> Void = { _ in }
@@ -945,9 +1074,22 @@ private struct MessageBubble: View {
             HStack(spacing: 12) {
                 Spacer()
                 BracketButton(loc.t("存片段", "Save")) { onSave(cmd) }
-                if session != nil {
-                    BracketButton(loc.t("插入", "Insert")) { session?.insertIntoTerminal(cmd) }
-                    BracketButton(loc.t("运行", "Run")) { session?.runInTerminal(cmd) }
+                if let session {
+                    BracketButton(loc.t("插入", "Insert")) { session.insertIntoTerminal(cmd) }
+                    if runTargets.count > 1 {
+                        // Multiple hosts connected: pick which one to run on.
+                        Menu {
+                            ForEach(runTargets) { t in
+                                Button(t.title) { t.runInTerminal(cmd) }
+                            }
+                        } label: {
+                            Text("[\(loc.t("运行", "Run")) ▾]").font(WL.small).foregroundStyle(WL.textDim)
+                        }
+                        .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
+                        .help(loc.t("选择要运行的主机", "Choose a host to run on"))
+                    } else {
+                        BracketButton(loc.t("运行", "Run")) { session.runInTerminal(cmd) }
+                    }
                 }
             }
         }

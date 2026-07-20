@@ -1,5 +1,6 @@
 import SwiftUI
 import WirelineCore
+import struct SwiftTerm.SearchOptions
 
 /// The right side: batch/forwarding tools when an operation is selected,
 /// otherwise the terminal session area (tabs · connection info · terminal ·
@@ -30,6 +31,8 @@ struct RightPanel: View {
     @State private var searchTerm = ""
     @State private var matchIndex = 0
     @State private var matchTotal = 0
+    @State private var searchCaseSensitive = false
+    @State private var searchRegex = false
     @FocusState private var searchFocused: Bool
     // Highlight the single-session terminal while a tab is dragged over it.
     @State private var dropTargeted = false
@@ -115,6 +118,13 @@ struct RightPanel: View {
                             host: activeHost,
                             onClose: { showAI = false; sessions.focusActiveTerminal() },
                             inputFocused: $aiFocused)
+                    // Bind the panel's identity to the conversation (per host; all
+                    // local shells share "__local__"). Switching to a *different*
+                    // host rebuilds the panel — its onDisappear cancels any in-flight
+                    // stream and persists to the right conversation — so a streaming
+                    // reply can never bleed into, or be saved under, another host.
+                    // Two tabs of the same host keep one instance (shared convo).
+                    .id(activeHost?.alias ?? "__local__")
             }
         }
         // The AI panel opens only via its keyboard shortcut (Toggle AI Panel) or
@@ -232,23 +242,50 @@ struct RightPanel: View {
 
     // MARK: - Terminal search
 
+    private var searchOptions: SearchOptions {
+        SearchOptions(caseSensitive: searchCaseSensitive, regex: searchRegex)
+    }
+
     private func terminalSearchBar(_ session: TerminalSession) -> some View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass").font(WL.small).foregroundStyle(WL.textDim)
             TextField(loc("搜索终端…", "Search terminal…"), text: $searchTerm)
                 .textFieldStyle(.plain).font(WL.small).foregroundStyle(WL.textPrimary)
-                .frame(width: 200).focused($searchFocused)
-                .onSubmit { runFind(session, forward: true) }
-                .onChange(of: searchTerm) { updateSummary(session) }
-            Text(matchTotal > 0 ? "\(matchIndex)/\(matchTotal)" : loc("无匹配", "no match"))
-                .font(WL.caption).foregroundStyle(WL.textDim)
+                .frame(width: 170).focused($searchFocused)
+                // Incremental: jump to the nearest match as you type.
+                .onChange(of: searchTerm) { incrementalFind(session) }
+                // Return = next, Shift+Return = previous.
+                .onKeyPress(phases: .down) { press in
+                    guard press.key == .return else { return .ignored }
+                    runFind(session, forward: !press.modifiers.contains(.shift))
+                    return .handled
+                }
+            // Match counter — blank while empty, red on no match.
+            Group {
+                if searchTerm.isEmpty {
+                    EmptyView()
+                } else if matchTotal > 0 {
+                    Text("\(matchIndex)/\(matchTotal)").font(WL.caption).foregroundStyle(WL.textDim)
+                } else {
+                    Text(loc("无匹配", "no match")).font(WL.caption).foregroundStyle(WL.red.opacity(0.85))
+                }
+            }
+            .frame(minWidth: 34, alignment: .trailing)
+            searchOptionToggle("Aa", isOn: $searchCaseSensitive,
+                               help: loc("区分大小写", "Case sensitive"), session: session)
+            searchOptionToggle(".*", isOn: $searchRegex,
+                               help: loc("正则表达式", "Regular expression"), session: session)
+            Divider().frame(height: 14)
             Button { runFind(session, forward: false) } label: {
                 Image(systemName: "chevron.up").font(WL.small)
-            }.buttonStyle(.plain)
+            }.buttonStyle(.plain).disabled(matchTotal == 0)
+                .help(loc("上一个 (⇧⏎)", "Previous (⇧⏎)"))
             Button { runFind(session, forward: true) } label: {
                 Image(systemName: "chevron.down").font(WL.small)
-            }.buttonStyle(.plain)
-            Button(action: closeSearch) { Image(systemName: "xmark").font(WL.small) }.buttonStyle(.plain)
+            }.buttonStyle(.plain).disabled(matchTotal == 0)
+                .help(loc("下一个 (⏎)", "Next (⏎)"))
+            Button(action: closeSearch) { Image(systemName: "xmark").font(WL.small) }
+                .buttonStyle(.plain).help(loc("关闭 (Esc)", "Close (Esc)"))
         }
         .foregroundStyle(WL.textDim)
         .padding(.horizontal, 10).padding(.vertical, 6)
@@ -258,19 +295,52 @@ struct RightPanel: View {
         .onExitCommand(perform: closeSearch)
     }
 
+    /// A small "Aa" / ".*" chip that lights up green when its search option is on.
+    private func searchOptionToggle(_ label: String, isOn: Binding<Bool>,
+                                    help: String, session: TerminalSession) -> some View {
+        Button {
+            isOn.wrappedValue.toggle()
+            incrementalFind(session)
+        } label: {
+            Text(label)
+                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                .foregroundStyle(isOn.wrappedValue ? WL.bg : WL.textDim)
+                .frame(width: 22, height: 17)
+                .background(isOn.wrappedValue ? WL.green : Color.clear,
+                            in: RoundedRectangle(cornerRadius: 4))
+                .overlay(RoundedRectangle(cornerRadius: 4)
+                    .stroke(isOn.wrappedValue ? Color.clear : WL.border, lineWidth: WL.borderWidth))
+        }
+        .buttonStyle(.plain)
+        .help(help)
+    }
+
     private func runFind(_ session: TerminalSession, forward: Bool) {
         guard !searchTerm.isEmpty else { return }
-        if forward { session.terminalView.findNext(searchTerm) }
-        else { session.terminalView.findPrevious(searchTerm) }
+        if forward { session.terminalView.findNext(searchTerm, options: searchOptions) }
+        else { session.terminalView.findPrevious(searchTerm, options: searchOptions) }
+        updateSummary(session)
+    }
+
+    /// Re-run the search from the top as the term or options change, so the
+    /// selection and counter update live without pressing Return.
+    private func incrementalFind(_ session: TerminalSession) {
+        guard !searchTerm.isEmpty else {
+            session.terminalView.clearSearch()
+            matchIndex = 0; matchTotal = 0
+            return
+        }
+        _ = session.terminalView.findNext(searchTerm, options: searchOptions)
         updateSummary(session)
     }
 
     private func updateSummary(_ session: TerminalSession) {
-        let r = session.terminalView.searchMatchSummary(searchTerm)
+        let r = session.terminalView.searchMatchSummary(searchTerm, options: searchOptions)
         matchIndex = r.index; matchTotal = r.total
     }
 
     private func closeSearch() {
+        sessions.activeSession?.terminalView.clearSearch()
         showSearch = false
         searchTerm = ""
         matchIndex = 0; matchTotal = 0
@@ -333,6 +403,11 @@ struct SessionTab: View {
     private var running: Bool {
         tab.sessionIDs.contains { sessions.session($0)?.isBusy == true }
     }
+    /// True when this (non-active) tab produced output you haven't seen yet — shows
+    /// a small "new output" dot. The running badge takes precedence over it.
+    private var unread: Bool {
+        tab.sessionIDs.contains { sessions.session($0)?.hasUnread == true }
+    }
 
     var body: some View {
         HStack(spacing: 8) {
@@ -355,6 +430,8 @@ struct SessionTab: View {
             }
             if !isActive && running {
                 RunningBadge()
+            } else if !isActive && unread {
+                UnreadDot()
             }
             Button { closeTab() } label: {
                 Text("[x]").font(WL.small)
@@ -401,6 +478,56 @@ struct SessionTab: View {
 
 /// A small pulsing "running…" badge shown on a backgrounded tab whose session is
 /// still busy, so long jobs (a build, an AI CLI) are visible at a glance.
+/// Animated connection-state indicator: a dot that pulses amber while dialing,
+/// settles to a softly-glowing green when connected, and turns red on disconnect.
+struct ConnectionStatusDot: View {
+    let state: ConnectionState
+    @State private var pulse = false
+
+    private var color: Color {
+        switch state {
+        case .connecting:   return WL.amber
+        case .connected:    return WL.green
+        case .disconnected: return WL.red
+        }
+    }
+
+    var body: some View {
+        Circle().fill(color).frame(width: 8, height: 8)
+            .opacity(state == .connecting && pulse ? 0.25 : 1)
+            .shadow(color: color.opacity(0.7), radius: state == .connected ? 3 : 0)
+            .animation(.easeInOut(duration: 0.3), value: state)
+            .onAppear { startPulseIfConnecting() }
+            .onChange(of: state) { _, _ in pulse = false; startPulseIfConnecting() }
+            .help(label)
+    }
+
+    private var label: String {
+        let l = Localizer.shared
+        switch state {
+        case .connecting:   return l.t("连接中…", "Connecting…")
+        case .connected:    return l.t("已连接", "Connected")
+        case .disconnected: return l.t("已断开", "Disconnected")
+        }
+    }
+
+    private func startPulseIfConnecting() {
+        guard state == .connecting else { return }
+        withAnimation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true)) { pulse = true }
+    }
+}
+
+/// A small green dot marking a backgrounded tab that has produced output you
+/// haven't looked at yet.
+struct UnreadDot: View {
+    var body: some View {
+        Circle().fill(WL.green).frame(width: 6, height: 6)
+            .overlay(Circle().stroke(WL.bg.opacity(0.4), lineWidth: 1))
+            .help(Localizer.shared.t("有新输出", "New output"))
+            .transition(.scale.combined(with: .opacity))
+    }
+}
+
 struct RunningBadge: View {
     @Environment(Localizer.self) private var loc
     @State private var pulse = false
@@ -433,7 +560,10 @@ struct ConnectionInfoBar: View {
 
     var body: some View {
         HStack(spacing: 18) {
-            Text(endpoint).font(WL.body).foregroundStyle(WL.greenBright)
+            HStack(spacing: 8) {
+                ConnectionStatusDot(state: session.connectionState)
+                Text(endpoint).font(WL.body).foregroundStyle(endpointColor)
+            }
             if let host {
                 info(loc("端口", "Port"), String(host.effectivePort))
             }
@@ -484,6 +614,14 @@ struct ConnectionInfoBar: View {
         return alias
     }
 
+    private var endpointColor: Color {
+        switch session.connectionState {
+        case .connecting:   return WL.amber
+        case .connected:    return WL.greenBright
+        case .disconnected: return WL.textDim
+        }
+    }
+
     private var latency: String {
         if case .online(let ms)? = store.statuses[session.alias] { return "\(ms)ms" }
         return "--"
@@ -508,7 +646,7 @@ struct StatusBar: View {
         let stats = session.stats.stats
         TimelineView(.periodic(from: .now, by: 1)) { ctx in
             HStack(spacing: 16) {
-                Text(session.isRunning ? "[\(loc("已连接", "connected"))]" : "[\(loc("已断开", "disconnected"))]").font(WL.small).bold()
+                Text("[\(connLabel)]").font(WL.small).bold()
                 Text("SSH-2").font(WL.small)
                 if isSSH {
                     metric("CPU", stats.cpuPercent.map { String(format: "%.0f%%", $0) })
@@ -523,7 +661,26 @@ struct StatusBar: View {
             }
             .foregroundStyle(WL.bg)
             .padding(.horizontal, 18).padding(.vertical, 5)
-            .background(WL.green)
+            .background(barColor)
+            .animation(.easeInOut(duration: 0.3), value: session.connectionState)
+        }
+    }
+
+    private var connLabel: String {
+        switch session.connectionState {
+        case .connecting:   return loc("连接中…", "connecting…")
+        case .connected:    return loc("已连接", "connected")
+        case .disconnected: return loc("已断开", "disconnected")
+        }
+    }
+
+    /// The status bar tints itself by connection state — green connected, amber
+    /// while dialing, muted red once the link is gone.
+    private var barColor: Color {
+        switch session.connectionState {
+        case .connecting:   return WL.amber
+        case .connected:    return WL.green
+        case .disconnected: return WL.red.opacity(0.85)
         }
     }
 

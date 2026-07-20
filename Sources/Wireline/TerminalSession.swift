@@ -60,6 +60,17 @@ final class WirelineTerminalView: LocalProcessTerminalView {
     /// prompt, so the initial connect/login phase doesn't count as a "run".
     var onBusyChange: ((Bool, TimeInterval) -> Void)?
 
+    /// Called on every chunk of output, so a backgrounded tab can flag that it has
+    /// unread output. Kept lightweight — the session decides whether it matters.
+    var onOutput: (() -> Void)?
+
+    /// Fired once when the first byte arrives from the host — i.e. the connection
+    /// is live and the server is responding (dialing → connected).
+    var onConnected: (() -> Void)?
+    /// Fired when the underlying process exits (ssh dropped, logout, killed).
+    var onDisconnected: ((Int32?) -> Void)?
+    private var hasConnected = false
+
     /// Opaque background for the IME marked-text (composition) overlay. SwiftTerm
     /// styles that floating preview with `nativeBackgroundColor`, but we force the
     /// terminal's native background to `.clear` for wallpaper translucency — and
@@ -148,6 +159,80 @@ final class WirelineTerminalView: LocalProcessTerminalView {
         return super.performKeyEquivalent(with: event)
     }
 
+    /// Tame the overlay scrollbar during streaming output.
+    ///
+    /// SwiftTerm refreshes its overlay `NSScroller` on *every* line the engine
+    /// scrolls (`Terminal.scroll()` → `scrolled(source:yDisp:)` → `updateScroller()`).
+    /// That per-line churn is what made the scrollbar misbehave: pinned to the
+    /// bottom, the auto-hiding overlay kept flashing back in and the knob shook as
+    /// the position briefly lagged the bottom; scrolled up into history, the knob
+    /// jittered as the scrollback grew underneath the fixed viewport.
+    ///
+    /// So we don't refresh the scroller from this streaming callback at all — we
+    /// just forward the position to any observer. The scroller still refreshes
+    /// accurately where it matters: a wheel/drag scroll goes through `scrollTo`
+    /// (which calls `updateScroller` and reveals the overlay), and resize /
+    /// buffer-switch refresh it too. The net effect is a scrollbar that's calm
+    /// during output and correct the moment you interact with it.
+    override func scrolled(source terminal: Terminal, yDisp: Int) {
+        terminalDelegate?.scrolled(source: self, position: scrollPosition)
+        customScrollbar?.reflectScroll()
+    }
+
+    /// The view→app scroll callback — fired both by the engine forward above and by
+    /// `scrollTo` (user wheel/drag). A single place to refresh our custom scrollbar.
+    override func scrolled(source: TerminalView, position: Double) {
+        super.scrolled(source: source, position: position)
+        customScrollbar?.reflectScroll()
+    }
+
+    // MARK: - Custom scrollbar
+
+    /// SwiftTerm's built-in overlay `NSScroller` (hidden — we draw our own).
+    private weak var nativeScroller: NSScroller?
+    private var customScrollbar: TerminalScrollbar?
+
+    /// Hide SwiftTerm's scroller and float a themed one that matches the app: a
+    /// thin rounded green thumb that widens on hover, is draggable, and fades away
+    /// while you're following the bottom.
+    private func setupCustomScrollbar() {
+        guard customScrollbar == nil else { return }
+        if nativeScroller == nil {
+            nativeScroller = subviews.compactMap { $0 as? NSScroller }.first
+        }
+        nativeScroller?.isHidden = true
+        let bar = TerminalScrollbar(frame: scrollbarFrame())
+        bar.term = self
+        bar.autoresizingMask = [.minXMargin, .height]
+        addSubview(bar, positioned: .above, relativeTo: nil)
+        customScrollbar = bar
+    }
+
+    private func scrollbarFrame() -> CGRect {
+        let w: CGFloat = 16
+        return CGRect(x: bounds.maxX - w, y: 0, width: w, height: bounds.height)
+    }
+
+    override func layout() {
+        super.layout()
+        // Keep SwiftTerm's scroller hidden even if it re-appears after a relayout,
+        // and keep our bar pinned to the right edge.
+        nativeScroller?.isHidden = true
+        customScrollbar?.frame = scrollbarFrame()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        setupCustomScrollbar()
+    }
+
+    /// The child process (ssh / shell) exited — the connection is gone. Let the
+    /// session flip its state so the UI can show "disconnected".
+    override func processTerminated(_ source: LocalProcess, exitCode: Int32?) {
+        super.processTerminated(source, exitCode: exitCode)
+        onDisconnected?(exitCode)
+    }
+
     /// SwiftTerm draws the IME composition preview as a floating `NSTextField`
     /// whose background is `nativeBackgroundColor.withAlphaComponent(0.9)`. Since
     /// we keep the native background `.clear` for translucency, that resolves to a
@@ -186,6 +271,8 @@ final class WirelineTerminalView: LocalProcessTerminalView {
         recentClean += clean
         if recentClean.count > 20000 { recentClean = String(recentClean.suffix(20000)) }
         if let logHandle { logHandle.write(Data(clean.utf8)) }
+        onOutput?()
+        if !hasConnected { hasConnected = true; onConnected?() }
 
         // Command-finished heuristic (output only): track the prompt→output→prompt
         // cycle. Leaving the prompt = a command started; the prompt returning =
@@ -395,5 +482,156 @@ final class WirelineTerminalView: LocalProcessTerminalView {
     private func isShellPrompt(_ line: String) -> Bool {
         let t = line.trimmingCharacters(in: .whitespaces)
         return t.hasSuffix("$") || t.hasSuffix("#") || t.hasSuffix("%") || t.hasSuffix("❯") || t.hasSuffix(">")
+    }
+}
+
+/// A themed, self-drawn overlay scrollbar for the terminal, replacing SwiftTerm's
+/// native `NSScroller`. A thin rounded green thumb that:
+///  - stays hidden while you're following the bottom (no streaming jitter),
+///  - reveals on scroll / hover and fades out again shortly after,
+///  - widens on hover, and is draggable / click-to-jump.
+///
+/// It reads the terminal's public `scrollPosition` / `scrollThumbsize` / `canScroll`
+/// and drives scrolling via `scroll(toPosition:)`.
+final class TerminalScrollbar: NSView {
+    weak var term: WirelineTerminalView?
+
+    private var hovering = false
+    private var dragging = false
+    private var hideTimer: DispatchWorkItem?
+    private var tracking: NSTrackingArea?
+
+    private let idleThumbW: CGFloat = 4
+    private let hoverThumbW: CGFloat = 9
+    private let rightPad: CGFloat = 3
+    private let vInset: CGFloat = 3
+    private let minThumbH: CGFloat = 28
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        alphaValue = 0
+    }
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) unavailable") }
+
+    override var isFlipped: Bool { true }   // y grows downward: pos 0 = top, 1 = bottom
+
+    // MARK: State reads
+
+    private var canScroll: Bool { term?.canScroll ?? false }
+    private var position: CGFloat { CGFloat(term?.scrollPosition ?? 0) }
+    private var thumbProp: CGFloat { max(CGFloat(term?.scrollThumbsize ?? 1), 0.04) }
+    private var atBottom: Bool { !canScroll || position >= 0.999 }
+
+    private var thumbColor: NSColor {
+        // Matches the app's terminal accent (the caret green).
+        NSColor(red: 0.20, green: 0.82, blue: 0.50, alpha: hovering || dragging ? 0.9 : 0.5)
+    }
+
+    // MARK: Geometry
+
+    private var trackHeight: CGFloat { bounds.height - vInset * 2 }
+    private func thumbRect() -> CGRect {
+        let thumbH = min(trackHeight, max(minThumbH, trackHeight * thumbProp))
+        let travel = max(0, trackHeight - thumbH)
+        let y = vInset + travel * position
+        let w = hovering || dragging ? hoverThumbW : idleThumbW
+        return CGRect(x: bounds.width - w - rightPad, y: y, width: w, height: thumbH)
+    }
+
+    // MARK: Draw
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard canScroll else { return }
+        if hovering || dragging {
+            let track = CGRect(x: bounds.width - hoverThumbW - rightPad, y: vInset,
+                               width: hoverThumbW, height: trackHeight)
+            NSColor.white.withAlphaComponent(0.06).setFill()
+            NSBezierPath(roundedRect: track, xRadius: hoverThumbW / 2, yRadius: hoverThumbW / 2).fill()
+        }
+        let r = thumbRect()
+        thumbColor.setFill()
+        NSBezierPath(roundedRect: r, xRadius: r.width / 2, yRadius: r.width / 2).fill()
+    }
+
+    // MARK: Visibility
+
+    /// Called whenever the terminal scrolls. Reveal when scrolled up into history;
+    /// stay out of the way (and skip redraws) while following the bottom.
+    func reflectScroll() {
+        guard canScroll else { animator().alphaValue = 0; return }
+        if atBottom {
+            if alphaValue > 0.01, !hovering, !dragging { scheduleHide() }
+            return
+        }
+        needsDisplay = true
+        reveal()
+    }
+
+    private func reveal() {
+        hideTimer?.cancel(); hideTimer = nil
+        if alphaValue < 1 { animator().alphaValue = 1 }
+    }
+
+    private func scheduleHide() {
+        hideTimer?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, !self.hovering, !self.dragging else { return }
+            self.animator().alphaValue = 0
+        }
+        hideTimer = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2, execute: work)
+    }
+
+    // MARK: Hover
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let tracking { removeTrackingArea(tracking) }
+        let ta = NSTrackingArea(rect: bounds,
+                                options: [.mouseEnteredAndExited, .activeInKeyWindow],
+                                owner: self, userInfo: nil)
+        addTrackingArea(ta); tracking = ta
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        guard canScroll else { return }
+        hovering = true; reveal(); needsDisplay = true
+    }
+    override func mouseExited(with event: NSEvent) {
+        hovering = false; needsDisplay = true
+        if atBottom { scheduleHide() }
+    }
+
+    // MARK: Drag / click-to-jump
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        // Only intercept clicks in the thumb column while visible, so text
+        // selection near the right edge still works when the bar is hidden.
+        guard canScroll, alphaValue > 0.05 else { return nil }
+        let local = convert(point, from: superview)
+        let column = CGRect(x: bounds.width - hoverThumbW - rightPad - 3, y: 0,
+                            width: hoverThumbW + rightPad + 3, height: bounds.height)
+        return column.contains(local) ? self : nil
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        dragging = true; reveal(); scrollToMouse(event)
+    }
+    override func mouseDragged(with event: NSEvent) { scrollToMouse(event) }
+    override func mouseUp(with event: NSEvent) {
+        dragging = false; needsDisplay = true
+        if atBottom { scheduleHide() }
+    }
+
+    private func scrollToMouse(_ event: NSEvent) {
+        guard let term else { return }
+        let p = convert(event.locationInWindow, from: nil)
+        let thumbH = min(trackHeight, max(minThumbH, trackHeight * thumbProp))
+        let travel = max(1, trackHeight - thumbH)
+        let pos = (p.y - vInset - thumbH / 2) / travel
+        term.scroll(toPosition: Double(min(1, max(0, pos))))
+        needsDisplay = true
     }
 }

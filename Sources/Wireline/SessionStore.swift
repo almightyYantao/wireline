@@ -17,6 +17,13 @@ enum SessionKind {
 
 /// One live in-app terminal session. Owns the AppKit terminal view for its whole
 /// lifetime so SwiftUI can embed/re-embed it without ever tearing down the PTY.
+/// Coarse connection lifecycle of a session, for the status indicator.
+enum ConnectionState: Equatable {
+    case connecting     // process spawned, waiting for the server's first byte
+    case connected      // server is responding
+    case disconnected   // process exited / link dropped / closed
+}
+
 @Observable
 @MainActor
 final class TerminalSession: Identifiable {
@@ -31,6 +38,16 @@ final class TerminalSession: Identifiable {
     /// prompt has gone away). Drives the "running…" badge shown on a backgrounded
     /// tab. Updated from the terminal view's prompt heuristic.
     var isBusy = false
+
+    /// Coarse connection lifecycle for the animated status indicator: dialing
+    /// (`connecting`) → server responding (`connected`) → process gone
+    /// (`disconnected`, whether by logout, a dropped link, or explicit close).
+    var connectionState: ConnectionState = .connecting
+
+    /// Whether this session produced output while it was NOT the visible tab —
+    /// drives the "new output" dot on a backgrounded tab. Cleared when you switch
+    /// to it.
+    var hasUnread = false
 
     /// Recent terminal output (ANSI-stripped) for AI context.
     var recentOutput: String { terminalView.recentClean }
@@ -172,6 +189,23 @@ final class TerminalSession: Identifiable {
             if case .localShell = self.kind { return }
             self.applyBusy(busy, elapsed: elapsed)
         }
+        terminalView.onOutput = { [weak self] in self?.noteOutput() }
+        terminalView.onConnected = { [weak self] in
+            guard let self, self.connectionState == .connecting else { return }
+            self.connectionState = .connected
+        }
+        terminalView.onDisconnected = { [weak self] _ in
+            guard let self else { return }
+            self.connectionState = .disconnected
+            self.isRunning = false
+        }
+    }
+
+    /// Flag unread output unless this session sits in the tab you're looking at.
+    private func noteOutput() {
+        guard !hasUnread else { return }               // already flagged; nothing to do
+        let inActiveTab = store?.activeTab?.leafID(for: id) != nil
+        if !inActiveTab { hasUnread = true }
     }
 
     /// Apply a busy-state change: update the badge and, when a run finishes in a
@@ -328,6 +362,7 @@ final class TerminalSession: Identifiable {
     func terminate() {
         guard isRunning else { return }
         isRunning = false
+        connectionState = .disconnected
         busyTimer?.cancel()
         busyTimer = nil
         stats.stop()
@@ -384,7 +419,16 @@ final class SessionStore {
     /// into one tab; detaching a pane splits it back out into its own tab.
     private(set) var tabs: [PaneNode] = []
     /// Which tab (pane group) is currently shown.
-    var activeTabID: UUID?
+    var activeTabID: UUID? {
+        didSet { clearUnread(inTab: activeTabID) }
+    }
+
+    /// Mark every session in a tab as read (its "new output" dot goes away once
+    /// you're looking at it).
+    private func clearUnread(inTab tabID: UUID?) {
+        guard let tab = tabs.first(where: { $0.id == tabID }) else { return }
+        for sid in tab.sessionIDs { session(sid)?.hasUnread = false }
+    }
     /// The focused session within the active tab (drives which pane is highlighted
     /// and where the keyboard goes).
     var activeID: UUID?

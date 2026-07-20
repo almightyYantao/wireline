@@ -83,7 +83,7 @@ final class AIConfig: @unchecked Sendable {
         agentReadOnly = d.bool(forKey: "ai.agentReadOnly")
         historyLimit = (d.object(forKey: "ai.historyLimit") as? Int) ?? 60
         alertAttribution = d.bool(forKey: "ai.alertAttribution")
-        petEnabled = (d.object(forKey: "ai.petEnabled") as? Bool) ?? true
+        petEnabled = (d.object(forKey: "ai.petEnabled") as? Bool) ?? false
     }
 
     var activeBaseURL: String { provider == .relay ? relayBaseURL : ollamaBaseURL }
