@@ -18,7 +18,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 export DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
 
-VERSION="0.8.3"
+VERSION="0.8.4"
 APP="build/Wireline.app"
 
 echo "▸ Forcing a clean release build (avoids stale-cache bundles)…"
