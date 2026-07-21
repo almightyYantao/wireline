@@ -232,6 +232,7 @@ final class TerminalSession: Identifiable {
     /// login shell itself, a command is running. Reliable and prompt-agnostic.
     private func startBusyPolling() {
         guard case .localShell = kind else { return }
+        busyTimer?.cancel()          // avoid stacking timers across a reconnect
         let t = DispatchSource.makeTimerSource(queue: .main)
         t.schedule(deadline: .now() + 0.8, repeating: 0.8)
         t.setEventHandler { [weak self] in
@@ -266,7 +267,36 @@ final class TerminalSession: Identifiable {
             terminalView.feed(text: "\r\n\u{1b}[2m──────── 已恢复上次会话 / restored ────────\u{1b}[0m\r\n")
             pendingScrollback = nil
         }
+        launch()
+    }
 
+    /// Re-establish the PTY in place after the link dropped (or the shell exited),
+    /// reusing the SAME terminal view so the on-screen scrollback is preserved and
+    /// the tab / split pane never moves. Works for SSH, SFTP, and local shells.
+    /// Safe to call whether the connection is already gone or still up.
+    func reconnect() {
+        // Tear down the old process and side channels — but never the terminal view.
+        stats.stop()
+        busyTimer?.cancel(); busyTimer = nil
+        if isRunning { terminalView.terminate() }
+        try? FileManager.default.removeItem(atPath: controlSocket)
+        if let askpassURL { try? FileManager.default.removeItem(at: askpassURL); self.askpassURL = nil }
+
+        // Forget per-connection heuristics (password prompts, prompt/busy tracking)
+        // and mark ourselves dialing again.
+        terminalView.resetForReconnect()
+        isRunning = true
+        isBusy = false
+        connectionState = .connecting
+
+        // A dim divider so the restart reads clearly in the scrollback.
+        terminalView.feed(text: "\r\n\u{1b}[2m──────── 重新连接 / reconnecting ────────\u{1b}[0m\r\n")
+        launch()
+    }
+
+    /// Spawn (or respawn) the underlying process for this session's kind. Split out
+    /// of `start()` so `reconnect()` can relaunch without re-replaying scrollback.
+    private func launch() {
         var env = Terminal.getEnvironmentVariables(termName: "xterm-256color")
         // Preserve the user's locale so remote/local shells render UTF-8 correctly.
         if let lang = ProcessInfo.processInfo.environment["LANG"] { env.append("LANG=\(lang)") }

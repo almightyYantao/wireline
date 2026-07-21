@@ -179,9 +179,15 @@ struct PaneLeafView: View {
                 header(session)
                 Rectangle().fill(WL.border).frame(height: 1)
                 TerminalHostView(session: session, autoFocus: focused && !aiOpen).id(session.id)
+                    .overlay(alignment: .top) {
+                        if session.connectionState == .disconnected {
+                            DisconnectedBanner(session: session)
+                        }
+                    }
                     .overlay(alignment: .topTrailing) {
                         if session.activeEditor == "vim" { VimHintView() }
                     }
+                    .animation(.easeInOut(duration: 0.2), value: session.connectionState)
                     // Clicking anywhere in the pane focuses it (runs alongside the
                     // terminal's own click handling, so cursor placement / text
                     // selection still work).

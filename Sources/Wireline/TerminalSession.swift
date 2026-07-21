@@ -233,6 +233,30 @@ final class WirelineTerminalView: LocalProcessTerminalView {
         onDisconnected?(exitCode)
     }
 
+    /// Clear the per-connection heuristic state so a relaunched process (see
+    /// `TerminalSession.reconnect`) is treated as a fresh dial: the password is
+    /// eligible to be sent again, the "connected" edge fires on the first byte,
+    /// and prompt/busy tracking restarts from the login phase. The on-screen
+    /// buffer and scrollback are deliberately left untouched.
+    func resetForReconnect() {
+        hasConnected = false
+        tail = ""
+        passwordSends = 0
+        sudoPasswordSends = 0
+        sudoSent = false
+        lastPasswordSend = nil
+        atPrompt = true
+        leftPromptAt = nil
+        promptTail = ""
+        hasSeenFirstPrompt = false
+        busy = false
+        busyGeneration &+= 1
+        detectTail = ""
+        inAltBuffer = false
+        vimSniffing = false
+        report(nil)
+    }
+
     /// SwiftTerm draws the IME composition preview as a floating `NSTextField`
     /// whose background is `nativeBackgroundColor.withAlphaComponent(0.9)`. Since
     /// we keep the native background `.clear` for translucency, that resolves to a

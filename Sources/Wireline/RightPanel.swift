@@ -158,10 +158,14 @@ struct RightPanel: View {
                 TerminalHostView(session: session, autoFocus: !showAI).id(session.id)
                     .overlay(alignment: .top) {
                         if showSearch { terminalSearchBar(session) }
+                        else if session.connectionState == .disconnected {
+                            DisconnectedBanner(session: session)
+                        }
                     }
                     .overlay(alignment: .topTrailing) {
                         if session.activeEditor == "vim" { VimHintView() }
                     }
+                    .animation(.easeInOut(duration: 0.2), value: session.connectionState)
                     .overlay(dropTargeted ? WL.teal.opacity(0.12) : .clear)
                     .background(GeometryReader { geo in
                         Color.clear
@@ -546,6 +550,41 @@ struct RunningBadge: View {
     }
 }
 
+// MARK: - Disconnected banner
+
+/// A floating notice shown over a terminal whose link has dropped (or whose shell
+/// exited), offering a one-click reconnect. Discoverable where the connection
+/// info bar's `[重连]` button isn't visible — split panes, and at a glance.
+struct DisconnectedBanner: View {
+    @Environment(Localizer.self) private var loc
+    let session: TerminalSession
+    @State private var hover = false
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Circle().fill(WL.red).frame(width: 6, height: 6)
+            Text(loc("连接已断开", "Connection closed"))
+                .font(WL.small).foregroundStyle(WL.textPrimary)
+            Button(action: session.reconnect) {
+                HStack(spacing: 4) {
+                    Image(systemName: "arrow.clockwise").font(WL.small)
+                    Text(loc("重新连接", "Reconnect")).font(WL.small.weight(.semibold))
+                }
+                .foregroundStyle(hover ? WL.bg : WL.greenBright)
+                .padding(.horizontal, 10).padding(.vertical, 4)
+                .background(hover ? WL.greenBright : WL.green.opacity(0.14), in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .onHover { hover = $0 }
+        }
+        .padding(.horizontal, 12).padding(.vertical, 8)
+        .background(.ultraThinMaterial, in: Capsule())
+        .overlay(Capsule().stroke(WL.border, lineWidth: WL.borderWidth))
+        .padding(.top, 10)
+        .transition(.move(edge: .top).combined(with: .opacity))
+    }
+}
+
 // MARK: - Connection info bar
 
 struct ConnectionInfoBar: View {
@@ -627,11 +666,9 @@ struct ConnectionInfoBar: View {
         return "--"
     }
 
-    private func reconnect() {
-        guard let host else { return }
-        sessions.close(session.id)
-        connectHost(host, store: store, sessions: sessions, openWindow: openWindow)
-    }
+    /// Relaunch the PTY in place — keeps the scrollback and tab, and works for
+    /// local shells / SFTP too (unlike a close-and-reopen, which needs a host).
+    private func reconnect() { session.reconnect() }
 }
 
 // MARK: - Status bar
