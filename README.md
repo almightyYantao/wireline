@@ -148,6 +148,7 @@ Data lives only in a local `todos.json` (plus the opt-in encrypted backup); it n
 
 **Files & ops**
 - 📁 Visual **SFTP** ([Citadel](https://github.com/orlandos-nl/Citadel)): dual-pane, drag/double-click transfers, new/rename/delete, **right-click AI edit**
+- 📥 **ZMODEM transfer**: run `sz` on the remote and Wireline catches it automatically — files land in `~/Downloads` (revealed in Finder); `rz` uploads via a file picker (bridges the local `lrzsz` — `brew install lrzsz`)
 - ⚡ Batch / fleet execution across selected hosts, aggregated output
 - 🔀 Graphical port forwarding (`ssh -L`, jump hosts, one-click toggle)
 - 🧰 Command snippets: multi-line commands, `{{placeholders}}` prompt-filled at run time

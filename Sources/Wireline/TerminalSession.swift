@@ -230,6 +230,9 @@ final class WirelineTerminalView: LocalProcessTerminalView {
     /// session flip its state so the UI can show "disconnected".
     override func processTerminated(_ source: LocalProcess, exitCode: Int32?) {
         super.processTerminated(source, exitCode: exitCode)
+        // The PTY is gone — don't let an in-flight ZMODEM transfer's local tool
+        // hang waiting on a stream that will never continue.
+        zmodem.abort()
         onDisconnected?(exitCode)
     }
 
@@ -281,6 +284,28 @@ final class WirelineTerminalView: LocalProcessTerminalView {
     /// A rolling, ANSI-stripped tail of recent terminal output, for AI context.
     private(set) var recentClean = ""
 
+    /// Bridges remote `sz`/`rz` (ZMODEM) transfers to the local `lrzsz` tools.
+    /// Lazily built so the closures can capture `self`.
+    private lazy var zmodem = ZModemBridge(
+        sendToRemote: { [weak self] bytes in
+            let copy = Array(bytes)
+            DispatchQueue.main.async { self?.send(data: copy[...]) }
+        },
+        status: { [weak self] kind, zh, en in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                let color: String, icon: String
+                switch kind {
+                case .info: color = "36"; icon = "⇅"
+                case .success: color = "32"; icon = "✓"
+                case .error: color = "31"; icon = "✗"
+                }
+                let msg = Localizer.shared.t(zh, en)
+                self.feed(text: "\r\n\u{1b}[\(color)m\(icon) \(msg)\u{1b}[0m\r\n")
+            }
+        }
+    )
+
     /// The full buffer (scrollback + screen) serialized WITH colors and styles,
     /// for cross-launch scrollback restore. Read on demand at save time. Returns
     /// empty while a full-screen app owns the alternate screen (see
@@ -288,6 +313,18 @@ final class WirelineTerminalView: LocalProcessTerminalView {
     var renderedBuffer: Data { getTerminal().serializeColored() }
 
     override func dataReceived(slice: ArraySlice<UInt8>) {
+        // ZMODEM: once a transfer is live, every remote byte belongs to the
+        // protocol — divert it to the local `rz`/`sz` instead of rendering it.
+        if zmodem.isActive { zmodem.feedFromRemote(slice); return }
+        // Otherwise sniff for a ZMODEM init header. The gate on 0x18 (ZDLE),
+        // which is virtually absent from normal output, keeps the hot path cheap.
+        if slice.contains(0x18), let (dir, off) = ZModemBridge.detect(in: slice) {
+            let start = slice.startIndex
+            if off > 0 { super.dataReceived(slice: slice[start ..< start + off]) }
+            zmodem.begin(direction: dir, initialBytes: Array(slice[(start + off)...]))
+            return
+        }
+
         super.dataReceived(slice: slice)
         let chunk = String(decoding: slice, as: UTF8.self)
         detectFullScreenApp(chunk)
