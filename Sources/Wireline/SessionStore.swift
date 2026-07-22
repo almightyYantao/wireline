@@ -30,6 +30,16 @@ final class TerminalSession: Identifiable {
     let id = UUID()
     let kind: SessionKind
     var title: String
+    /// The session's current working directory (absolute path), as reported by
+    /// the shell via OSC 7. Drives the tab tooltip (full path) and — for local
+    /// shells — the tab title (its basename). Nil until the shell first reports.
+    var currentDirectory: String?
+    /// True once the user has renamed this tab by hand, which pins the title so
+    /// automatic directory-tracking (see `applyReportedDirectory`) leaves it alone.
+    var isManuallyRenamed = false
+
+    /// Drives the prompt-inline AI command flow (⌘; or a `# …` request line).
+    let inlineAI = InlineAIController()
     /// Name of the full-screen editor currently running (`"vim"`), else nil.
     /// Drives the vim cheat-sheet overlay.
     var activeEditor: String?
@@ -199,6 +209,56 @@ final class TerminalSession: Identifiable {
             self.connectionState = .disconnected
             self.isRunning = false
         }
+        terminalView.onDirectoryChange = { [weak self] dir in
+            self?.applyReportedDirectory(dir)
+        }
+        terminalView.onCommentRequest = { [weak self] nl in
+            guard let self, self.store?.activeID == self.id else { return }
+            self.inlineAI.activate(prefill: nl)
+        }
+        inlineAI.session = self
+    }
+
+    /// Handle an OSC-7 working-directory report: record the absolute path (for the
+    /// tooltip) and, for a local shell the user hasn't hand-renamed, retitle the tab
+    /// to the directory's basename. SSH/SFTP tabs keep their host alias as the title.
+    private func applyReportedDirectory(_ raw: String?) {
+        guard let raw, let path = Self.parseOSC7Path(raw) else { return }
+        currentDirectory = path
+        guard !isManuallyRenamed, case .localShell = kind else { return }
+        let name = Self.tabTitle(forPath: path)
+        if name != title { title = name }
+    }
+
+    /// Parse an OSC-7 payload (`file://host/path`, or occasionally a bare path)
+    /// into an absolute filesystem path. Returns nil if it isn't a usable path.
+    static func parseOSC7Path(_ raw: String) -> String? {
+        let s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let path: String
+        if s.hasPrefix("file://") {
+            // `rest` is `host/abs/path` (or `/abs/path` when the host is empty, i.e.
+            // `file:///…`). Drop the host segment up to the first slash.
+            let rest = String(s.dropFirst("file://".count))
+            if rest.hasPrefix("/") { path = rest }
+            else if let slash = rest.firstIndex(of: "/") { path = String(rest[slash...]) }
+            else { return nil }
+        } else if s.hasPrefix("/") {
+            path = s
+        } else {
+            return nil
+        }
+        let decoded = path.removingPercentEncoding ?? path
+        return decoded.isEmpty ? nil : decoded
+    }
+
+    /// The tab title for a working directory: the last path component, with the
+    /// home directory shown as `~` and the filesystem root as `/`.
+    static func tabTitle(forPath path: String) -> String {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        if path == home { return "~" }
+        if path == "/" { return "/" }
+        let base = (path as NSString).lastPathComponent
+        return base.isEmpty ? path : base
     }
 
     /// Flag unread output unless this session sits in the tab you're looking at.
@@ -337,6 +397,16 @@ final class TerminalSession: Identifiable {
         case .localShell:
             let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
             let name = (shell as NSString).lastPathComponent
+            // For zsh, inject a shell-integration shim (via ZDOTDIR) that loads the
+            // user's real config untouched and then reports the working directory
+            // over OSC 7 on every prompt / `cd`, so the tab title tracks the folder.
+            if name == "zsh", let shim = Self.zshIntegrationZDOTDIR() {
+                let userZDOTDIR = ProcessInfo.processInfo.environment["ZDOTDIR"]
+                    ?? FileManager.default.homeDirectoryForCurrentUser.path
+                env.removeAll { $0.hasPrefix("ZDOTDIR=") }
+                env.append("ZDOTDIR=\(shim.path)")
+                env.append("WIRELINE_USER_ZDOTDIR=\(userZDOTDIR)")
+            }
             // Launch as a login shell (leading '-') so ~/.zprofile & ~/.zshrc load,
             // which is what gives the user their familiar prompt, theme, and colors.
             terminalView.startProcess(
@@ -419,6 +489,58 @@ final class TerminalSession: Identifiable {
             return nil
         }
     }
+
+    /// Build (once per app run) a ZDOTDIR shim directory for zsh shell integration
+    /// and return it. The shim's startup files source the user's real zsh config
+    /// (located via `WIRELINE_USER_ZDOTDIR`), keeping their prompt/theme intact,
+    /// then install an OSC-7 hook so the tab title follows the working directory.
+    ///
+    /// Modeled on the well-known VS Code approach: ZDOTDIR stays pointed at the
+    /// shim for every startup file, and each shim file re-sources its real
+    /// counterpart, so a user `.zshenv` that itself moves ZDOTDIR is handled too.
+    private static let zshIntegrationDir: URL? = {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wireline-zdotdir", isDirectory: true)
+        // The hook: report $PWD via OSC 7 on each prompt and on every directory
+        // change, deduped so re-sourcing the rc doesn't stack the callback.
+        let hook = """
+
+        # --- Wireline shell integration: report cwd via OSC 7 (tab title tracking) ---
+        _wireline_osc7() { printf '\\033]7;file://%s%s\\a' "${HOST:-}" "$PWD"; }
+        if [[ -z "${_wireline_osc7_installed:-}" ]]; then
+          _wireline_osc7_installed=1
+          typeset -ag precmd_functions chpwd_functions
+          precmd_functions+=(_wireline_osc7)
+          chpwd_functions+=(_wireline_osc7)
+        fi
+        """
+        // Each shim file: point ZDOTDIR at the user's dir, source their real file,
+        // remember where they left ZDOTDIR (a rc may relocate it), then restore the
+        // shim dir so the next startup file is read from here too.
+        func stage(_ file: String, extra: String = "") -> String {
+            """
+            WIRELINE_SHIM_ZDOTDIR="${WIRELINE_SHIM_ZDOTDIR:-$ZDOTDIR}"
+            : "${WIRELINE_USER_ZDOTDIR:=$HOME}"
+            ZDOTDIR="$WIRELINE_USER_ZDOTDIR"
+            [[ -f "$ZDOTDIR/\(file)" ]] && builtin source "$ZDOTDIR/\(file)"
+            WIRELINE_USER_ZDOTDIR="$ZDOTDIR"
+            ZDOTDIR="$WIRELINE_SHIM_ZDOTDIR"
+            \(extra)
+            """
+        }
+        do {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            try stage(".zshenv").write(to: dir.appendingPathComponent(".zshenv"), atomically: true, encoding: .utf8)
+            try stage(".zprofile").write(to: dir.appendingPathComponent(".zprofile"), atomically: true, encoding: .utf8)
+            try stage(".zshrc", extra: hook).write(to: dir.appendingPathComponent(".zshrc"), atomically: true, encoding: .utf8)
+            try stage(".zlogin").write(to: dir.appendingPathComponent(".zlogin"), atomically: true, encoding: .utf8)
+            return dir
+        } catch {
+            return nil
+        }
+    }()
+
+    private static func zshIntegrationZDOTDIR() -> URL? { zshIntegrationDir }
 }
 
 /// A restorable description of an open session — enough to reopen it (and
@@ -431,6 +553,9 @@ struct SessionSnapshot: Codable, Sendable {
     var title: String
     /// Key locating this session's persisted scrollback file (empty for older data).
     var scrollbackKey: String = ""
+    /// Whether the title was set by hand (so directory auto-tracking leaves it
+    /// alone). Optional so snapshots written before this field decode cleanly.
+    var manuallyRenamed: Bool?
 }
 
 /// How the terminal area is split into panes.
@@ -581,6 +706,7 @@ final class SessionStore {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, let s = session(id) else { return }
         s.title = trimmed
+        s.isManuallyRenamed = true          // pin it — stop directory auto-tracking
         persist()
     }
 
@@ -705,7 +831,8 @@ final class SessionStore {
         case .sftp:       kind = .sftp
         case .localShell: kind = .local
         }
-        return SessionSnapshot(kind: kind, alias: s.alias, title: s.title, scrollbackKey: s.scrollbackKey)
+        return SessionSnapshot(kind: kind, alias: s.alias, title: s.title,
+                               scrollbackKey: s.scrollbackKey, manuallyRenamed: s.isManuallyRenamed)
     }
 
     /// Reopen (and reconnect) the sessions that were open at last quit. Runs once.
@@ -737,6 +864,7 @@ final class SessionStore {
             if !snap.scrollbackKey.isEmpty { s.scrollbackKey = snap.scrollbackKey }
             s.pendingScrollback = loadScrollback(s.scrollbackKey)
             s.title = snap.title
+            s.isManuallyRenamed = snap.manuallyRenamed ?? false
             _ = add(s)                      // spawns + starts (start() replays scrollback first)
         }
         persist()

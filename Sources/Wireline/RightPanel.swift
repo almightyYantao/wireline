@@ -165,6 +165,7 @@ struct RightPanel: View {
                     .overlay(alignment: .topTrailing) {
                         if session.activeEditor == "vim" { VimHintView() }
                     }
+                    .overlay { InlineAICommandView(session: session, isActive: true) }
                     .animation(.easeInOut(duration: 0.2), value: session.connectionState)
                     .overlay(dropTargeted ? WL.teal.opacity(0.12) : .clear)
                     .background(GeometryReader { geo in
@@ -181,10 +182,6 @@ struct RightPanel: View {
                                           edge: paneEdge(for: location, in: termSize))
                         return true
                     } isTargeted: { dropTargeted = $0 }
-                if ai.enabled {
-                    Rectangle().fill(WL.border).frame(height: 1)
-                    SuggestionBar(session: session, host: activeHost)
-                }
                 StatusBar(session: session)
             } else if let host = detailHost {
                 HostDetailView(host: host, onEdit: onEditHost)
@@ -402,6 +399,12 @@ struct SessionTab: View {
     private var title: String {
         tab.sessionIDs.compactMap { sessions.session($0)?.title }.joined(separator: " | ")
     }
+    /// Tooltip text: the full working-directory path when the shell has reported
+    /// one, else the tab title. Lets a short "wireline" tab reveal its full path.
+    private var tooltip: String {
+        tab.sessionIDs.compactMap { sessions.session($0).map { $0.currentDirectory ?? $0.title } }
+            .joined(separator: " | ")
+    }
     /// True when this (non-active) tab has a command still running — shows a
     /// "running…" badge so you know it's working while you're on another tab.
     private var running: Bool {
@@ -453,7 +456,7 @@ struct SessionTab: View {
         // Drag this tab onto another tab's pane to merge them into a split.
         .onDrag { NSItemProvider(object: tab.id.uuidString as NSString) }
         .onHover { hover = $0; TitleBarZoomGuard.shared.pointerInNoZoomZone = $0 }
-        .help(title)
+        .help(tooltip)
         .contextMenu {
             if soleSession != nil { Button(loc("重命名…", "Rename…")) { beginEdit() } }
             Button(loc("关闭", "Close"), role: .destructive) { closeTab() }

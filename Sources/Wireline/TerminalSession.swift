@@ -71,6 +71,20 @@ final class WirelineTerminalView: LocalProcessTerminalView {
     var onDisconnected: ((Int32?) -> Void)?
     private var hasConnected = false
 
+    /// Fired when the shell reports its working directory via OSC 7
+    /// (`\e]7;file://host/path\a`). The payload is the raw OSC-7 string; the
+    /// session parses it into a path to drive the tab title / tooltip. Local
+    /// shells get this for free via the injected zsh hook (see
+    /// `SessionStore`/`zshIntegrationZDOTDIR`); remote shells only emit it when
+    /// configured to.
+    var onDirectoryChange: ((String?) -> Void)?
+
+    /// Fired when the user submits a `# …` line at the prompt — a natural-language
+    /// AI request. The payload is the text after the `#`. Detected from the echoed
+    /// output (SwiftTerm seals the key path, so we can't read the keystrokes).
+    var onCommentRequest: ((String) -> Void)?
+    private var lastCommentRequest = ""
+
     /// Opaque background for the IME marked-text (composition) overlay. SwiftTerm
     /// styles that floating preview with `nativeBackgroundColor`, but we force the
     /// terminal's native background to `.clear` for wallpaper translucency — and
@@ -143,7 +157,17 @@ final class WirelineTerminalView: LocalProcessTerminalView {
         nativeBackgroundColor = NSColor(red: 0.039, green: 0.055, blue: 0.039, alpha: 1)
         nativeForegroundColor = NSColor(red: 0.78, green: 0.83, blue: 0.78, alpha: 1)
         caretColor = NSColor(red: 0.20, green: 0.82, blue: 0.50, alpha: 1)
+        // Receive SwiftTerm's process-level callbacks (chiefly OSC 7 cwd) via a
+        // forwarder. We can't be our own `processDelegate`: the base class already
+        // implements `hostCurrentDirectoryUpdate` (non-open, so un-overridable) and
+        // conforming this main-actor view to the non-isolated delegate protocol
+        // crosses actor isolation. `processDelegate` is weak, hence the strong hold.
+        let forwarder = ProcessCallbackForwarder(owner: self)
+        processForwarder = forwarder
+        processDelegate = forwarder
     }
+
+    private var processForwarder: ProcessCallbackForwarder?
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) unavailable") }
@@ -340,6 +364,7 @@ final class WirelineTerminalView: LocalProcessTerminalView {
         // it finished. Only durations ≥ the threshold notify.
         promptTail += clean
         if promptTail.count > 400 { promptTail = String(promptTail.suffix(400)) }
+        detectCommentRequest()
         let promptLine = promptTail.split(separator: "\n", omittingEmptySubsequences: false)
             .reversed().first { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
             .map(String.init) ?? ""
@@ -544,6 +569,56 @@ final class WirelineTerminalView: LocalProcessTerminalView {
         let t = line.trimmingCharacters(in: .whitespaces)
         return t.hasSuffix("$") || t.hasSuffix("#") || t.hasSuffix("%") || t.hasSuffix("❯") || t.hasSuffix(">")
     }
+
+    /// A completed `# …` request line typed at the prompt. Requires a prompt
+    /// terminator (`$`/`#`/`%`/`>`/`❯`) followed by `# <text>` and a line break,
+    /// so a root prompt's own trailing `#` (e.g. `root@h:~# ls`) can't be mistaken
+    /// for a request — only a *second* `#` the user typed counts. Fires once per
+    /// distinct request. Works regardless of the shell's `interactivecomments`
+    /// setting (the shell may error on the line; we still catch the echo).
+    private static let commentRequestRE = try? NSRegularExpression(
+        pattern: "[#$%>\u{2771}\u{276F}][ \\t]+#[ \\t\u{3000}]+(\\S[^\\r\\n]{0,200})[\\r\\n]")
+
+    private func detectCommentRequest() {
+        guard hasSeenFirstPrompt, onCommentRequest != nil,
+              let re = Self.commentRequestRE else { return }
+        let ns = promptTail as NSString
+        guard let m = re.matches(in: promptTail, range: NSRange(location: 0, length: ns.length)).last,
+              m.numberOfRanges > 1 else { return }
+        let req = ns.substring(with: m.range(at: 1)).trimmingCharacters(in: .whitespaces)
+        guard req.count >= 2, req != lastCommentRequest else { return }
+        lastCommentRequest = req
+        onCommentRequest?(req)
+    }
+}
+
+/// Bridges SwiftTerm's `LocalProcessTerminalViewDelegate` callbacks to the owning
+/// terminal view's closures. Kept as a standalone (non-isolated) object so the
+/// main-actor `WirelineTerminalView` needn't conform to the delegate protocol
+/// itself (which would collide with the base class and cross actor isolation).
+/// SwiftTerm delivers these on the main thread, so hopping back is safe.
+final class ProcessCallbackForwarder: LocalProcessTerminalViewDelegate {
+    private weak var owner: WirelineTerminalView?
+    init(owner: WirelineTerminalView) { self.owner = owner }
+
+    func sizeChanged(source: LocalProcessTerminalView, newCols: Int, newRows: Int) {}
+
+    // We deliberately ignore program-set window titles (OSC 0/2): the tab title is
+    // driven by the working directory (OSC 7) so it stays predictable and doesn't
+    // flicker with whatever `vim`/`top`/etc. push.
+    func setTerminalTitle(source: LocalProcessTerminalView, title: String) {}
+
+    func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {
+        // Pull `owner` into a local (it's a `@MainActor` view, hence Sendable) so
+        // the hop captures only Sendable values, not this non-isolated forwarder.
+        guard let owner else { return }
+        DispatchQueue.main.async { owner.onDirectoryChange?(directory) }
+    }
+
+    // Disconnection is handled by the view's `processTerminated(_:exitCode:)`
+    // override (which forwards here via `super`), so this hop is a no-op to avoid
+    // firing `onDisconnected` twice.
+    func processTerminated(source: TerminalView, exitCode: Int32?) {}
 }
 
 /// A themed, self-drawn overlay scrollbar for the terminal, replacing SwiftTerm's
