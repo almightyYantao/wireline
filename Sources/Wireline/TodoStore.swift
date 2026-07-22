@@ -12,6 +12,12 @@ final class TodoStore {
     private(set) var todos: [Todo] = []
     /// True when the last mutation can be undone (⌘Z).
     private(set) var canUndo = false
+    /// Master switch for the whole to-do feature. When off, the menu-bar extra
+    /// and the To-Do menu command disappear — the feature is opt-in chrome, so
+    /// users who don't use it can hide it entirely. Mirrored into UserDefaults.
+    var enabled: Bool = UserDefaults.standard.object(forKey: "todoEnabled") as? Bool ?? false {
+        didSet { UserDefaults.standard.set(enabled, forKey: "todoEnabled") }
+    }
 
     private let fileURL: URL
     /// Snapshots for undo — capped so it never grows unbounded.

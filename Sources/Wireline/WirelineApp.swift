@@ -113,8 +113,10 @@ struct WirelineApp: App {
                     .shortcut(.focusPrevPane, keys)
                 Button("Edit Host") { NotificationCenter.default.post(name: .editHost, object: nil) }
                     .shortcut(.editHost, keys)
-                Button("To-Do List") { openWindow(id: "todos") }
-                    .shortcut(.showTodos, keys)
+                if todos.enabled {
+                    Button("To-Do List") { openWindow(id: "todos") }
+                        .shortcut(.showTodos, keys)
+                }
                 Button("Desktop Pet") {
                     openWindow(id: "pet")
                     // Post after the window has a chance to mount & subscribe, so a
@@ -162,6 +164,7 @@ struct WirelineApp: App {
         Window("Wireline Settings", id: "settings") {
             SettingsView()
                 .environment(store)
+                .environment(todos)
                 .environment(loc)
                 .preferredColorScheme(.dark)
         }
@@ -197,8 +200,9 @@ struct WirelineApp: App {
         .defaultPosition(.bottomTrailing)
 
         // Menu-bar extra: a live count of open items plus quick add / toggle,
-        // so the to-do list is one click away without opening a window.
-        MenuBarExtra {
+        // so the to-do list is one click away without opening a window. Removed
+        // from the menu bar entirely when the to-do feature is disabled.
+        MenuBarExtra(isInserted: Binding(get: { todos.enabled }, set: { todos.enabled = $0 })) {
             TodoMenuBarView(openWindow: { openWindow(id: "todos") })
                 .environment(todos)
                 .environment(loc)

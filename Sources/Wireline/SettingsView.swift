@@ -5,6 +5,7 @@ import WirelineCore
 
 struct SettingsView: View {
     @Environment(HostStore.self) private var store
+    @Environment(TodoStore.self) private var todos
     @Environment(Localizer.self) private var loc
     @State private var tab = 0
     @State private var ai = AIConfig.shared
@@ -71,6 +72,7 @@ struct SettingsView: View {
 
     private var general: some View {
         @Bindable var store = store
+        @Bindable var todos = todos
         @Bindable var loc = loc
         return ScrollView {
             VStack(alignment: .leading, spacing: 22) {
@@ -156,6 +158,14 @@ struct SettingsView: View {
                     }
                     hint(loc("主机在线↔离线切换时发系统通知。",
                             "Sends a system notification when a host goes offline or comes back."))
+                }
+
+                section(loc("待办", "To-Do")) {
+                    Toggle(isOn: $todos.enabled) {
+                        Text(loc("启用待办清单", "Enable to-do list")).font(WL.body).foregroundStyle(WL.textPrimary)
+                    }.toggleStyle(.checkbox).tint(WL.green)
+                    hint(loc("开启后在菜单栏显示待办图标（含未完成计数），并启用「待办清单」菜单与快捷键；关闭则完全隐藏，不占用菜单栏。",
+                            "Adds a menu-bar icon with an open-item count and enables the To-Do menu and shortcut; off hides it entirely, freeing the menu bar."))
                 }
 
                 section(loc("更新", "Updates")) {
