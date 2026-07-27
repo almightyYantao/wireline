@@ -490,17 +490,20 @@ final class TerminalSession: Identifiable {
         }
     }
 
-    /// Build (once per app run) a ZDOTDIR shim directory for zsh shell integration
-    /// and return it. The shim's startup files source the user's real zsh config
-    /// (located via `WIRELINE_USER_ZDOTDIR`), keeping their prompt/theme intact,
-    /// then install an OSC-7 hook so the tab title follows the working directory.
-    ///
-    /// Modeled on the well-known VS Code approach: ZDOTDIR stays pointed at the
-    /// shim for every startup file, and each shim file re-sources its real
-    /// counterpart, so a user `.zshenv` that itself moves ZDOTDIR is handled too.
-    private static let zshIntegrationDir: URL? = {
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("wireline-zdotdir", isDirectory: true)
+    /// Where the ZDOTDIR shim lives. Application Support, *not* the temp dir:
+    /// macOS prunes `$TMPDIR` after a few days, and a pruned shim left every new
+    /// session with a ZDOTDIR containing no startup files at all — so the user's
+    /// `~/.zshrc` silently never loaded (they had to `source ~/.zshrc` by hand).
+    private static let zshIntegrationDir: URL = {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Wireline/zsh", isDirectory: true)
+    }()
+
+    /// The shim's startup files, by name. Each one points ZDOTDIR at the user's
+    /// real dir, sources their counterpart file, then puts ZDOTDIR back so the
+    /// next startup file is read from the shim too — the well-known VS Code
+    /// approach, which also copes with a user `.zshenv` that relocates ZDOTDIR.
+    private static var zshIntegrationFiles: [String: String] {
         // The hook: report $PWD via OSC 7 on each prompt and on every directory
         // change, deduped so re-sourcing the rc doesn't stack the callback.
         let hook = """
@@ -514,33 +517,56 @@ final class TerminalSession: Identifiable {
           chpwd_functions+=(_wireline_osc7)
         fi
         """
-        // Each shim file: point ZDOTDIR at the user's dir, source their real file,
-        // remember where they left ZDOTDIR (a rc may relocate it), then restore the
-        // shim dir so the next startup file is read from here too.
-        func stage(_ file: String, extra: String = "") -> String {
+        // `/etc/zshrc` derives HISTFILE from ZDOTDIR, which at that point is this
+        // shim — so repoint it at the user's real dir *before* their rc runs (it
+        // may read HISTFILE), or Wireline's history would be written inside the
+        // shim instead of joining the user's normal `~/.zsh_history`.
+        let histFix = """
+        [[ "${HISTFILE:-}" == "$WIRELINE_SHIM_ZDOTDIR"/* ]] && HISTFILE="$WIRELINE_USER_ZDOTDIR/.zsh_history"
+        """
+        // `restoreShim: false` hands ZDOTDIR back to the user's dir for good, so
+        // nothing after startup (history, compdump, a nested `zsh`) reads from here.
+        func stage(_ file: String, before: String = "", after: String = "", restoreShim: Bool = true) -> String {
             """
             WIRELINE_SHIM_ZDOTDIR="${WIRELINE_SHIM_ZDOTDIR:-$ZDOTDIR}"
             : "${WIRELINE_USER_ZDOTDIR:=$HOME}"
+            \(before)
             ZDOTDIR="$WIRELINE_USER_ZDOTDIR"
             [[ -f "$ZDOTDIR/\(file)" ]] && builtin source "$ZDOTDIR/\(file)"
             WIRELINE_USER_ZDOTDIR="$ZDOTDIR"
-            ZDOTDIR="$WIRELINE_SHIM_ZDOTDIR"
-            \(extra)
+            ZDOTDIR="\(restoreShim ? "$WIRELINE_SHIM_ZDOTDIR" : "$WIRELINE_USER_ZDOTDIR")"
+            \(after)
             """
         }
-        do {
-            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-            try stage(".zshenv").write(to: dir.appendingPathComponent(".zshenv"), atomically: true, encoding: .utf8)
-            try stage(".zprofile").write(to: dir.appendingPathComponent(".zprofile"), atomically: true, encoding: .utf8)
-            try stage(".zshrc", extra: hook).write(to: dir.appendingPathComponent(".zshrc"), atomically: true, encoding: .utf8)
-            try stage(".zlogin").write(to: dir.appendingPathComponent(".zlogin"), atomically: true, encoding: .utf8)
-            return dir
-        } catch {
-            return nil
-        }
-    }()
+        return [
+            ".zshenv": stage(".zshenv"),
+            ".zprofile": stage(".zprofile"),
+            // A login shell still has `.zlogin` to read, so it keeps ZDOTDIR on the
+            // shim; a non-login interactive shell is done here and hands it back.
+            ".zshrc": stage(".zshrc", before: histFix,
+                            after: hook + "\n[[ -o login ]] || ZDOTDIR=\"$WIRELINE_USER_ZDOTDIR\""),
+            ".zlogin": stage(".zlogin", restoreShim: false),
+        ]
+    }
 
-    private static func zshIntegrationZDOTDIR() -> URL? { zshIntegrationDir }
+    /// Ensure the shim directory holds the current startup files, and return it.
+    /// Re-verified on every launch (four small reads) so a deleted, truncated, or
+    /// outdated shim heals itself instead of breaking every session from then on.
+    private static func zshIntegrationZDOTDIR() -> URL? {
+        let dir = zshIntegrationDir
+        let fm = FileManager.default
+        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        for (name, content) in zshIntegrationFiles {
+            let url = dir.appendingPathComponent(name)
+            if (try? String(contentsOf: url, encoding: .utf8)) == content { continue }
+            do { try content.write(to: url, atomically: true, encoding: .utf8) }
+            catch { return nil }
+        }
+        // Without a readable .zshrc the shim would *suppress* the user's config
+        // rather than extend it — better to launch a plain shell than a broken one.
+        guard fm.isReadableFile(atPath: dir.appendingPathComponent(".zshrc").path) else { return nil }
+        return dir
+    }
 }
 
 /// A restorable description of an open session — enough to reopen it (and
