@@ -117,8 +117,8 @@ struct SnippetsSheet: View {
             field(loc("命令（可多行）", "Command (multi-line)")) {
                 multilineInput($draftCommand)
             }
-            Text(loc("每行一条命令，按顺序执行。用 {{参数名}} 作为占位符，运行时会弹窗让你填写。",
-                     "One command per line, run in order. Use {{name}} as a placeholder — you'll be prompted to fill it in."))
+            Text(loc("每行一条命令，按顺序执行。用 «参数名» 作为占位符，运行时会弹窗让你填写（{{}} 留给 Go 模板，如 docker --format）。",
+                     "One command per line, run in order. Use «name» as a placeholder — you'll be prompted to fill it in ({{}} is left to Go templates, e.g. docker --format)."))
                 .font(WL.caption).foregroundStyle(WL.textDim)
             Spacer()
             HStack(spacing: 18) {

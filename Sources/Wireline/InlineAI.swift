@@ -173,27 +173,18 @@ final class InlineAIController {
         return "终端最近内容（供参考）：\n\(ctx)\n\n需求：\(nl)"
     }
 
-    /// Split a reply into (explanation, command). The command is the first fenced
-    /// block, with an optional language hint line stripped; returns nil command
-    /// when there's no fence (a clarifying question).
+    /// Split a reply into (explanation, command). The command comes from the first
+    /// *shell* fence whose body reads like a command — a `text`/`json` block, or a
+    /// block holding quoted output, yields no command, same as no fence at all
+    /// (which the caller treats as a clarifying question).
     static func parse(_ raw: String) -> (String, String?) {
         let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let open = text.range(of: "```") else { return (text, nil) }
         let prose = String(text[..<open.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
-        let afterOpen = text[open.upperBound...]
-        let close = afterOpen.range(of: "```")
-        var body = close.map { String(afterOpen[..<$0.lowerBound]) } ?? String(afterOpen)
-        // Drop an optional leading language hint (e.g. "bash\n").
-        if let nl = body.firstIndex(of: "\n") {
-            let first = body[body.startIndex..<nl].trimmingCharacters(in: .whitespaces)
-            if first.range(of: #"^[A-Za-z0-9_+-]{1,15}$"#, options: .regularExpression) != nil {
-                body = String(body[body.index(after: nl)...])
-            }
-        }
-        let cmd = body.trimmingCharacters(in: CharacterSet(charactersIn: "`\n \t"))
-        // Keep the first non-empty line — we only ever run a single command.
-        let oneLine = cmd.split(whereSeparator: { $0 == "\n" || $0 == "\r" })
-            .first.map(String.init) ?? cmd
+        guard case let .runnable(body) = AICodeFence.proposal(in: text) else { return (prose, nil) }
+        // Keep the first non-empty line — the inline card only ever runs one command.
+        let oneLine = body.split(whereSeparator: { $0 == "\n" || $0 == "\r" })
+            .first.map(String.init) ?? body
         return (prose, oneLine)
     }
 }

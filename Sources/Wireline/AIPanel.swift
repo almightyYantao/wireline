@@ -17,35 +17,79 @@ struct AIPanelView: View {
     let host: Host?
     var onClose: () -> Void
 
-    @State private var messages: [AIMessage] = []      // shown in the transcript
-    @State private var modelMessages: [AIMessage] = []  // what the model actually sees
-    @State private var input = ""
-    @State private var streaming = ""
-    @State private var isStreaming = false
-    @State private var errorText: String?
-    @State private var task: Task<Void, Never>?
-    @State private var agentSteps = 0
     @State private var chats = AIChatStore.shared
-    @State private var loadedKey: String?
-    @State private var sessionTokens = 0
-    @State private var lastPromptTokens = 0
-    @State private var useFast = false
     @State private var showFleet = false
-    @State private var pendingDanger: String?           // command awaiting confirmation
-    @State private var dangerReview = ""                 // AI impact assessment for it
-    @State private var pendingMCP: PendingMCPCall?       // MCP tool call awaiting confirmation
-    @State private var pendingTransfer: PendingTransfer? // file upload/download awaiting confirmation
     // Owned by RightPanel so ⌘I / tab switches can query and re-assert focus.
     @FocusState.Binding var inputFocused: Bool
 
     private let maxAgentSteps = 8
     private let mcpResultCap = 4000                      // chars of tool output fed back
-    // Circuit breaker: stop the agent loop when it stalls or spins.
-    @State private var timeoutStreak = 0                 // consecutive capture timeouts
-    @State private var lastAgentCmd: String?             // to detect an identical-command loop
-    @State private var repeatStreak = 0
     private let maxTimeoutStreak = 2
     private let maxRepeatStreak = 2
+
+    // MARK: conversation state
+    //
+    // The transcript and the in-flight turn live in `AIConvoState`, keyed by
+    // conversation — NOT in `@State` — so tearing this view down (tab switched to
+    // another host, panel closed) can't discard an answer that's still streaming.
+    // These proxies keep the call sites reading like plain properties.
+
+    private var convo: AIConvoState { AIConvoState.shared(conversationKey) }
+
+    private var messages: [AIMessage] {
+        get { convo.messages } nonmutating set { convo.messages = newValue }
+    }
+    private var modelMessages: [AIMessage] {
+        get { convo.modelMessages } nonmutating set { convo.modelMessages = newValue }
+    }
+    private var input: String {
+        get { convo.input } nonmutating set { convo.input = newValue }
+    }
+    private var streaming: String {
+        get { convo.streaming } nonmutating set { convo.streaming = newValue }
+    }
+    private var isStreaming: Bool {
+        get { convo.isStreaming } nonmutating set { convo.isStreaming = newValue }
+    }
+    private var errorText: String? {
+        get { convo.errorText } nonmutating set { convo.errorText = newValue }
+    }
+    private var task: Task<Void, Never>? {
+        get { convo.task } nonmutating set { convo.task = newValue }
+    }
+    private var agentSteps: Int {
+        get { convo.agentSteps } nonmutating set { convo.agentSteps = newValue }
+    }
+    private var sessionTokens: Int {
+        get { convo.sessionTokens } nonmutating set { convo.sessionTokens = newValue }
+    }
+    private var lastPromptTokens: Int {
+        get { convo.lastPromptTokens } nonmutating set { convo.lastPromptTokens = newValue }
+    }
+    private var useFast: Bool {
+        get { convo.useFast } nonmutating set { convo.useFast = newValue }
+    }
+    private var pendingDanger: String? {
+        get { convo.pendingDanger } nonmutating set { convo.pendingDanger = newValue }
+    }
+    private var dangerReview: String {
+        get { convo.dangerReview } nonmutating set { convo.dangerReview = newValue }
+    }
+    private var pendingMCP: PendingMCPCall? {
+        get { convo.pendingMCP } nonmutating set { convo.pendingMCP = newValue }
+    }
+    private var pendingTransfer: PendingTransfer? {
+        get { convo.pendingTransfer } nonmutating set { convo.pendingTransfer = newValue }
+    }
+    private var timeoutStreak: Int {
+        get { convo.timeoutStreak } nonmutating set { convo.timeoutStreak = newValue }
+    }
+    private var lastAgentCmd: String? {
+        get { convo.lastAgentCmd } nonmutating set { convo.lastAgentCmd = newValue }
+    }
+    private var repeatStreak: Int {
+        get { convo.repeatStreak } nonmutating set { convo.repeatStreak = newValue }
+    }
 
     // Scroll following: whether the transcript is pinned to the bottom (so new
     // output follows) vs. the user has scrolled up to read history (so we leave
@@ -83,8 +127,10 @@ struct AIPanelView: View {
         }
         .onAppear { inputFocused = true; loadConvo() }
         .onChange(of: conversationKey) { _, _ in loadConvo() }
-        .onChange(of: messages) { persistConvo() }
-        .onDisappear { task?.cancel(); persistConvo() }
+        .onChange(of: convo.messages) { persistConvo() }
+        // No `task?.cancel()` here: the panel disappears on a host switch and on
+        // close, and an answer in flight must survive both (see `AIConvoState`).
+        .onDisappear { persistConvo() }
         .alert(loc("确认执行高危命令？", "Run this risky command?"),
                isPresented: Binding(get: { pendingDanger != nil },
                                     set: { if !$0 { pendingDanger = nil } })) {
@@ -398,7 +444,9 @@ struct AIPanelView: View {
 
     private var inputBar: some View {
         HStack(spacing: 8) {
-            TextField(loc("输入问题…", "Ask…"), text: $input, axis: .vertical)
+            TextField(loc("输入问题…", "Ask…"),
+                      text: Binding(get: { input }, set: { input = $0 }),
+                      axis: .vertical)
                 .textFieldStyle(.plain).font(WL.body).foregroundStyle(WL.textPrimary)
                 .lineLimit(1...4)
                 .focused($inputFocused)
@@ -435,16 +483,17 @@ struct AIPanelView: View {
         return [active] + connected.filter { $0.id != active.id }
     }
 
+    /// Bring the persisted transcript in the first time a conversation is shown.
+    /// After that the in-memory `AIConvoState` is authoritative — re-reading the
+    /// file would clobber a turn that's still streaming.
     private func loadConvo() {
-        // Save the previous conversation before switching.
-        if let loadedKey, loadedKey != conversationKey {
-            chats.save(loadedKey, display: messages, model: modelMessages)
-        }
-        let convo = chats.load(conversationKey)
-        messages = convo.display
-        modelMessages = convo.model
-        loadedKey = conversationKey
-        errorText = nil
+        let state = convo
+        guard !state.loadedFromDisk else { return }
+        let stored = chats.load(conversationKey)
+        state.messages = stored.display
+        state.modelMessages = stored.model
+        state.errorText = nil
+        state.loadedFromDisk = true
     }
 
     private func persistConvo() {
@@ -552,13 +601,13 @@ struct AIPanelView: View {
     private func saveScript() {
         let out = contextOutput()
         send(userVisible: loc("把本次操作整理成脚本", "Turn this session into a script"),
-             promptForModel: "根据下面的终端历史，把我执行过的关键命令整理成一个可复用的 shell 脚本；把其中可变的部分（路径 / IP / 主机名 / 参数）替换成 {{参数名}} 占位符；只输出一个 ```bash 代码块，脚本第一行写注释 `# name: <简短名称>`。然后点代码块的「存片段」即可保存：\n\n\(out)")
+             promptForModel: "根据下面的终端历史，把我执行过的关键命令整理成一个可复用的 shell 脚本；把其中可变的部分（路径 / IP / 主机名 / 参数）替换成 «参数名» 占位符（用书名号 «»，不要用 {{}}，那是 Go 模板语法）；只输出一个 ```bash 代码块，脚本第一行写注释 `# name: <简短名称>`。然后点代码块的「存片段」即可保存：\n\n\(out)")
     }
 
     private func makeRunbook() {
         let out = contextOutput()
         send(userVisible: loc("生成本次操作的 Runbook", "Generate a runbook for this session"),
-             promptForModel: "根据下面的终端历史（命令与输出），整理成一份可复用的 Runbook，用 Markdown 输出，结构包含：## 目标 / ## 前置条件 / ## 步骤（每步：一句说明 + 对应命令放进 ```bash 块）/ ## 验证 / ## 回滚与注意。命令中可变部分用 {{参数名}} 标注。\n\n\(out)")
+             promptForModel: "根据下面的终端历史（命令与输出），整理成一份可复用的 Runbook，用 Markdown 输出，结构包含：## 目标 / ## 前置条件 / ## 步骤（每步：一句说明 + 对应命令放进 ```bash 块）/ ## 验证 / ## 回滚与注意。命令中可变部分用 «参数名» 标注（书名号 «»，不要用 {{}}）。\n\n\(out)")
     }
 
     /// Save an AI-produced code block as a reusable snippet. A leading
@@ -663,6 +712,7 @@ struct AIPanelView: View {
         errorText = nil
         agentSteps = 0
         timeoutStreak = 0; repeatStreak = 0; lastAgentCmd = nil
+        convo.lastOutput = ""   // a new question: nothing has been run for it yet
         messages.append(AIMessage(role: .user, content: userVisible))
         // Sending a turn always snaps the transcript back to the bottom to follow
         // the reply, even if the user had scrolled up in the previous answer.
@@ -695,6 +745,9 @@ struct AIPanelView: View {
 
     private func finishTurn(_ text: String) {
         streaming = ""
+        // Persist here too: a turn can now land while the panel is hidden, and
+        // then the view's `onChange(of:)` isn't around to save it.
+        defer { persistConvo() }
         sessionTokens += lastPromptTokens + AITokenEstimator.estimate(text)
         lastPromptTokens = 0
         if !text.isEmpty {
@@ -703,7 +756,15 @@ struct AIPanelView: View {
         }
         // Agent mode: if the model proposed a command or an MCP tool call, run it
         // and feed the result back.
-        if ai.agentMode, agentSteps < maxAgentSteps, let cmd = firstRunnableCommand(text) {
+        let proposal = (ai.agentMode && agentSteps < maxAgentSteps) ? proposedCommand(in: text) : CommandProposal.none
+        if case let .rejected(note) = proposal {
+            // The reply fenced something that isn't a command (output, a config,
+            // a line echoed back from the last result). Never auto-run it — leave
+            // it as a code block the user can run deliberately.
+            messages.append(AIMessage(role: .system, content: note))
+            isStreaming = false
+            agentSteps = 0
+        } else if case let .runnable(cmd) = proposal {
             if let ph = AICommandSafety.unfilledPlaceholder(cmd) {
                 // B — placeholder guard: never run a command with a literal {{…}}.
                 haltAgent(loc("命令里有未填的占位符 \(ph)，已停止。请补一个具体值后重试，或先把命令里的 \(ph) 换成实际值。",
@@ -866,6 +927,7 @@ struct AIPanelView: View {
             let shown = String(output.suffix(4000))
             await MainActor.run {
                 messages.append(AIMessage(role: .system, content: shown))
+                convo.lastOutput = shown
                 // A — timeout breaker: if capture keeps timing out, the terminal is
                 // likely wedged; stop rather than spin on dead commands.
                 if output.contains("(执行超时)") {
@@ -901,19 +963,33 @@ struct AIPanelView: View {
     }
 
 
-    /// The first shell command inside a fenced code block, if any.
-    private func firstRunnableCommand(_ text: String) -> String? {
-        let parts = text.components(separatedBy: "```")
-        guard parts.count >= 3 else { return nil }
-        var body = parts[1]
-        if let nl = body.firstIndex(of: "\n") {
-            let first = body[body.startIndex..<nl].trimmingCharacters(in: .whitespaces)
-            if first.range(of: #"^[A-Za-z0-9_+-]{1,15}$"#, options: .regularExpression) != nil {
-                body = String(body[body.index(after: nl)...])
+    /// What agent mode should do with the fenced blocks in a reply.
+    private enum CommandProposal {
+        case runnable(String)
+        /// A shell-ish fence we refuse to auto-run, with the reason to show.
+        case rejected(String)
+        case none
+    }
+
+    /// Decide whether a reply actually asked for a command to be executed.
+    /// Anything else the model fences — output it quoted back, a config file, a
+    /// `text`/`json`/`log` block — must never reach the shell on its own.
+    private func proposedCommand(in text: String) -> CommandProposal {
+        switch AICodeFence.proposal(in: text) {
+        case .none:
+            return .none
+        case .notACommand:
+            return .rejected(loc("⚠️ 代码块看起来是输出 / 文件内容而不是命令，已跳过自动执行。确实要执行请点代码块的「运行」。",
+                                 "⚠️ That block reads like output or file content, not a command — not auto-run. Use the block's Run button if you meant it."))
+        case let .runnable(cmd):
+            // The model pasting a line straight back from the last result is the
+            // most common way "output" ends up being run as a command.
+            guard !AICodeFence.echoesOutput(cmd, in: convo.lastOutput) else {
+                return .rejected(loc("⚠️ 这条与上一条命令的输出完全相同，像是把输出当成了命令，已跳过自动执行。",
+                                     "⚠️ That line is verbatim from the last command's output, not a new command — not auto-run."))
             }
+            return .runnable(cmd)
         }
-        let cmd = body.trimmingCharacters(in: .whitespacesAndNewlines)
-        return cmd.isEmpty ? nil : cmd
     }
 
     private func systemPrompt() -> String {
@@ -923,11 +999,21 @@ struct AIPanelView: View {
             ctx += "严禁回答“我无法执行/我不能直接运行”之类的话；需要信息就直接给出命令让系统执行。"
             ctx += "拿到输出后，继续给下一条命令，或在任务完成时用自然语言给出最终结论（结论里不要再放代码块）。"
             ctx += "优先使用只读/幂等命令；高危操作会由系统弹窗让用户二次确认，你照常给出即可。"
+            // The ```bash fence is the execution channel — the single most common
+            // agent failure is quoting output back inside it, which then gets run.
+            ctx += "【代码块规则，必须遵守】```bash 块是执行通道，只能放你要执行的命令本身。"
+            ctx += "命令的输出、日志、报错、文件/配置内容、示例结果——一律不要放进 ```bash，要引用就用 ```text 块或普通文字。"
+            ctx += "不要把命令和它的预期输出放进同一个块；不要在命令前加 `$`、`%`、`➜` 等提示符；一个块只放一条命令（多步就分多轮）。"
+            ctx += "严禁把上一条命令的输出内容原样当作下一条命令提交——系统会识别并拒绝执行。"
+            ctx += "如果某个值必须由用户提供且你无法从输出中确定，不要臆造：写成 «说明» 占位符并停下来问用户（带 «» 的命令不会被执行）。"
+            ctx += "注意 Go 模板的 {{…}}（如 docker --format '{{.Names}}'、kubectl -o go-template）是正常命令语法，可照常使用。"
             if ai.agentReadOnly {
                 ctx += "【只读沙盒已开启】只能执行只读/查询命令（ls、cat、ps、df、systemctl status、docker ps 等），任何写操作/删除/重启都会被系统拒绝，不要尝试。"
             }
         } else {
             ctx += "所有可直接执行的 shell 命令必须放在 ```bash 代码块里，一行一条；解释放在代码块外。"
+            ctx += "```bash 只放命令：输出、日志、文件内容、示例结果请用 ```text 块，否则会被当成可执行命令。"
+            ctx += "需要用户填的值写成 «参数名» 占位符（不要用 {{}}，那是 Go 模板语法）。"
             ctx += "遇到高危操作（rm -rf、dd、mkfs、chmod -R 777、drop database 等）必须用 ⚠️ 明确警告。"
         }
         // App-action capability (works in any mode).
@@ -1039,7 +1125,10 @@ private struct MessageBubble: View {
             case .assistant:
                 ForEach(Array(segments(message.content).enumerated()), id: \.offset) { _, seg in
                     if seg.isCode {
-                        if !isActionJSON(seg.text) { codeBlock(seg.text) }   // card handles wl-action
+                        // `wl-action` JSON is rendered as a card instead; a block
+                        // tagged as anything other than a shell (text/json/log/a
+                        // config file) is quoted content, so it gets no Run button.
+                        if !isActionJSON(seg.text) { codeBlock(seg.text, runnable: seg.isShell) }
                     } else {
                         prose(seg.text)
                     }
@@ -1064,31 +1153,33 @@ private struct MessageBubble: View {
         }
     }
 
-    private func codeBlock(_ code: String) -> some View {
+    private func codeBlock(_ code: String, runnable: Bool) -> some View {
         let cmd = code.trimmingCharacters(in: .whitespacesAndNewlines)
         return VStack(alignment: .leading, spacing: 6) {
             Text(cmd)
-                .font(WL.mono(fontSize)).foregroundStyle(WL.green)
+                .font(WL.mono(fontSize)).foregroundStyle(runnable ? WL.green : WL.textDim)
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            HStack(spacing: 12) {
-                Spacer()
-                BracketButton(loc.t("存片段", "Save")) { onSave(cmd) }
-                if let session {
-                    BracketButton(loc.t("插入", "Insert")) { session.insertIntoTerminal(cmd) }
-                    if runTargets.count > 1 {
-                        // Multiple hosts connected: pick which one to run on.
-                        Menu {
-                            ForEach(runTargets) { t in
-                                Button(t.title) { t.runInTerminal(cmd) }
+            if runnable {
+                HStack(spacing: 12) {
+                    Spacer()
+                    BracketButton(loc.t("存片段", "Save")) { onSave(cmd) }
+                    if let session {
+                        BracketButton(loc.t("插入", "Insert")) { session.insertIntoTerminal(cmd) }
+                        if runTargets.count > 1 {
+                            // Multiple hosts connected: pick which one to run on.
+                            Menu {
+                                ForEach(runTargets) { t in
+                                    Button(t.title) { t.runInTerminal(cmd) }
+                                }
+                            } label: {
+                                Text("[\(loc.t("运行", "Run")) ▾]").font(WL.small).foregroundStyle(WL.textDim)
                             }
-                        } label: {
-                            Text("[\(loc.t("运行", "Run")) ▾]").font(WL.small).foregroundStyle(WL.textDim)
+                            .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
+                            .help(loc.t("选择要运行的主机", "Choose a host to run on"))
+                        } else {
+                            BracketButton(loc.t("运行", "Run")) { session.runInTerminal(cmd) }
                         }
-                        .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
-                        .help(loc.t("选择要运行的主机", "Choose a host to run on"))
-                    } else {
-                        BracketButton(loc.t("运行", "Run")) { session.runInTerminal(cmd) }
                     }
                 }
             }
@@ -1104,26 +1195,35 @@ private struct MessageBubble: View {
         return t.hasPrefix("{") && t.contains("\"action\"")
     }
 
-    /// Split content on ``` fences into prose/code segments (code strips an
-    /// optional leading language hint like `bash`).
-    private func segments(_ s: String) -> [(isCode: Bool, text: String)] {
-        let parts = s.components(separatedBy: "```")
-        var result: [(Bool, String)] = []
-        for (i, part) in parts.enumerated() {
-            let isCode = i % 2 == 1
-            if isCode {
-                var body = part
-                if let nl = body.firstIndex(of: "\n") {
-                    let firstLine = body[body.startIndex..<nl].trimmingCharacters(in: .whitespaces)
-                    if firstLine.range(of: #"^[A-Za-z0-9_+-]{1,15}$"#, options: .regularExpression) != nil {
-                        body = String(body[body.index(after: nl)...])
-                    }
+    /// Split content into prose and fenced-code segments, carrying each block's
+    /// language so the view can tell a command from quoted output.
+    private func segments(_ s: String) -> [(isCode: Bool, isShell: Bool, text: String)] {
+        var result: [(Bool, Bool, String)] = []
+        var lang: String?
+        var buffer: [String] = []
+        func flush(code: Bool) {
+            let text = buffer.joined(separator: "\n")
+            buffer = []
+            guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+            result.append((code, code && AICodeFence.shellLangs.contains(lang ?? ""), text))
+        }
+        for line in s.split(separator: "\n", omittingEmptySubsequences: false).map(String.init) {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("```") {
+                if lang != nil {
+                    flush(code: true)
+                    lang = nil
+                } else {
+                    let opened = String(trimmed.dropFirst(3)).trimmingCharacters(in: .whitespaces).lowercased()
+                    flush(code: false)
+                    lang = opened
                 }
-                result.append((true, body))
             } else {
-                result.append((false, part))
+                buffer.append(line)
             }
         }
+        // An unterminated fence: the reply is still streaming in.
+        flush(code: lang != nil)
         return result
     }
 }

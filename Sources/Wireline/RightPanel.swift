@@ -119,11 +119,11 @@ struct RightPanel: View {
                             onClose: { showAI = false; sessions.focusActiveTerminal() },
                             inputFocused: $aiFocused)
                     // Bind the panel's identity to the conversation (per host; all
-                    // local shells share "__local__"). Switching to a *different*
-                    // host rebuilds the panel — its onDisappear cancels any in-flight
-                    // stream and persists to the right conversation — so a streaming
-                    // reply can never bleed into, or be saved under, another host.
-                    // Two tabs of the same host keep one instance (shared convo).
+                    // local shells share "__local__"), so switching to a *different*
+                    // host gives it a fresh view with that host's transcript. The
+                    // conversation itself lives in `AIConvoState`, outside the view,
+                    // so the rebuild neither loses nor cross-contaminates a reply
+                    // that's still streaming. Two tabs of one host share the panel.
                     .id(activeHost?.alias ?? "__local__")
             }
         }

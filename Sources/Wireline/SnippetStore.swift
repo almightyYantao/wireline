@@ -7,30 +7,45 @@ struct Snippet: Identifiable, Codable, Sendable, Equatable {
     var name: String
     var command: String
 
-    /// Placeholder names found in the command, written as `{{name}}`, unique and
-    /// in first-appearance order. Presented as fill-in fields before running.
-    var placeholders: [String] {
-        guard let re = try? NSRegularExpression(pattern: "\\{\\{\\s*([A-Za-z0-9_]+)\\s*\\}\\}") else { return [] }
+    /// Placeholders are written `«name»`. Guillemets rather than `{{name}}`
+    /// because `{{…}}` is Go-template syntax, which turns up in exactly the kind
+    /// of command that gets saved here (`docker ps --format '{{.Names}}'`,
+    /// `kubectl -o go-template`, Helm charts) — the braces there are the
+    /// command's own syntax, not a blank to fill in. `{{name}}` is still
+    /// recognised so snippets saved before the switch keep working, and it also
+    /// accepts a non-ASCII name (`«服务名»`), which the old pattern silently missed.
+    private static let placeholderRE = try? NSRegularExpression(
+        pattern: #"«\s*([^«»\n]{1,60}?)\s*»|\{\{\s*([\p{L}\p{N}_]+)\s*\}\}"#)
+
+    /// Every placeholder occurrence, in source order, with its name.
+    private var placeholderMatches: [(range: NSRange, name: String)] {
+        guard let re = Self.placeholderRE else { return [] }
         let ns = command as NSString
+        return re.matches(in: command, range: NSRange(location: 0, length: ns.length)).compactMap { m in
+            for group in 1...2 where m.range(at: group).location != NSNotFound {
+                return (m.range, ns.substring(with: m.range(at: group)))
+            }
+            return nil
+        }
+    }
+
+    /// Placeholder names found in the command, unique and in first-appearance
+    /// order. Presented as fill-in fields before running.
+    var placeholders: [String] {
         var seen = Set<String>()
         var result: [String] = []
-        for m in re.matches(in: command, range: NSRange(location: 0, length: ns.length)) {
-            let name = ns.substring(with: m.range(at: 1))
-            if seen.insert(name).inserted { result.append(name) }
+        for match in placeholderMatches where seen.insert(match.name).inserted {
+            result.append(match.name)
         }
         return result
     }
 
-    /// The command with every `{{name}}` replaced by the supplied value.
+    /// The command with every placeholder replaced by the supplied value.
     func filled(with values: [String: String]) -> String {
-        guard let re = try? NSRegularExpression(pattern: "\\{\\{\\s*([A-Za-z0-9_]+)\\s*\\}\\}") else { return command }
-        let ns = command as NSString
         var out = command
-        // Replace from the back so ranges stay valid.
-        for m in re.matches(in: command, range: NSRange(location: 0, length: ns.length)).reversed() {
-            let name = ns.substring(with: m.range(at: 1))
-            let value = values[name] ?? ""
-            out = (out as NSString).replacingCharacters(in: m.range, with: value)
+        // Replace from the back so the earlier ranges stay valid.
+        for match in placeholderMatches.reversed() {
+            out = (out as NSString).replacingCharacters(in: match.range, with: values[match.name] ?? "")
         }
         return out
     }
@@ -83,7 +98,7 @@ final class SnippetStore {
         Snippet(name: "系统负载 / Load", command: "uptime"),
         Snippet(name: "监听端口 / Listening ports", command: "ss -tlnp"),
         Snippet(name: "进程占用 / Top processes", command: "ps aux --sort=-%cpu | head"),
-        Snippet(name: "查看日志 / Tail log", command: "tail -f {{path}}"),
-        Snippet(name: "查找进程 / Find process", command: "ps aux | grep {{keyword}}")
+        Snippet(name: "查看日志 / Tail log", command: "tail -f «path»"),
+        Snippet(name: "查找进程 / Find process", command: "ps aux | grep «keyword»")
     ]
 }

@@ -151,7 +151,7 @@ Data lives only in a local `todos.json` (plus the opt-in encrypted backup); it n
 - 📥 **ZMODEM transfer**: run `sz` on the remote and Wireline catches it automatically — files land in `~/Downloads` (revealed in Finder); `rz` uploads via a file picker (bridges the local `lrzsz` — `brew install lrzsz`)
 - ⚡ Batch / fleet execution across selected hosts, aggregated output
 - 🔀 Graphical port forwarding (`ssh -L`, jump hosts, one-click toggle)
-- 🧰 Command snippets: multi-line commands, `{{placeholders}}` prompt-filled at run time
+- 🧰 Command snippets: multi-line commands, `«placeholders»` prompt-filled at run time
 - 🔑 **SSH key manager**: list `~/.ssh` keys with fingerprints, generate (ed25519/rsa/ecdsa), import keys from elsewhere (fixes permissions), copy public key, or deploy to a host via `ssh-copy-id`
 - 💾 Encrypted backup & migration to a file, or **to WebDAV** (ciphertext only) — to-dos ride along too
 
