@@ -33,124 +33,35 @@ enum TerminalFont {
     }
 }
 
-/// A `LocalProcessTerminalView` that spawns `ssh` in a PTY and — for
-/// password hosts — best-effort auto-fills the Keychain password and runs
-/// `sudo -i` when the host is flagged auto-sudo.
-///
-/// Injection is deliberately conservative: the password is sent at most twice
-/// (login prompt, then an optional sudo prompt) and only when the incoming
-/// stream actually looks like a password prompt, so it never leaks into a
-/// normal shell.
-final class WirelineTerminalView: LocalProcessTerminalView {
-    private let password: String?
-    private let sudoPassword: String?
-    private let autoSudo: Bool
+/// The SwiftTerm engine: a `TerminalView` that renders what `TerminalIO` feeds
+/// it and hands keystrokes back. It adds the app's terminal behaviour on top —
+/// prompt-aware reflow (OSC 133), jump-to-prompt / last output, colour-query
+/// answers, a themed scrollbar, focus-aware caret, ⌘-click paths, snapshots.
+final class WirelineTerminalView: TerminalView, TerminalEngine {
+    /// The session's PTY side (for resize flushing and output observation).
+    weak var io: TerminalIO?
+
+    /// Bytes for the child: keystrokes, pastes, query replies.
+    var onInput: ((ArraySlice<UInt8>) -> Void)?
+    /// The grid changed size (the PTY is told, throttled, by `TerminalIO`).
+    var onGridResize: (() -> Void)?
 
     /// Invoked when the user presses ⌘W while this terminal is focused, so the
     /// app can close just this session instead of the whole window.
     var onCloseRequested: (() -> Void)?
 
-    /// Called when a command that ran for a while finishes (the shell prompt
-    /// returns), with its elapsed seconds — drives the "command finished" notice.
-    var onCommandFinished: ((TimeInterval) -> Void)?
-
-    /// Called when this session's busy state flips: `true` when a command/process
-    /// starts running (the shell prompt goes away), `false` when it returns to the
-    /// prompt (with the run's elapsed seconds). Drives the "running…" tab badge and
-    /// the background-tab completion reminder. Emitted only after the first shell
-    /// prompt, so the initial connect/login phase doesn't count as a "run".
-    var onBusyChange: ((Bool, TimeInterval) -> Void)?
-
-    /// Called on every chunk of output, so a backgrounded tab can flag that it has
-    /// unread output. Kept lightweight — the session decides whether it matters.
-    var onOutput: (() -> Void)?
-
-    /// Fired once when the first byte arrives from the host — i.e. the connection
-    /// is live and the server is responding (dialing → connected).
-    var onConnected: (() -> Void)?
-    /// Fired when the underlying process exits (ssh dropped, logout, killed).
-    var onDisconnected: ((Int32?) -> Void)?
-    private var hasConnected = false
-
     /// Fired when the shell reports its working directory via OSC 7
-    /// (`\e]7;file://host/path\a`). The payload is the raw OSC-7 string; the
-    /// session parses it into a path to drive the tab title / tooltip. Local
-    /// shells get this for free via the injected zsh hook (see
-    /// `SessionStore`/`zshIntegrationZDOTDIR`); remote shells only emit it when
-    /// configured to.
+    /// (`\e]7;file://host/path\a`). The payload is the raw OSC-7 string.
     var onDirectoryChange: ((String?) -> Void)?
     /// A program-set window title (OSC 0/2).
     var onTitleReport: ((String) -> Void)?
 
-    /// Fired when the user submits a `# …` line at the prompt — a natural-language
-    /// AI request. The payload is the text after the `#`. Detected from the echoed
-    /// output (SwiftTerm seals the key path, so we can't read the keystrokes).
-    var onCommentRequest: ((String) -> Void)?
-    private var lastCommentRequest = ""
-
     /// Opaque background for the IME marked-text (composition) overlay. SwiftTerm
-    /// styles that floating preview with `nativeBackgroundColor`, but we force the
-    /// terminal's native background to `.clear` for wallpaper translucency — and
-    /// `.clear` faded to 0.9 alpha renders as an ugly opaque black box. So we hand
-    /// the overlay a real, opaque theme color instead. Set from the active theme.
+    /// styles that floating preview with `nativeBackgroundColor`, which is
+    /// transparent here — so hand the overlay a real, opaque theme colour.
     var markedTextBackground: NSColor = NSColor(srgbRed: 0.11, green: 0.12, blue: 0.14, alpha: 1)
 
-    // Session logging: append ANSI-stripped output to a file while active.
-    private var logHandle: FileHandle?
-
-    /// Begin logging this session's (clean) output to a file under
-    /// `~/Library/Logs/Wireline/`. Returns the file URL, or nil on failure.
-    func startLogging(label: String) -> URL? {
-        let dir = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Logs/Wireline", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let safe = label.map { $0.isLetter || $0.isNumber ? $0 : "-" }
-        let stamp = Self.logStampFormatter.string(from: Date())
-        let url = dir.appendingPathComponent("\(String(safe))-\(stamp).log")
-        guard FileManager.default.createFile(atPath: url.path, contents: nil),
-              let handle = try? FileHandle(forWritingTo: url) else { return nil }
-        // Seed with a header so a fresh log has context.
-        handle.write(Data("# Wireline session log — \(label) — \(stamp)\n".utf8))
-        logHandle = handle
-        return url
-    }
-
-    func stopLogging() {
-        try? logHandle?.close()
-        logHandle = nil
-    }
-
-    private static let logStampFormatter: DateFormatter = {
-        let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd-HHmmss"; return f
-    }()
-
-    private var tail = ""            // rolling tail of recent output
-    private var passwordSends = 0
-    private var sudoPasswordSends = 0
-    private var sudoSent = false
-    private var lastPasswordSend: DispatchTime?
-
-    // Command-timing for the finished-notification, inferred from output only
-    // (SwiftTerm seals the key-input path, so we can't observe Return): a command
-    // runs from when the shell prompt disappears (output starts) to when it
-    // returns.
-    private var atPrompt = true
-    private var leftPromptAt: DispatchTime?
-    private var promptTail = ""
-    /// Set once the first shell prompt appears, so the connect/login phase isn't
-    /// mistaken for a running command.
-    private var hasSeenFirstPrompt = false
-    /// Debounced "a command is running" state — survives transient prompt redraws
-    /// (async prompt segments, theme repaints) so an idle shell never flickers to
-    /// "running".
-    private var busy = false
-    /// Bumped on every prompt transition to invalidate a pending busy timer.
-    private var busyGeneration = 0
-
-    init(frame: CGRect, password: String?, sudoPassword: String? = nil, autoSudo: Bool) {
-        self.password = password
-        self.sudoPassword = sudoPassword
-        self.autoSudo = autoSudo
+    override init(frame: CGRect) {
         super.init(frame: frame)
         // Default SwiftTerm scrollback is 500 lines; deepen it so cross-launch
         // restore (and in-session scrollback) keeps a meaningful amount of history.
@@ -160,22 +71,38 @@ final class WirelineTerminalView: LocalProcessTerminalView {
         nativeBackgroundColor = NSColor(red: 0.039, green: 0.055, blue: 0.039, alpha: 1)
         nativeForegroundColor = NSColor(red: 0.78, green: 0.83, blue: 0.78, alpha: 1)
         caretColor = NSColor(red: 0.20, green: 0.82, blue: 0.50, alpha: 1)
-        // Receive SwiftTerm's process-level callbacks (chiefly OSC 7 cwd) via a
-        // forwarder. We can't be our own `processDelegate`: the base class already
-        // implements `hostCurrentDirectoryUpdate` (non-open, so un-overridable) and
-        // conforming this main-actor view to the non-isolated delegate protocol
-        // crosses actor isolation. `processDelegate` is weak, hence the strong hold.
-        let forwarder = ProcessCallbackForwarder(owner: self)
-        processForwarder = forwarder
-        processDelegate = forwarder
-        // Debounce the PTY's window-size updates (see ResizeDebouncer).
-        let debouncer = ResizeDebouncer(base: self)
-        resizeDebouncer = debouncer
-        terminalDelegate = debouncer
+        // `terminalDelegate` is weak, hence the strong hold.
+        let bridge = SwiftTermBridge(owner: self)
+        self.bridge = bridge
+        terminalDelegate = bridge
         installPromptTracking()
         // SwiftTerm swaps any cursor for a thick hollow box when unfocused; we
         // keep the shape and fade the colour instead (see refreshCaretFocus).
         caretViewTracksFocus = false
+    }
+
+    private var bridge: SwiftTermBridge?
+
+    // MARK: TerminalEngine
+
+    func feed(_ bytes: ArraySlice<UInt8>) { feed(byteArray: bytes) }
+
+    var gridSize: winsize {
+        let t = getTerminal()
+        let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 1
+        let cell = cellSize
+        return winsize(ws_row: UInt16(t.rows), ws_col: UInt16(t.cols),
+                       ws_xpixel: UInt16(clamping: Int(cell.width * CGFloat(t.cols) * scale)),
+                       ws_ypixel: UInt16(clamping: Int(cell.height * CGFloat(t.rows) * scale)))
+    }
+
+    /// One cell, in points (same formula SwiftTerm lays the grid out with).
+    private var cellSize: CGSize {
+        let t = getTerminal()
+        guard t.rows > 0 else { return .zero }
+        let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
+        let w = ceil(font.advancement(forGlyph: font.glyph(withName: "W")).width * scale) / scale
+        return CGSize(width: w, height: getOptimalFrameSize().height / CGFloat(t.rows))
     }
 
     // MARK: Cursor focus
@@ -413,13 +340,16 @@ final class WirelineTerminalView: LocalProcessTerminalView {
         return grid(size)
     }
 
-    /// Called after every chunk of PTY output is rendered, while set — used to
-    /// reveal a resized terminal only once the shell's redraw has finished.
-    var outputObserver: (() -> Void)?
+    /// Called after every chunk of output is rendered, while set (lives on the
+    /// IO side, which sees every chunk).
+    var outputObserver: (() -> Void)? {
+        get { io?.outputObserver }
+        set { io?.outputObserver = newValue }
+    }
 
-    /// Send a pending debounced size to the PTY now. True if one was pending.
+    /// Send a pending throttled size to the PTY now. True if one was pending.
     @discardableResult
-    func flushPendingResize() -> Bool { resizeDebouncer?.flush() ?? false }
+    func flushPendingResize() -> Bool { io?.flushPendingResize() ?? false }
 
     private func blankPromptBeforeReflow() {
         guard promptClearOffset == nil, let start = promptStartRow, promptRedraw != .none,
@@ -443,10 +373,6 @@ final class WirelineTerminalView: LocalProcessTerminalView {
             shiftCommands(by: (absoluteCursorRow - k) - old)
         }
     }
-
-    private var processForwarder: ProcessCallbackForwarder?
-    /// `terminalDelegate` is weak, hence the strong hold.
-    private var resizeDebouncer: ResizeDebouncer?
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) unavailable") }
@@ -489,16 +415,11 @@ final class WirelineTerminalView: LocalProcessTerminalView {
     /// buffer-switch refresh it too. The net effect is a scrollbar that's calm
     /// during output and correct the moment you interact with it.
     override func scrolled(source terminal: Terminal, yDisp: Int) {
-        terminalDelegate?.scrolled(source: self, position: scrollPosition)
         customScrollbar?.reflectScroll()
     }
 
-    /// The view→app scroll callback — fired both by the engine forward above and by
-    /// `scrollTo` (user wheel/drag). A single place to refresh our custom scrollbar.
-    override func scrolled(source: TerminalView, position: Double) {
-        super.scrolled(source: source, position: position)
-        customScrollbar?.reflectScroll()
-    }
+    /// A user scroll (wheel / drag / `scrollTo`), via the delegate bridge.
+    fileprivate func userScrolled() { customScrollbar?.reflectScroll() }
 
     // MARK: - Custom scrollbar
 
@@ -635,40 +556,6 @@ final class WirelineTerminalView: LocalProcessTerminalView {
         return token
     }
 
-    /// The child process (ssh / shell) exited — the connection is gone. Let the
-    /// session flip its state so the UI can show "disconnected".
-    override func processTerminated(_ source: LocalProcess, exitCode: Int32?) {
-        super.processTerminated(source, exitCode: exitCode)
-        // The PTY is gone — don't let an in-flight ZMODEM transfer's local tool
-        // hang waiting on a stream that will never continue.
-        zmodem.abort()
-        onDisconnected?(exitCode)
-    }
-
-    /// Clear the per-connection heuristic state so a relaunched process (see
-    /// `TerminalSession.reconnect`) is treated as a fresh dial: the password is
-    /// eligible to be sent again, the "connected" edge fires on the first byte,
-    /// and prompt/busy tracking restarts from the login phase. The on-screen
-    /// buffer and scrollback are deliberately left untouched.
-    func resetForReconnect() {
-        hasConnected = false
-        tail = ""
-        passwordSends = 0
-        sudoPasswordSends = 0
-        sudoSent = false
-        lastPasswordSend = nil
-        atPrompt = true
-        leftPromptAt = nil
-        promptTail = ""
-        hasSeenFirstPrompt = false
-        busy = false
-        busyGeneration &+= 1
-        detectTail = ""
-        inAltBuffer = false
-        vimSniffing = false
-        report(nil)
-    }
-
     /// SwiftTerm draws the IME composition preview as a floating `NSTextField`
     /// whose background is `nativeBackgroundColor.withAlphaComponent(0.9)`. Since
     /// we keep the native background `.clear` for translucency, that resolves to a
@@ -690,327 +577,11 @@ final class WirelineTerminalView: LocalProcessTerminalView {
         }
     }
 
-    /// A rolling, ANSI-stripped tail of recent terminal output, for AI context.
-    private(set) var recentClean = ""
-
-    /// Bridges remote `sz`/`rz` (ZMODEM) transfers to the local `lrzsz` tools.
-    /// Lazily built so the closures can capture `self`.
-    private lazy var zmodem = ZModemBridge(
-        sendToRemote: { [weak self] bytes in
-            let copy = Array(bytes)
-            DispatchQueue.main.async { self?.send(data: copy[...]) }
-        },
-        status: { [weak self] kind, zh, en in
-            DispatchQueue.main.async {
-                guard let self else { return }
-                let color: String, icon: String
-                switch kind {
-                case .info: color = "36"; icon = "⇅"
-                case .success: color = "32"; icon = "✓"
-                case .error: color = "31"; icon = "✗"
-                }
-                let msg = Localizer.shared.t(zh, en)
-                self.feed(text: "\r\n\u{1b}[\(color)m\(icon) \(msg)\u{1b}[0m\r\n")
-            }
-        }
-    )
-
     /// The full buffer (scrollback + screen) serialized WITH colors and styles,
     /// for cross-launch scrollback restore. Read on demand at save time. Returns
     /// empty while a full-screen app owns the alternate screen (see
     /// `serializeColored`), so callers should keep the prior snapshot in that case.
     var renderedBuffer: Data { getTerminal().serializeColored() }
-
-    override func dataReceived(slice: ArraySlice<UInt8>) {
-        // ZMODEM: once a transfer is live, every remote byte belongs to the
-        // protocol — divert it to the local `rz`/`sz` instead of rendering it.
-        if zmodem.isActive { zmodem.feedFromRemote(slice); return }
-        // Otherwise sniff for a ZMODEM init header. The gate on 0x18 (ZDLE),
-        // which is virtually absent from normal output, keeps the hot path cheap.
-        if slice.contains(0x18), let (dir, off) = ZModemBridge.detect(in: slice) {
-            let start = slice.startIndex
-            if off > 0 { super.dataReceived(slice: slice[start ..< start + off]) }
-            zmodem.begin(direction: dir, initialBytes: Array(slice[(start + off)...]))
-            return
-        }
-
-        super.dataReceived(slice: slice)
-        outputObserver?()
-        let chunk = String(decoding: slice, as: UTF8.self)
-        detectFullScreenApp(chunk)
-        let clean = Self.stripAnsi(chunk)
-        recentClean += clean
-        if recentClean.count > 20000 { recentClean = String(recentClean.suffix(20000)) }
-        if let logHandle { logHandle.write(Data(clean.utf8)) }
-        onOutput?()
-        if !hasConnected { hasConnected = true; onConnected?() }
-
-        // Command-finished heuristic (output only): track the prompt→output→prompt
-        // cycle. Leaving the prompt = a command started; the prompt returning =
-        // it finished. Only durations ≥ the threshold notify.
-        promptTail += clean
-        if promptTail.count > 400 { promptTail = String(promptTail.suffix(400)) }
-        detectCommentRequest()
-        let promptLine = promptTail.split(separator: "\n", omittingEmptySubsequences: false)
-            .reversed().first { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
-            .map(String.init) ?? ""
-        let nowAtPrompt = isShellPrompt(promptLine)
-        // Seeing any prompt means we're past the connect/login phase — even if it
-        // doesn't flip the state (e.g. the first output already is a prompt).
-        if nowAtPrompt { hasSeenFirstPrompt = true }
-        if nowAtPrompt != atPrompt {
-            atPrompt = nowAtPrompt
-            busyGeneration &+= 1
-            if nowAtPrompt {
-                // Back at the prompt: if a command had actually started, it's done.
-                if busy {
-                    busy = false
-                    let elapsed = leftPromptAt.map {
-                        Double(DispatchTime.now().uptimeNanoseconds - $0.uptimeNanoseconds) / 1e9
-                    } ?? 0
-                    // The session applies the user's threshold.
-                    if elapsed >= 1 { onCommandFinished?(elapsed) }
-                    onBusyChange?(false, elapsed)
-                }
-            } else if hasSeenFirstPrompt {
-                // Left the prompt — only count it as "running" if it stays that
-                // way for a beat, so prompt redraws / async segments (p10k, etc.)
-                // don't flicker the badge on an idle shell.
-                leftPromptAt = .now()
-                let gen = busyGeneration
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
-                    guard let self, self.busyGeneration == gen, !self.atPrompt, !self.busy else { return }
-                    self.busy = true
-                    self.onBusyChange?(true, 0)
-                }
-            }
-        }
-
-        guard password != nil || sudoPassword != nil || autoSudo else { return }
-
-        tail += String(decoding: slice, as: UTF8.self)
-        if tail.count > 600 { tail = String(tail.suffix(600)) }
-        // Examine the last couple of non-empty lines — the live prompt.
-        let lines = tail.split(separator: "\n", omittingEmptySubsequences: false)
-        let lastLine = lines.reversed().first { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
-            .map(String.init) ?? ""
-
-        // 1) Answer the ssh login (or key passphrase) prompt with the login
-        //    password — only before auto-sudo kicks in, deduped so multiple read
-        //    chunks around the same prompt don't double-send.
-        if !sudoSent, let password, passwordSends < 3, isPasswordPrompt(lastLine), mayResend() {
-            passwordSends += 1
-            lastPasswordSend = .now()
-            tail = ""
-            send(txt: password + "\n")
-            return
-        }
-
-        // 1b) Answer the sudo password prompt after `sudo -i`. Uses the dedicated
-        //     sudo password, which is available even on key-auth hosts (where the
-        //     login `password` is nil).
-        if sudoSent, let sudoPassword, sudoPasswordSends < 3, isPasswordPrompt(lastLine), mayResend() {
-            sudoPasswordSends += 1
-            lastPasswordSend = .now()
-            tail = ""
-            send(txt: sudoPassword + "\n")
-            return
-        }
-
-        // 2) On the first real shell prompt, kick off auto-sudo once.
-        if autoSudo, !sudoSent, isShellPrompt(lastLine) {
-            sudoSent = true
-            tail = ""
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
-                self?.send(txt: SSHCommand.autoSudoRemoteCommand() + "\n")
-            }
-        }
-    }
-
-    // MARK: - Full-screen editor detection
-
-    /// Fired when a vim-family editor starts (`"vim"`) or exits (`nil`), so the
-    /// UI can pop up / hide the cheat-sheet. Runs on the main thread.
-    var onEditorChange: ((String?) -> Void)?
-
-    private var detectTail = ""
-    private var inAltBuffer = false
-    /// While in the alt screen and not yet identified, keep sniffing content for
-    /// vim's on-screen signatures (see `contentLooksLikeVim`).
-    private var vimSniffing = false
-    private var reportedEditor: String?
-
-    /// Detect the alternate-screen-buffer switch that full-screen TUIs (vim, less,
-    /// htop…) trigger. Identify vim two ways — the echoed command that launched it,
-    /// or vim's on-screen signatures once drawn — so the hint is reliable even with
-    /// fancy prompts or indirect launches (`git commit`, `crontab -e`). Only vim
-    /// raises the hint, matching what the cheat-sheet documents.
-    private func detectFullScreenApp(_ chunk: String) {
-        detectTail += chunk
-        if detectTail.count > 4000 { detectTail = String(detectTail.suffix(4000)) }
-
-        let enterTokens = ["\u{1b}[?1049h", "\u{1b}[?1047h", "\u{1b}[?47h"]
-        let exitTokens  = ["\u{1b}[?1049l", "\u{1b}[?1047l", "\u{1b}[?47l"]
-        func lastIndex(of tokens: [String]) -> String.Index? {
-            tokens.compactMap { detectTail.range(of: $0, options: .backwards)?.lowerBound }.max()
-        }
-        let enterAt = lastIndex(of: enterTokens)
-        let exitAt = lastIndex(of: exitTokens)
-
-        // Current state = whichever toggle appears later in the buffer.
-        let nowInAlt: Bool
-        switch (enterAt, exitAt) {
-        case (nil, nil): nowInAlt = inAltBuffer     // no toggle yet; keep current
-        case (.some, nil): nowInAlt = true
-        case (nil, .some): nowInAlt = false
-        case let (.some(e), .some(x)): nowInAlt = e > x
-        }
-
-        if nowInAlt != inAltBuffer {
-            inAltBuffer = nowInAlt
-            if nowInAlt {
-                // Just entered a full-screen app.
-                if let e = enterAt, looksLikeVim(before: e) {
-                    report("vim")
-                } else {
-                    vimSniffing = true          // undecided — watch the content
-                }
-            } else {
-                vimSniffing = false
-                report(nil)
-            }
-        } else if inAltBuffer, vimSniffing, contentLooksLikeVim(chunk) {
-            report("vim")
-        }
-    }
-
-    private func report(_ editor: String?) {
-        if editor != nil { vimSniffing = false }
-        guard editor != reportedEditor else { return }
-        reportedEditor = editor
-        onEditorChange?(editor)
-    }
-
-    /// vim's distinctive on-screen output: a column of `~` for empty lines, or a
-    /// mode banner. `less`/`htop`/`man` don't draw these.
-    private func contentLooksLikeVim(_ chunk: String) -> Bool {
-        let clean = Self.stripAnsi(chunk)
-        if clean.contains("-- INSERT --") || clean.contains("-- VISUAL --") { return true }
-        let tildes = clean.filter { $0 == "~" }.count
-        return tildes >= 3
-    }
-
-    /// Was a vim-family editor the command that just switched to the alt screen?
-    /// Scans a ~300-char window right before the switch (ANSI escapes stripped)
-    /// for a `vim`/`vi`/`nvim` command word. A window, rather than just the last
-    /// line, tolerates prompt redraws (e.g. powerlevel10k transient prompt).
-    private func looksLikeVim(before enterIndex: String.Index) -> Bool {
-        let head = detectTail[..<enterIndex]
-        let start = head.index(head.endIndex, offsetBy: -300, limitedBy: head.startIndex) ?? head.startIndex
-        let window = Self.stripAnsi(String(head[start...]))
-        let words = window.lowercased()
-            .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
-            .map(String.init)
-        let editors: Set<String> = ["vim", "vi", "nvim", "view", "vimdiff", "nvimdiff"]
-        return words.contains { editors.contains($0) }
-    }
-
-    /// Remove CSI / OSC escape sequences so residual escape bytes don't get
-    /// mistaken for command words.
-    private static func stripAnsi(_ s: String) -> String {
-        var out = ""
-        out.reserveCapacity(s.count)
-        var i = s.startIndex
-        while i < s.endIndex {
-            if s[i] == "\u{1b}" {
-                // Skip until the terminating byte of the escape sequence.
-                var j = s.index(after: i)
-                while j < s.endIndex {
-                    let c = s[j]
-                    if c.isLetter || c == "\u{07}" { j = s.index(after: j); break }
-                    j = s.index(after: j)
-                }
-                i = j
-            } else {
-                out.append(s[i])
-                i = s.index(after: i)
-            }
-        }
-        return out
-    }
-
-    /// At least ~1.5s since the last password we sent, so we don't answer the
-    /// same prompt twice as it streams in over several reads.
-    private func mayResend() -> Bool {
-        guard let last = lastPasswordSend else { return true }
-        return DispatchTime.now().uptimeNanoseconds - last.uptimeNanoseconds > 1_500_000_000
-    }
-
-    private func isPasswordPrompt(_ line: String) -> Bool {
-        let t = line.trimmingCharacters(in: .whitespaces).lowercased()
-        guard t.hasSuffix(":") else { return false }
-        return t.contains("password") || t.contains("passphrase")
-    }
-
-    private func isShellPrompt(_ line: String) -> Bool {
-        let t = line.trimmingCharacters(in: .whitespaces)
-        return t.hasSuffix("$") || t.hasSuffix("#") || t.hasSuffix("%") || t.hasSuffix("❯") || t.hasSuffix(">")
-    }
-
-    /// A completed `# …` request line typed at the prompt. Requires a prompt
-    /// terminator (`$`/`#`/`%`/`>`/`❯`) followed by `# <text>` and a line break,
-    /// so a root prompt's own trailing `#` (e.g. `root@h:~# ls`) can't be mistaken
-    /// for a request — only a *second* `#` the user typed counts. Fires once per
-    /// distinct request. Works regardless of the shell's `interactivecomments`
-    /// setting (the shell may error on the line; we still catch the echo).
-    private static let commentRequestRE = try? NSRegularExpression(
-        pattern: "[#$%>\u{2771}\u{276F}][ \\t]+#[ \\t\u{3000}]+(\\S[^\\r\\n]{0,200})[\\r\\n]")
-
-    private func detectCommentRequest() {
-        guard hasSeenFirstPrompt, onCommentRequest != nil,
-              let re = Self.commentRequestRE else { return }
-        let ns = promptTail as NSString
-        guard let m = re.matches(in: promptTail, range: NSRange(location: 0, length: ns.length)).last,
-              m.numberOfRanges > 1 else { return }
-        let req = ns.substring(with: m.range(at: 1)).trimmingCharacters(in: .whitespaces)
-        guard req.count >= 2, req != lastCommentRequest else { return }
-        lastCommentRequest = req
-        onCommentRequest?(req)
-    }
-}
-
-/// Bridges SwiftTerm's `LocalProcessTerminalViewDelegate` callbacks to the owning
-/// terminal view's closures. Kept as a standalone (non-isolated) object so the
-/// main-actor `WirelineTerminalView` needn't conform to the delegate protocol
-/// itself (which would collide with the base class and cross actor isolation).
-/// SwiftTerm delivers these on the main thread, so hopping back is safe.
-final class ProcessCallbackForwarder: LocalProcessTerminalViewDelegate {
-    private weak var owner: WirelineTerminalView?
-    init(owner: WirelineTerminalView) { self.owner = owner }
-
-    func sizeChanged(source: LocalProcessTerminalView, newCols: Int, newRows: Int) {}
-
-    // We deliberately ignore program-set window titles (OSC 0/2): the tab title is
-    // driven by the working directory (OSC 7) so it stays predictable and doesn't
-    // flicker with whatever `vim`/`top`/etc. push.
-    func setTerminalTitle(source: LocalProcessTerminalView, title: String) {
-        // Not used as the tab title, but an SSH session mines it for the remote
-        // directory (see TerminalSession.applyReportedTitle).
-        guard let owner else { return }
-        DispatchQueue.main.async { owner.onTitleReport?(title) }
-    }
-
-    func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {
-        // Pull `owner` into a local (it's a `@MainActor` view, hence Sendable) so
-        // the hop captures only Sendable values, not this non-isolated forwarder.
-        guard let owner else { return }
-        DispatchQueue.main.async { owner.onDirectoryChange?(directory) }
-    }
-
-    // Disconnection is handled by the view's `processTerminated(_:exitCode:)`
-    // override (which forwards here via `super`), so this hop is a no-op to avoid
-    // firing `onDisconnected` twice.
-    func processTerminated(source: TerminalView, exitCode: Int32?) {}
 }
 
 /// A themed, self-drawn overlay scrollbar for the terminal, replacing SwiftTerm's
@@ -1164,84 +735,48 @@ final class TerminalScrollbar: NSView {
     }
 }
 
-/// Sits between SwiftTerm's view and its own `LocalProcessTerminalView` delegate
-/// so the *screen* reflows live on every resize, but the *PTY* only learns the
-/// new size once resizing settles. Each PTY resize is a SIGWINCH, and shells
-/// with fancy prompts (p10k, starship) reprint the prompt on every one — a
-/// fullscreen transition delivers ~30 intermediate sizes, which used to stack
-/// dozens of duplicate prompts and smear right prompts into a staircase. Now
-/// the remote side gets exactly one, final size. Everything else is forwarded.
-final class ResizeDebouncer: TerminalViewDelegate {
-    private weak var base: WirelineTerminalView?
-    private var pending: DispatchWorkItem?
-    /// At most one PTY resize per this interval (Ghostty coalesces for 25 ms).
-    private let settle: TimeInterval = 0.05
+/// SwiftTerm's view delegate, as a standalone non-isolated object (the
+/// protocol isn't main-actor; SwiftTerm calls it on the main thread). Routes
+/// input to the PTY side and reports grid / title / directory changes.
+final class SwiftTermBridge: TerminalViewDelegate {
+    private weak var owner: WirelineTerminalView?
+    init(owner: WirelineTerminalView) { self.owner = owner }
 
-    init(base: WirelineTerminalView) { self.base = base }
-
-    /// Run a pending resize immediately. True if there was one.
-    func flush() -> Bool {
-        guard let work = pending, !work.isCancelled else { return false }
-        work.cancel()
-        pending = nil
-        deliver()
-        return true
-    }
-
-    private func deliver() {
-        guard let base else { return }
-        MainActor.assumeIsolated {
-            let t = base.getTerminal()
-            base.sizeChanged(source: base, newCols: t.cols, newRows: t.rows)
-            base.didDeliverResize()
-        }
+    private func onMain(_ body: @MainActor (WirelineTerminalView) -> Void) {
+        guard let owner else { return }
+        MainActor.assumeIsolated { body(owner) }
     }
 
     func sizeChanged(source: TerminalView, newCols: Int, newRows: Int) {
-        // Throttle, not debounce: while a drag keeps resizing, still deliver at
-        // most every `settle` seconds, so the shell keeps redrawing its prompt
-        // instead of leaving it blank until the mouse stops. Animated layout and
-        // fullscreen never get here mid-flight — those freeze the grid and flush
-        // once at the end.
-        guard pending == nil else { return }
-        // Runs on the main queue (SwiftTerm resizes there too) and reads the size
-        // at fire time: always the latest, never a stale one.
-        let work = DispatchWorkItem { [weak self] in
-            self?.pending = nil
-            self?.deliver()
-        }
-        pending = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + settle, execute: work)
-    }
-
-    func setTerminalTitle(source: TerminalView, title: String) {
-        base?.setTerminalTitle(source: source, title: title)
-    }
-    func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {
-        base?.hostCurrentDirectoryUpdate(source: source, directory: directory)
+        onMain { $0.onGridResize?() }
     }
     func send(source: TerminalView, data: ArraySlice<UInt8>) {
-        base?.send(source: source, data: data)
+        onMain { $0.onInput?(data) }
+    }
+    // Program-set window titles aren't used as the tab title, but an SSH
+    // session mines them for the remote directory (applyReportedTitle).
+    func setTerminalTitle(source: TerminalView, title: String) {
+        onMain { $0.onTitleReport?(title) }
+    }
+    func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {
+        onMain { $0.onDirectoryChange?(directory) }
     }
     func scrolled(source: TerminalView, position: Double) {
-        base?.scrolled(source: source, position: position)
+        onMain { $0.userScrolled() }
     }
     func requestOpenLink(source: TerminalView, link: String, params: [String: String]) {
-        base?.requestOpenLink(source: source, link: link, params: params)
+        TerminalView.openDefaultLink(link)
     }
-    func bell(source: TerminalView) {
-        base?.bell(source: source)
-    }
+    func bell(source: TerminalView) { NSSound.beep() }
+    // OSC 52: programs (tmux, vim) may set and read the clipboard.
     func clipboardCopy(source: TerminalView, content: Data) {
-        base?.clipboardCopy(source: source, content: content)
+        guard let str = String(bytes: content, encoding: .utf8) else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.writeObjects([str as NSString])
     }
     func clipboardRead(source: TerminalView) -> Data? {
-        base?.clipboardRead(source: source)
+        NSPasteboard.general.string(forType: .string)?.data(using: .utf8)
     }
-    func iTermContent(source: TerminalView, content: ArraySlice<UInt8>) {
-        base?.iTermContent(source: source, content: content)
-    }
-    func rangeChanged(source: TerminalView, startY: Int, endY: Int) {
-        base?.rangeChanged(source: source, startY: startY, endY: endY)
-    }
+    func iTermContent(source: TerminalView, content: ArraySlice<UInt8>) {}
+    func rangeChanged(source: TerminalView, startY: Int, endY: Int) {}
 }

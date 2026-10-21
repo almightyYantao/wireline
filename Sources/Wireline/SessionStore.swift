@@ -63,7 +63,7 @@ final class TerminalSession: Identifiable {
     var hasUnread = false
 
     /// Recent terminal output (ANSI-stripped) for AI context.
-    var recentOutput: String { terminalView.recentClean }
+    var recentOutput: String { io.recentClean }
 
     /// Insert text into the terminal WITHOUT a trailing newline, so the user
     /// reviews an AI-suggested command and presses Return themselves.
@@ -109,7 +109,7 @@ final class TerminalSession: Identifiable {
         let endRE = try? NSRegularExpression(pattern: "(?m)^\(end):(\\d+)$")
         while Date() < hardDeadline, Date() < idleDeadline {
             try? await Task.sleep(for: .milliseconds(200))
-            let buf = terminalView.recentClean
+            let buf = io.recentClean
             if buf != lastBuf { lastBuf = buf; idleDeadline = Date().addingTimeInterval(idleTimeout) }
             let ns = buf as NSString
             guard let sM = startRE?.firstMatch(in: buf, range: NSRange(location: 0, length: ns.length)),
@@ -160,6 +160,8 @@ final class TerminalSession: Identifiable {
     let startedAt = Date()
     private(set) var isRunning = true
     let terminalView: WirelineTerminalView
+    /// The PTY and the byte-stream logic around it (engine-independent).
+    let io: TerminalIO
     /// Live remote vitals (SSH sessions only), polled over the ControlMaster socket.
     let stats = StatsMonitor()
 
@@ -196,17 +198,23 @@ final class TerminalSession: Identifiable {
         case .sftp(let a, _, _): self.alias = a
         case .localShell: self.alias = ""
         }
-        let frame = CGRect(x: 0, y: 0, width: 800, height: 480)
         switch kind {
         case .ssh(_, let password, let sudoPassword, let autoSudo, _):
-            self.terminalView = WirelineTerminalView(frame: frame, password: password, sudoPassword: sudoPassword, autoSudo: autoSudo)
+            self.io = TerminalIO(password: password, sudoPassword: sudoPassword, autoSudo: autoSudo)
         case .sftp, .localShell:
-            self.terminalView = WirelineTerminalView(frame: frame, password: nil, autoSudo: false)
+            self.io = TerminalIO(password: nil, autoSudo: false)
         }
-        terminalView.onEditorChange = { [weak self] editor in
+        self.terminalView = WirelineTerminalView(frame: CGRect(x: 0, y: 0, width: 800, height: 480))
+        // Engine ⇄ PTY: output goes to the engine, keystrokes and grid changes
+        // come back to the PTY.
+        terminalView.io = io
+        io.engine = terminalView
+        terminalView.onInput = { [weak io] bytes in io?.send(bytes) }
+        terminalView.onGridResize = { [weak io] in io?.gridDidChange() }
+        io.onEditorChange = { [weak self] editor in
             self?.activeEditor = editor
         }
-        terminalView.onCommandFinished = { [weak self] elapsed in
+        io.onCommandFinished = { [weak self] elapsed in
             guard let self else { return }
             // Only ping when the app isn't frontmost — if you're watching, you
             // already see the prompt return.
@@ -219,7 +227,7 @@ final class TerminalSession: Identifiable {
             Notifier.post(title: loc.t("命令完成 · \(self.title)", "Command finished · \(self.title)"),
                           body: loc.t("耗时 \(Int(elapsed)) 秒", "took \(Int(elapsed))s"))
         }
-        terminalView.onBusyChange = { [weak self] busy, elapsed in
+        io.onBusyChange = { [weak self] busy, elapsed in
             guard let self else { return }
             // Local shells use reliable foreground-process polling (see
             // `pollForeground`); the output heuristic is only trustworthy enough
@@ -227,12 +235,12 @@ final class TerminalSession: Identifiable {
             if case .localShell = self.kind { return }
             self.applyBusy(busy, elapsed: elapsed)
         }
-        terminalView.onOutput = { [weak self] in self?.noteOutput() }
-        terminalView.onConnected = { [weak self] in
+        io.onOutput = { [weak self] in self?.noteOutput() }
+        io.onConnected = { [weak self] in
             guard let self, self.connectionState == .connecting else { return }
             self.connectionState = .connected
         }
-        terminalView.onDisconnected = { [weak self] _ in
+        io.onDisconnected = { [weak self] _ in
             guard let self else { return }
             self.connectionState = .disconnected
             self.isRunning = false
@@ -252,7 +260,7 @@ final class TerminalSession: Identifiable {
             guard let self else { return false }
             return self.store?.activeID == self.id
         }
-        terminalView.onCommentRequest = { [weak self] nl in
+        io.onCommentRequest = { [weak self] nl in
             guard let self, self.store?.activeID == self.id else { return }
             self.inlineAI.activate(prefill: nl)
         }
@@ -400,7 +408,8 @@ final class TerminalSession: Identifiable {
     }
 
     private func pollForeground() {
-        guard let proc = terminalView.process, proc.childfd >= 0 else { return }
+        let proc = io.process
+        guard proc.childfd >= 0 else { return }
         let pgid = tcgetpgrp(proc.childfd)
         let running = pgid > 0 && pgid != proc.shellPid
         var name: String?
@@ -441,13 +450,13 @@ final class TerminalSession: Identifiable {
         // Tear down the old process and side channels — but never the terminal view.
         stats.stop()
         busyTimer?.cancel(); busyTimer = nil
-        if isRunning { terminalView.terminate() }
+        if isRunning { io.terminate() }
         if ownsControlSocket { try? FileManager.default.removeItem(atPath: controlSocket) }
         if let askpassURL { try? FileManager.default.removeItem(at: askpassURL); self.askpassURL = nil }
 
         // Forget per-connection heuristics (password prompts, prompt/busy tracking)
         // and mark ourselves dialing again.
-        terminalView.resetForReconnect()
+        io.resetForReconnect()
         isRunning = true
         isBusy = false
         connectionState = .connecting
@@ -485,7 +494,7 @@ final class TerminalSession: Identifiable {
                 "-o", "ControlPath=\(controlSocket)",
                 "-o", "ControlPersist=30"
             ] + extraArgs + [alias]
-            terminalView.startProcess(executable: "/usr/bin/ssh", args: args, environment: env)
+            io.start(executable: "/usr/bin/ssh", args: args, environment: env)
             stats.start(socket: controlSocket, alias: alias)
         case .sftp(let alias, let password, let extraArgs):
             if let password, !password.isEmpty, let script = Self.makeAskpassScript() {
@@ -495,7 +504,7 @@ final class TerminalSession: Identifiable {
                 env.append("WIRELINE_ASKPASS_PW=\(password)")
             }
             SSHAgentEnvironment.apply(to: &env)
-            terminalView.startProcess(
+            io.start(
                 executable: "/usr/bin/sftp",
                 args: ["-o", "StrictHostKeyChecking=accept-new"] + extraArgs + [alias],
                 environment: env
@@ -515,7 +524,7 @@ final class TerminalSession: Identifiable {
             }
             // Launch as a login shell (leading '-') so ~/.zprofile & ~/.zshrc load,
             // which is what gives the user their familiar prompt, theme, and colors.
-            terminalView.startProcess(
+            io.start(
                 executable: shell,
                 args: ["-l"],
                 environment: env,
@@ -557,11 +566,11 @@ final class TerminalSession: Identifiable {
     /// Start or stop logging this session's output to a file.
     func toggleLogging() {
         if isLogging {
-            terminalView.stopLogging()
+            io.stopLogging()
             isLogging = false
         } else {
             let label = alias.isEmpty ? "local" : alias
-            logURL = terminalView.startLogging(label: label)
+            logURL = io.startLogging(label: label)
             isLogging = logURL != nil
         }
     }
@@ -573,9 +582,9 @@ final class TerminalSession: Identifiable {
         busyTimer?.cancel()
         busyTimer = nil
         stats.stop()
-        terminalView.stopLogging()
+        io.stopLogging()
         isLogging = false
-        terminalView.terminate()
+        io.terminate()
         if ownsControlSocket { try? FileManager.default.removeItem(atPath: controlSocket) }
         if let askpassURL { try? FileManager.default.removeItem(at: askpassURL) }
         askpassURL = nil
