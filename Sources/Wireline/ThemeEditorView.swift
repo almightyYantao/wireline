@@ -57,13 +57,13 @@ struct ThemeEditorView: View {
     private var library: some View {
         VStack(alignment: .leading, spacing: 0) {
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 4) {
+                LazyVStack(alignment: .leading, spacing: 2) {
                     libGroup(loc("内置", "Built-in"), AppTheme.builtIns)
                     if !store.customThemes.isEmpty {
                         libGroup(loc("自定义", "Custom"), store.customThemes)
                     }
                 }
-                .padding(10)
+                .padding(6)
             }
             WLFormDivider()
             HStack(spacing: 8) {
@@ -80,37 +80,15 @@ struct ThemeEditorView: View {
     private func libGroup(_ title: String, _ themes: [AppTheme]) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title).font(WL.caption.weight(.semibold)).foregroundStyle(WL.textDim)
-                .textCase(.uppercase).padding(.top, 4)
+                .textCase(.uppercase).tracking(0.6).padding(.top, 6).padding(.leading, 10)
             ForEach(themes) { t in libRow(t) }
         }
     }
 
     private func libRow(_ t: AppTheme) -> some View {
-        let selected = t.name == draft.name
-        return Button {
+        ThemeLibraryRow(theme: t, selected: t.name == draft.name,
+                        active: store.selectedThemeName == t.name) {
             draft = t; dirty = false
-        } label: {
-            HStack(spacing: 8) {
-                swatchDot(t)
-                Text(t.name).font(WL.small).foregroundStyle(selected ? WL.green : WL.textPrimary)
-                    .lineLimit(1)
-                Spacer(minLength: 0)
-                if store.selectedThemeName == t.name {
-                    Image(systemName: "checkmark").font(.system(size: 9)).foregroundStyle(WL.green)
-                }
-            }
-            .padding(.horizontal, 8).padding(.vertical, 6)
-            .background(selected ? WL.green.opacity(0.14) : Color.clear,
-                        in: RoundedRectangle(cornerRadius: WL.radius(5)))
-        }.buttonStyle(.wlPlain)
-    }
-
-    private func swatchDot(_ t: AppTheme) -> some View {
-        HStack(spacing: -3) {
-            Circle().fill(color(t.colors.background)).frame(width: 12, height: 12)
-                .overlay(Circle().stroke(WL.border, lineWidth: WL.borderWidth))
-            Circle().fill(color(t.colors.cursor)).frame(width: 12, height: 12)
-                .overlay(Circle().stroke(WL.border, lineWidth: WL.borderWidth))
         }
     }
 
@@ -172,7 +150,7 @@ struct ThemeEditorView: View {
             }
         }
         .padding(4)
-        .background(color(draft.colors.background), in: RoundedRectangle(cornerRadius: WL.radius(4)))
+        .background(color(draft.colors.background), in: RoundedRectangle(cornerRadius: WL.radius(6), style: .continuous))
     }
 
     private var ansiGrid: some View {
@@ -395,4 +373,39 @@ struct ThemeEditorView: View {
         return [Double(ns.redComponent), Double(ns.greenComponent), Double(ns.blueComponent)]
     }
 
+}
+
+/// A theme in the editor's library: swatches, name, a check on the active one;
+/// an inset rounded highlight on hover / selection, like the host drawer.
+private struct ThemeLibraryRow: View {
+    let theme: AppTheme
+    let selected: Bool
+    let active: Bool
+    let action: () -> Void
+    @State private var hover = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                HStack(spacing: -3) {
+                    swatch(theme.colors.background)
+                    swatch(theme.colors.cursor)
+                }
+                Text(theme.name).font(WL.small).foregroundStyle(selected ? WL.greenBright : WL.textPrimary)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+                if active {
+                    Image(systemName: "checkmark").font(.system(size: 9)).foregroundStyle(WL.green)
+                }
+            }
+            .wlRowHighlight(hover: hover, selected: selected)
+        }
+        .buttonStyle(.wlPlain)
+        .wlHover($hover)
+    }
+
+    private func swatch(_ c: [Double]) -> some View {
+        Circle().fill(Color(.sRGB, red: c[0], green: c[1], blue: c[2])).frame(width: 12, height: 12)
+            .overlay(Circle().strokeBorder(WL.hairline, lineWidth: 1))
+    }
 }

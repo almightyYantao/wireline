@@ -180,7 +180,7 @@ struct SnippetsSheet: View {
             .textEditorStyle(.plain)
             .scrollContentBackground(.hidden)
             .frame(height: height)
-            .wlField()
+            .wlField(multiline: true)
     }
 }
 

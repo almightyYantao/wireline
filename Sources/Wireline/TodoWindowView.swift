@@ -516,7 +516,7 @@ private struct TodoEditor: View {
                 .frame(width: 44, alignment: .leading)
             TextField(placeholder, text: text, axis: .vertical)
                 .lineLimit(1...4)
-                .wlField(font: WL.small)
+                .wlField(font: WL.small, multiline: true)
         }
     }
 

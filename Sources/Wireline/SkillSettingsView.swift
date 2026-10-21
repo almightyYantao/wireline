@@ -93,7 +93,7 @@ private struct SkillEditor: View {
                 TextEditor(text: $skill.body)
                     .textEditorStyle(.plain).scrollContentBackground(.hidden)
                     .frame(height: 200)
-                    .wlField()
+                    .wlField(multiline: true)
             }
         } footer: {
             Spacer()

@@ -21,9 +21,11 @@ struct SettingsView: View {
             // reserves beyond the content (otherwise the translucent window
             // material shows through as a stray band).
             WL.bg.ignoresSafeArea()
+            // The whole window is the canvas the setting cards are raised on.
+            WL.paneCanvas.ignoresSafeArea()
             VStack(spacing: 0) {
                 header
-                Rectangle().fill(WL.border).frame(height: 1)
+                WLFormDivider()
                 Group {
                     if tab == 0 { general }
                     else if tab == 1 { ShortcutSettingsView() }
@@ -497,7 +499,7 @@ struct SettingsView: View {
         }
         .padding(4)
         .background(Color(.sRGB, red: theme.background[0], green: theme.background[1], blue: theme.background[2]),
-                    in: RoundedRectangle(cornerRadius: WL.radius(4)))
+                    in: RoundedRectangle(cornerRadius: WL.radius(6), style: .continuous))
     }
 
     private func section<V: View>(_ title: String, footer: String? = nil,

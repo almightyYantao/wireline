@@ -426,9 +426,8 @@ struct SessionTabBar: View {
                                    pill: pill, showSeparator: index > 0 && !active && !prevActive)
                     }
                 }
-                .padding(3)
-                .background(Capsule(style: .continuous).fill(WL.textPrimary.opacity(WL.isLight ? 0.06 : 0.08)))
-                .animation(.spring(duration: 0.32, bounce: 0.12), value: sessions.activeTabID)
+                .wlCapsuleTrack()
+                .animation(Motion.resolved(Motion.slide), value: sessions.activeTabID)
                 Button {
                     openLocalShell(sessions: sessions, openWindow: openWindow)
                 } label: {
@@ -946,9 +945,12 @@ struct ToolContainer<Content: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             WLPageHeader(title)
-            Rectangle().fill(WL.border.opacity(0.6)).frame(height: 1)
+            WLFormDivider()
             content
         }
+        // Tool pages sit on the same deeper canvas as the panes; their cards
+        // are raised on it.
+        .background(WL.paneCanvas)
     }
 }
 

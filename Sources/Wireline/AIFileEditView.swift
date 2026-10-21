@@ -83,7 +83,7 @@ struct AIFileEditView: View {
                     .textEditorStyle(.plain)
                     .scrollContentBackground(.hidden)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .wlField()
+                    .wlField(multiline: true)
             }
 
             if reviewing || !reviewText.isEmpty {

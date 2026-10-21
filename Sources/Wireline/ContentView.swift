@@ -180,12 +180,11 @@ struct ContentView: View {
 
     private func modalCard<C: View>(width: CGFloat, height: CGFloat,
                                     @ViewBuilder _ content: () -> C) -> some View {
-        content()
+        let shape = RoundedRectangle(cornerRadius: WL.radius(16), style: .continuous)
+        return content()
             .frame(width: width, height: height)
-            .background(WL.bg, in: RoundedRectangle(cornerRadius: WL.radius(12)))
-            .overlay(RoundedRectangle(cornerRadius: WL.radius(12)).stroke(WL.border, lineWidth: WL.borderWidth))
-            .clipShape(RoundedRectangle(cornerRadius: WL.radius(12)))
-            .shadow(color: .black.opacity(WL.depth(0.5)), radius: 24, y: 8)
+            .clipShape(shape)
+            .wlFloating(shape, shadow: 0.5, radius: 28, y: 10)
             .transition(.wlModal)
     }
 
@@ -411,11 +410,7 @@ struct LeftPanel: View {
             }
         }
         .padding(.horizontal, 12).padding(.vertical, 7)
-        .background(WL.textPrimary.opacity(searchFocused ? 0.08 : 0.055),
-                    in: Capsule(style: .continuous))
-        .overlay(Capsule(style: .continuous)
-            .strokeBorder(WL.green.opacity(searchFocused ? 0.55 : 0), lineWidth: 1))
-        .animation(Motion.hover, value: searchFocused)
+        .wlSearchCapsule(focused: searchFocused)
         .animation(Motion.hover, value: query.isEmpty)
         .padding(.horizontal, 12).padding(.bottom, 8)
     }
@@ -433,9 +428,8 @@ struct LeftPanel: View {
             FeatureButton(title: loc("密钥", "Keys"), symbol: "key", tint: WL.green,
                           active: operation == .keys, pill: segment) { operation = .keys }
         }
-        .padding(3)
-        .background(Capsule(style: .continuous).fill(WL.textPrimary.opacity(WL.isLight ? 0.06 : 0.08)))
-        .animation(.spring(duration: 0.32, bounce: 0.12), value: operation)
+        .wlCapsuleTrack()
+        .animation(Motion.resolved(Motion.slide), value: operation)
         .padding(.horizontal, 12).padding(.bottom, 10)
     }
 
@@ -580,16 +574,7 @@ struct FeatureButton: View {
             .foregroundStyle(active ? WL.textPrimary : (hover ? WL.textPrimary : WL.textDim))
             .padding(.vertical, 6)
             .frame(maxWidth: .infinity)
-            .background {
-                let shape = Capsule(style: .continuous)
-                if active {
-                    shape.fill(WL.isLight ? Color.white : WL.textPrimary.opacity(0.12))
-                        .shadow(color: .black.opacity(WL.depth(0.18)), radius: 3, y: 1)
-                        .matchedGeometryEffect(id: "segmentPill", in: pill)
-                } else {
-                    shape.fill(WL.textPrimary.opacity(hover ? 0.05 : 0))
-                }
-            }
+            .wlSegmentPill(active: active, hover: hover, in: pill, id: "segmentPill")
             .contentShape(Capsule())
         }
         .buttonStyle(.wlPlain)
@@ -597,18 +582,16 @@ struct FeatureButton: View {
     }
 }
 
+/// A small inline action (Copy, Retry, Refresh…). Named for the old
+/// `[label]` look; it's now a quiet capsule chip (`.wlChip()`), so every inline
+/// action across the app shares the card / capsule language.
 struct BracketButton: View {
     let label: String
     let action: () -> Void
     init(_ label: String, action: @escaping () -> Void) { self.label = label; self.action = action }
-    @State private var hover = false
     var body: some View {
-        Button(action: action) {
-            Text("[\(label)]").font(WL.small)
-                .foregroundStyle(hover ? WL.greenBright : WL.textDim)
-        }
-        .buttonStyle(.wlPlain)
-        .wlHover($hover)
+        Button(action: action) { Text(label).lineLimit(1) }
+            .buttonStyle(.wlChip())
     }
 }
 

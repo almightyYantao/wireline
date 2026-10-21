@@ -306,7 +306,7 @@ struct KeyManagerView: View {
                     .foregroundStyle(protected ? WL.green : WL.amber)
                     .frame(width: 28, height: 28)
                     .background((protected ? WL.green : WL.amber).opacity(0.12),
-                                in: RoundedRectangle(cornerRadius: WL.radius(7)))
+                                in: RoundedRectangle(cornerRadius: WL.radius(9), style: .continuous))
                     .help(protected ? loc("每次使用都需要 Touch ID", "Every use requires Touch ID") : "")
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 6) {
@@ -314,7 +314,7 @@ struct KeyManagerView: View {
                         if !key.type.isEmpty {
                             Text(key.type).font(WL.caption).foregroundStyle(WL.textDim)
                                 .padding(.horizontal, 6).padding(.vertical, 1)
-                                .background(WL.bg.opacity(0.5), in: Capsule())
+                                .background(WL.track, in: Capsule())
                         }
                         if protected {
                             Text("Touch ID").font(WL.caption.weight(.semibold)).foregroundStyle(WL.green)
@@ -353,7 +353,7 @@ struct KeyManagerView: View {
                     }
                     .padding(8)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(WL.amber.opacity(0.1), in: RoundedRectangle(cornerRadius: WL.radius(6)))
+                    .background(WL.amber.opacity(0.1), in: RoundedRectangle(cornerRadius: WL.radius(9), style: .continuous))
                 } else if info.movedToTrash {
                     Text(loc("原私钥已在废纸篓；取消保护会把它还原。", "The original is in the Trash; removing protection restores it."))
                         .font(WL.caption).foregroundStyle(WL.textDim)
@@ -447,7 +447,7 @@ struct KeyManagerView: View {
                         Button(loc("复制", "Copy")) { model.copySnippet() }.buttonStyle(.wlSecondary)
                     }
                     .padding(10)
-                    .background(WL.bg.opacity(0.5), in: RoundedRectangle(cornerRadius: WL.radius(6)))
+                    .background(WL.fieldFill, in: RoundedRectangle(cornerRadius: WL.radius(9), style: .continuous))
                 }
                 .padding(.vertical, 12)
             }
@@ -468,9 +468,12 @@ struct KeyManagerView: View {
                 }
             }
         } label: {
-            Text(loc("部署到…", "Deploy to…")).font(WL.small).foregroundStyle(WL.textPrimary)
+            HStack(spacing: 5) {
+                Text(loc("部署到…", "Deploy to…"))
+                Image(systemName: "chevron.down").font(.system(size: 7, weight: .bold))
+            }
         }
-        .menuStyle(.borderlessButton).menuIndicator(.visible).fixedSize()
+        .menuStyle(.button).buttonStyle(.wlSecondary).menuIndicator(.hidden).fixedSize()
     }
 
     private var generateForm: some View {
