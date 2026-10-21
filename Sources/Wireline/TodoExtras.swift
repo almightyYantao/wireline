@@ -161,7 +161,7 @@ struct TodoMenuBarView: View {
                             }
                             .contentShape(Rectangle())
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(.wlPlain)
                         .padding(.vertical, 2)
                     }
                     if open.count > shown.count {

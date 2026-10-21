@@ -53,6 +53,64 @@ final class HostStore {
     var terminalFontSize: Double {
         didSet { UserDefaults.standard.set(terminalFontSize, forKey: "terminalFontSize") }
     }
+    /// Default cursor shape for new output (programs may still change it, e.g.
+    /// vim's insert-mode bar).
+    var terminalCursorShape: CursorShape {
+        didSet { UserDefaults.standard.set(terminalCursorShape.rawValue, forKey: "terminalCursorShape") }
+    }
+    /// How visible unfocused split panes stay (Ghostty's unfocused-split-opacity):
+    /// 1 = no dimming, lower = recede more.
+    var unfocusedSplitOpacity: Double {
+        didSet { UserDefaults.standard.set(unfocusedSplitOpacity, forKey: "unfocusedSplitOpacity") }
+    }
+    /// Space between the terminal grid and the panel edges, in points.
+    var terminalPaddingX: Double {
+        didSet { UserDefaults.standard.set(terminalPaddingX, forKey: "terminalPaddingX") }
+    }
+    var terminalPaddingY: Double {
+        didSet { UserDefaults.standard.set(terminalPaddingY, forKey: "terminalPaddingY") }
+    }
+    /// Render terminals on the GPU (SwiftTerm's Metal renderer).
+    var terminalGPU: Bool {
+        didSet { UserDefaults.standard.set(terminalGPU, forKey: "terminalGPU") }
+    }
+    /// New tabs / windows start in the focused local shell's directory.
+    var inheritWorkingDirectory: Bool {
+        didSet { UserDefaults.standard.set(inheritWorkingDirectory, forKey: "inheritWorkingDirectory") }
+    }
+    /// Notify when a command that ran at least this long finishes while
+    /// Wireline isn't frontmost (seconds).
+    var notifyCommandAfter: Double {
+        didSet { UserDefaults.standard.set(notifyCommandAfter, forKey: "notifyCommandAfter") }
+    }
+    /// Quick terminal: fraction of the screen height it takes.
+    var quickTerminalHeight: Double {
+        didSet { UserDefaults.standard.set(quickTerminalHeight, forKey: "quickTerminalHeight") }
+    }
+    /// Quick terminal hides when it loses focus.
+    var quickTerminalAutohide: Bool {
+        didSet { UserDefaults.standard.set(quickTerminalAutohide, forKey: "quickTerminalAutohide") }
+    }
+    /// Follow the system's light / dark appearance with these two themes
+    /// (both set = following; nil = use `selectedThemeName` as is).
+    var themeForLight: String? {
+        didSet { UserDefaults.standard.set(themeForLight, forKey: "themeForLight"); applyAppearanceTheme() }
+    }
+    var themeForDark: String? {
+        didSet { UserDefaults.standard.set(themeForDark, forKey: "themeForDark"); applyAppearanceTheme() }
+    }
+    var followsSystemAppearance: Bool { themeForLight != nil && themeForDark != nil }
+
+    /// Pick the light / dark theme for the current system appearance.
+    func applyAppearanceTheme() {
+        guard let light = themeForLight, let dark = themeForDark else { return }
+        let systemDark = UserDefaults.standard.string(forKey: "AppleInterfaceStyle") == "Dark"
+        let want = systemDark ? dark : light
+        if allThemes.contains(where: { $0.name == want }), selectedThemeName != want { selectedThemeName = want }
+    }
+    var terminalCursorBlink: Bool {
+        didSet { UserDefaults.standard.set(terminalCursorBlink, forKey: "terminalCursorBlink") }
+    }
     /// The active color scheme, persisted as JSON. Nil = built-in default.
     /// (Kept for the terminal's color path — SwiftTerm reads this directly.)
     var terminalTheme: TerminalTheme? {
@@ -151,6 +209,19 @@ final class HostStore {
         self.terminalBgImagePath = UserDefaults.standard.string(forKey: "terminalBgImagePath")
         self.terminalFontName = UserDefaults.standard.string(forKey: "terminalFontName")
         self.terminalFontSize = UserDefaults.standard.object(forKey: "terminalFontSize") as? Double ?? 13
+        self.terminalCursorShape = UserDefaults.standard.string(forKey: "terminalCursorShape")
+            .flatMap(CursorShape.init) ?? .block
+        self.terminalCursorBlink = UserDefaults.standard.object(forKey: "terminalCursorBlink") as? Bool ?? true
+        self.unfocusedSplitOpacity = UserDefaults.standard.object(forKey: "unfocusedSplitOpacity") as? Double ?? 0.7
+        self.terminalGPU = UserDefaults.standard.object(forKey: "terminalGPU") as? Bool ?? true
+        self.terminalPaddingX = UserDefaults.standard.object(forKey: "terminalPaddingX") as? Double ?? 16
+        self.terminalPaddingY = UserDefaults.standard.object(forKey: "terminalPaddingY") as? Double ?? 10
+        self.inheritWorkingDirectory = UserDefaults.standard.object(forKey: "inheritWorkingDirectory") as? Bool ?? true
+        self.notifyCommandAfter = UserDefaults.standard.object(forKey: "notifyCommandAfter") as? Double ?? 10
+        self.quickTerminalHeight = UserDefaults.standard.object(forKey: "quickTerminalHeight") as? Double ?? 0.4
+        self.quickTerminalAutohide = UserDefaults.standard.object(forKey: "quickTerminalAutohide") as? Bool ?? true
+        self.themeForLight = UserDefaults.standard.string(forKey: "themeForLight")
+        self.themeForDark = UserDefaults.standard.string(forKey: "themeForDark")
         self.terminalTheme = UserDefaults.standard.data(forKey: "terminalTheme")
             .flatMap { try? JSONDecoder().decode(TerminalTheme.self, from: $0) }
         self.customThemes = UserDefaults.standard.data(forKey: "customThemes")
@@ -496,4 +567,9 @@ final class HostStore {
         }
         return true
     }
+}
+
+/// Terminal cursor shape; raw values double as the config-file spelling.
+enum CursorShape: String, CaseIterable, Sendable {
+    case block, bar, underline
 }

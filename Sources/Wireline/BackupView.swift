@@ -18,92 +18,111 @@ struct BackupView: View {
     enum Mode: String, CaseIterable { case export, `import`, webdav }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text(loc("加密备份 / 迁移", "Encrypted Backup / Migration"))
-                .font(WL.body.weight(.semibold)).foregroundStyle(WL.green)
-                .padding(.horizontal, 20).padding(.top, 22).padding(.bottom, 14)
-            Rectangle().fill(WL.border).frame(height: 1)
-
-            ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
-                Picker("", selection: $mode) {
-                    Text(loc("导出", "Export")).tag(Mode.export)
-                    Text(loc("导入", "Import")).tag(Mode.import)
-                    Text("WebDAV").tag(Mode.webdav)
-                }
-                .pickerStyle(.segmented).labelsHidden()
-
+        WLSheet(loc("加密备份 / 迁移", "Encrypted Backup / Migration"),
+                subtitle: loc("主机与 Keychain 密码打包加密，可导出、导入或同步到 WebDAV",
+                              "Hosts and Keychain passwords, encrypted — export, import or sync via WebDAV"),
+                symbol: "lock.shield", width: 460, height: mode == .webdav ? 640 : 420,
+                onClose: { dismiss() }) {
+            VStack(alignment: .leading, spacing: 8) {
+                WLSegmented(selection: $mode, options: [
+                    WLOption(Mode.export, loc("导出", "Export")),
+                    WLOption(Mode.import, loc("导入", "Import")),
+                    WLOption(Mode.webdav, "WebDAV"),
+                ])
                 Text(descriptionText).font(WL.small).foregroundStyle(WL.textDim)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 4)
+            }
 
-                if mode == .webdav {
-                    field(loc("目录地址（到文件夹，以 / 结尾）", "Folder URL (a directory, ends with /)"),
-                          "https://host:端口/路径/", $dav.baseURL)
-                    field(loc("用户名", "Username"), "your-account", $dav.username)
-                    secure(loc("密码（多数网盘需用「应用专用密码」）", "Password (often an app-specific password)"), $davPassword)
-                    field(loc("备份文件名（不含路径）", "Backup file name (no path)"), "wireline-backup.wlbk", $dav.filename)
-                    Text(loc("将写入：", "Will write to: ") + davTargetPreview)
-                        .font(WL.caption).foregroundStyle(WL.textDim)
-                        .lineLimit(2).textSelection(.enabled)
-
+            if mode == .webdav {
+                WLFormSection("WebDAV", footer: loc("将写入：", "Will write to: ") + davTargetPreview) {
+                    stacked(loc("目录地址（到文件夹，以 / 结尾）", "Folder URL (a directory, ends with /)")) {
+                        field("https://host:端口/路径/", $dav.baseURL)
+                    }
+                    WLFormDivider()
+                    stacked(loc("用户名", "Username")) { field("your-account", $dav.username) }
+                    WLFormDivider()
+                    stacked(loc("密码（多数网盘需用「应用专用密码」）", "Password (often an app-specific password)")) {
+                        secure("", $davPassword)
+                    }
+                    WLFormDivider()
+                    stacked(loc("备份文件名（不含路径）", "Backup file name (no path)")) {
+                        field("wireline-backup.wlbk", $dav.filename)
+                    }
+                }
+                WLFormSection(loc("定时备份", "Scheduled backup"),
+                              footer: loc("定时备份需填好上面的地址/账号/加密口令；开启后加密口令会存入 Keychain 以便无人值守上传。",
+                                          "Auto-backup needs the URL/account/passphrase above; the passphrase is saved to the Keychain so uploads can run unattended.")) {
                     Toggle(isOn: $dav.autoBackup) {
                         Text(loc("定时自动备份", "Scheduled auto-backup")).font(WL.body).foregroundStyle(WL.textPrimary)
-                    }.toggleStyle(.checkbox).tint(WL.green)
+                    }
+                    .toggleStyle(.wlSwitch)
+                    .frame(minHeight: 38).padding(.vertical, 4)
                     if dav.autoBackup {
-                        HStack {
-                            Text(loc("每", "Every")).font(WL.small).foregroundStyle(WL.textDim)
-                            Stepper(value: $dav.autoIntervalHours, in: 1...168, step: 1) {
-                                Text(loc("\(Int(dav.autoIntervalHours)) 小时", "\(Int(dav.autoIntervalHours)) h"))
-                                    .font(WL.body).foregroundStyle(WL.textPrimary)
-                            }.fixedSize()
+                        WLFormDivider()
+                        WLFormRow(loc("间隔", "Every")) {
+                            WLStepper(value: $dav.autoIntervalHours, range: 1...168,
+                                      format: { loc("\(Int($0)) 小时", "\(Int($0)) h") })
                         }
                     }
-                    Text(loc("定时备份需填好上面的地址/账号/加密口令；开启后加密口令会存入 Keychain 以便无人值守上传。",
-                            "Auto-backup needs the URL/account/passphrase above; the passphrase is saved to the Keychain so uploads can run unattended."))
-                        .font(WL.caption).foregroundStyle(WL.textDim)
                 }
+            }
 
-                secure(loc("加密口令", "Encryption passphrase"), $passphrase)
+            WLFormSection(loc("加密口令", "Passphrase"),
+                          footer: mode != .import
+                            ? loc("口令不会被保存；一旦丢失，备份将无法恢复。",
+                                  "The passphrase is never stored. If you lose it, the backup cannot be recovered.")
+                            : nil) {
+                stacked(loc("加密口令", "Encryption passphrase")) { secure("", $passphrase) }
                 if mode == .export {
-                    secure(loc("确认口令", "Confirm passphrase"), $confirm)
+                    WLFormDivider()
+                    stacked(loc("确认口令", "Confirm passphrase")) { secure("", $confirm) }
                 }
-                if mode != .import {
-                    Text(loc("口令不会被保存；一旦丢失，备份将无法恢复。",
-                             "The passphrase is never stored. If you lose it, the backup cannot be recovered."))
-                        .font(WL.caption).foregroundStyle(WL.amber)
-                }
-                if let message {
-                    Text(message).font(WL.small).foregroundStyle(isError ? WL.red : WL.green)
-                }
-            }
-            .padding(20)
-            .frame(maxWidth: .infinity, alignment: .leading)
             }
 
-            Rectangle().fill(WL.border).frame(height: 1)
-            HStack(spacing: 18) {
-                if busy { Text(loc("处理中…", "Working…")).font(WL.small).foregroundStyle(WL.amber) }
-                Spacer()
-                BracketButton(loc("关闭", "Close")) { dismiss() }
-                switch mode {
-                case .export:
-                    actionButton(loc("导出…", "Export…")) { runExport() }
-                case .import:
-                    actionButton(loc("选择文件…", "Choose File…")) { runImport() }
-                case .webdav:
-                    actionButton(loc("从 WebDAV 恢复", "Restore")) { runWebDAVRestore() }
-                    actionButton(loc("上传到 WebDAV", "Upload")) { runWebDAVUpload() }
-                }
+            if let message {
+                Text(message).font(WL.small).foregroundStyle(isError ? WL.red : WL.green)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 4)
             }
-            .padding(.horizontal, 20).padding(.vertical, 18)
+        } footer: {
+            if busy { Text(loc("处理中…", "Working…")).font(WL.small).foregroundStyle(WL.amber) }
+            Spacer()
+            Button(loc("关闭", "Close")) { dismiss() }
+                .buttonStyle(.wlSecondary).keyboardShortcut(.cancelAction)
+            switch mode {
+            case .export:
+                Button(loc("导出…", "Export…")) { runExport() }
+                    .buttonStyle(.wlPrimary).keyboardShortcut(.defaultAction)
+                    .disabled(!canRun || busy)
+            case .import:
+                Button(loc("选择文件…", "Choose File…")) { runImport() }
+                    .buttonStyle(.wlPrimary).keyboardShortcut(.defaultAction)
+                    .disabled(!canRun || busy)
+            case .webdav:
+                // No Return shortcut here: either action touches the remote copy.
+                Button(loc("从 WebDAV 恢复", "Restore")) { runWebDAVRestore() }
+                    .buttonStyle(.wlSecondary)
+                    .disabled(!canRun || busy)
+                Button(loc("上传到 WebDAV", "Upload")) { runWebDAVUpload() }
+                    .buttonStyle(.wlPrimary)
+                    .disabled(!canRun || busy)
+            }
         }
-        .frame(width: 460, height: mode == .webdav ? 500 : 340)
-        .background(WL.bg)
-        .preferredColorScheme(.dark)
         .onAppear { davPassword = dav.password }
         .onChange(of: davPassword) { dav.password = davPassword }
         .onChange(of: dav.autoBackup) { applyAuto() }
         .onChange(of: dav.autoIntervalHours) { applyAuto() }
         .onChange(of: passphrase) { if dav.autoBackup { applyAuto() } }
+    }
+
+    /// Label above a full-width field.
+    private func stacked<V: View>(_ label: String, @ViewBuilder _ content: () -> V) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(label).font(WL.small).foregroundStyle(WL.textDim)
+            content()
+        }
+        .padding(.vertical, 10)
     }
 
     private var descriptionText: String {
@@ -137,18 +156,9 @@ struct BackupView: View {
         return true
     }
 
-    private func actionButton(_ title: String, _ action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text("[\(title)]").font(WL.small).foregroundStyle(canRun && !busy ? WL.green : WL.textDim)
-        }.buttonStyle(.plain).disabled(!canRun || busy)
-    }
-
-    private func field(_ label: String, _ prompt: String, _ text: Binding<String>) -> some View {
-        TextField("", text: text, prompt: Text("\(label) · \(prompt)").foregroundStyle(WL.textDim))
-            .textFieldStyle(.plain).font(WL.mono(12)).foregroundStyle(WL.textPrimary)
-            .padding(.horizontal, 10).padding(.vertical, 7)
-            .background(WL.surface, in: RoundedRectangle(cornerRadius: WL.radius(5)))
-            .overlay(RoundedRectangle(cornerRadius: WL.radius(5)).stroke(WL.border, lineWidth: WL.borderWidth))
+    private func field(_ prompt: String, _ text: Binding<String>) -> some View {
+        TextField("", text: text, prompt: Text(prompt).foregroundStyle(WL.textDim))
+            .wlField()
     }
 
     private func runWebDAVUpload() {
@@ -199,10 +209,7 @@ struct BackupView: View {
 
     private func secure(_ prompt: String, _ text: Binding<String>) -> some View {
         SecureField("", text: text, prompt: Text(prompt).foregroundStyle(WL.textDim))
-            .textFieldStyle(.plain).font(WL.body).foregroundStyle(WL.textPrimary)
-            .padding(.horizontal, 10).padding(.vertical, 7)
-            .background(WL.surface, in: RoundedRectangle(cornerRadius: WL.radius(5)))
-            .overlay(RoundedRectangle(cornerRadius: WL.radius(5)).stroke(WL.border, lineWidth: WL.borderWidth))
+            .wlField(font: WL.body)
     }
 
     private func runExport() {

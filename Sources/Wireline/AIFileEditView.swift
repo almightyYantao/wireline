@@ -22,19 +22,10 @@ struct AIFileEditView: View {
     @State private var reviewing = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Image(systemName: "sparkles").foregroundStyle(WL.green)
-                Text(loc("AI 改文件 · \(entry.name)", "AI edit · \(entry.name)"))
-                    .font(WL.body.weight(.semibold)).foregroundStyle(WL.textPrimary)
-                Spacer()
-                Button(action: onClose) {
-                    Image(systemName: "xmark").font(.system(size: 11, weight: .bold)).foregroundStyle(WL.textDim)
-                }.buttonStyle(.plain)
-            }
-            .padding(.horizontal, 18).padding(.top, 18).padding(.bottom, 12)
-            Rectangle().fill(WL.border).frame(height: 1)
-
+        WLSheet(loc("AI 改文件", "AI Edit File"),
+                subtitle: "\(hostName) · \(entry.name)",
+                symbol: "sparkles", width: 640, height: 560, scrolls: false,
+                onClose: onClose) {
             if !ai.isConfigured {
                 notice(loc("尚未配置 AI，请到 设置 → AI。", "Configure AI first in Settings → AI."))
             } else if loading {
@@ -42,75 +33,76 @@ struct AIFileEditView: View {
             } else {
                 content
             }
+        } footer: {
+            Spacer()
+            Button(loc("取消", "Cancel"), action: onClose)
+                .buttonStyle(.wlSecondary).keyboardShortcut(.cancelAction)
+            // No Return shortcut: Return in the instruction field generates.
+            if !edited.isEmpty {
+                if reviewText.isEmpty {
+                    // First step: review the change before writing.
+                    Button(reviewing ? loc("评审中…", "Reviewing…") : loc("评审并写回", "Review & write")) { reviewChange() }
+                        .buttonStyle(.wlPrimary)
+                        .disabled(reviewing)
+                } else {
+                    Button(loc("确认写回", "Confirm write"), action: writeBack)
+                        .buttonStyle(.wlPrimary)
+                }
+            }
         }
-        .frame(width: 640, height: 560)
-        .background(WL.bg)
-        .preferredColorScheme(.dark)
         .onAppear { loadFile() }
         .onDisappear { task?.cancel() }
     }
 
     private var content: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text(loc("修改指令", "Instruction")).font(WL.small).foregroundStyle(WL.textDim)
-            HStack(spacing: 8) {
-                TextField(loc("例如：把超时改成 30s；关闭 gzip", "e.g. set timeout to 30s"),
-                          text: $instruction)
-                    .textFieldStyle(.plain).font(WL.body).foregroundStyle(WL.textPrimary)
-                    .padding(.horizontal, 10).padding(.vertical, 7)
-                    .background(WL.surface, in: RoundedRectangle(cornerRadius: WL.radius(5)))
-                    .overlay(RoundedRectangle(cornerRadius: WL.radius(5)).stroke(WL.border, lineWidth: WL.borderWidth))
-                    .onSubmit { generate() }
-                if generating {
-                    Button { task?.cancel(); generating = false } label: {
-                        Image(systemName: "stop.fill").foregroundStyle(WL.red)
-                    }.buttonStyle(.plain)
-                } else {
-                    BracketButton(loc("生成", "Generate")) { generate() }
+            VStack(alignment: .leading, spacing: 6) {
+                Text(loc("修改指令", "Instruction")).font(WL.small).foregroundStyle(WL.textDim)
+                HStack(spacing: 8) {
+                    TextField(loc("例如：把超时改成 30s；关闭 gzip", "e.g. set timeout to 30s"),
+                              text: $instruction)
+                        .wlField(font: WL.body)
+                        .onSubmit { generate() }
+                    if generating {
+                        Button { task?.cancel(); generating = false } label: {
+                            Image(systemName: "stop.fill").font(.system(size: 11))
+                        }
+                        .buttonStyle(.wlIcon(tint: WL.red, size: 24))
+                        .help(loc("停止", "Stop"))
+                    } else {
+                        BracketButton(loc("生成", "Generate")) { generate() }
+                    }
                 }
+                if let error { Text(error).font(WL.caption).foregroundStyle(WL.red) }
             }
-            if let error { Text(error).font(WL.caption).foregroundStyle(WL.red) }
 
-            Text(edited.isEmpty ? loc("原内容", "Original") : loc("修改后（可再编辑）", "Modified (editable)"))
-                .font(WL.small).foregroundStyle(WL.textDim)
-            TextEditor(text: edited.isEmpty ? .constant(original) : $edited)
-                .textEditorStyle(.plain).font(WL.mono(12)).foregroundStyle(WL.textPrimary)
-                .scrollContentBackground(.hidden)
-                .padding(8)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(WL.surface.opacity(0.5), in: RoundedRectangle(cornerRadius: WL.radius(6)))
-                .overlay(RoundedRectangle(cornerRadius: WL.radius(6)).stroke(WL.border, lineWidth: WL.borderWidth))
+            VStack(alignment: .leading, spacing: 6) {
+                Text(edited.isEmpty ? loc("原内容", "Original") : loc("修改后（可再编辑）", "Modified (editable)"))
+                    .font(WL.small).foregroundStyle(WL.textDim)
+                TextEditor(text: edited.isEmpty ? .constant(original) : $edited)
+                    .textEditorStyle(.plain)
+                    .scrollContentBackground(.hidden)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .wlField()
+            }
 
             if reviewing || !reviewText.isEmpty {
-                Text(loc("变更评审（影响与风险）", "Change review (impact & risks)"))
-                    .font(WL.small).foregroundStyle(WL.amber)
-                ScrollView {
-                    Text(reviewText.isEmpty ? loc("评审中…", "Reviewing…") : .init(reviewText))
-                        .font(WL.small).foregroundStyle(WL.textPrimary)
-                        .frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled)
-                }
-                .frame(maxHeight: 120)
-                .padding(8)
-                .background(WL.amber.opacity(0.08), in: RoundedRectangle(cornerRadius: WL.radius(6)))
-                .overlay(RoundedRectangle(cornerRadius: WL.radius(6)).stroke(WL.amber.opacity(0.4), lineWidth: 1))
-            }
-
-            HStack {
-                Spacer()
-                BracketButton(loc("取消", "Cancel")) { onClose() }
-                if !edited.isEmpty {
-                    if reviewText.isEmpty {
-                        // First step: review the change before writing.
-                        BracketButton(reviewing ? loc("评审中", "…") : loc("评审并写回", "Review & write")) { reviewChange() }
-                    } else {
-                        Button(action: writeBack) {
-                            Text("[\(loc("确认写回", "Confirm write"))]").font(WL.small).foregroundStyle(WL.green)
-                        }.buttonStyle(.plain)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(loc("变更评审（影响与风险）", "Change review (impact & risks)"))
+                        .font(WL.small).foregroundStyle(WL.amber)
+                    ScrollView {
+                        Text(reviewText.isEmpty ? loc("评审中…", "Reviewing…") : .init(reviewText))
+                            .font(WL.small).foregroundStyle(WL.textPrimary)
+                            .frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled)
                     }
+                    .frame(maxHeight: 120)
+                    .padding(8)
+                    .background(WL.amber.opacity(0.08), in: RoundedRectangle(cornerRadius: WL.radius(6)))
+                    .overlay(RoundedRectangle(cornerRadius: WL.radius(6)).stroke(WL.amber.opacity(0.4), lineWidth: 1))
                 }
             }
         }
-        .padding(18)
+        .frame(maxHeight: .infinity)
     }
 
     /// Ask the AI to assess the diff (impact + risks) before writing it back.

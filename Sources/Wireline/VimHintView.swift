@@ -68,7 +68,7 @@ struct VimHintView: View {
             }
         }
         .padding(12)
-        .animation(.easeInOut(duration: 0.18), value: collapsed)
+        .animation(Motion.resolved(Motion.disclose), value: collapsed)
     }
 
     private var icon: some View {
@@ -80,7 +80,7 @@ struct VimHintView: View {
                 .background(WL.surface.opacity(0.9), in: RoundedRectangle(cornerRadius: WL.radius(8)))
                 .overlay(RoundedRectangle(cornerRadius: WL.radius(8)).stroke(WL.green.opacity(0.5), lineWidth: 1))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.wlPlain)
         .help(loc("Vim 速查表", "Vim cheat sheet"))
     }
 
@@ -94,7 +94,7 @@ struct VimHintView: View {
                     Image(systemName: "xmark").font(.system(size: 10, weight: .bold))
                         .foregroundStyle(WL.textDim)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.wlPlain)
                 .help(loc("收起为浮窗图标", "Collapse to a floating icon"))
             }
             .padding(.horizontal, 12).padding(.vertical, 10)

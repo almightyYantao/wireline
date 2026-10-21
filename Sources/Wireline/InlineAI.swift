@@ -210,12 +210,12 @@ struct InlineAICommandView: View {
                 card
                     .padding(10)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .transition(.wlSlide(.bottom))
             }
         }
-        .animation(.easeOut(duration: 0.15), value: c.active)
-        .animation(.easeOut(duration: 0.15), value: c.thinking)
-        .animation(.easeOut(duration: 0.15), value: c.command)
+        .animation(Motion.resolved(Motion.banner), value: c.active)
+        .animation(Motion.state, value: c.thinking)
+        .animation(Motion.state, value: c.command)
         // ⌘; anywhere in the (active) terminal activates / runs.
         .onReceive(NotificationCenter.default.publisher(for: .suggestCommand)) { _ in
             guard isActive else { return }
@@ -325,6 +325,6 @@ struct InlineAICommandView: View {
             .background(WL.surface.opacity(0.8), in: RoundedRectangle(cornerRadius: WL.radius(5)))
             .overlay(RoundedRectangle(cornerRadius: WL.radius(5)).stroke(WL.border, lineWidth: WL.borderWidth))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.wlPlain)
     }
 }

@@ -17,7 +17,14 @@ struct SFTPEntry: Identifiable, Sendable {
 /// Owns the (non-Sendable) SSH client + SFTP channel inside a single isolation
 /// domain, so the rest of the app only ever exchanges Sendable values with it.
 actor SFTPConnection {
-    enum Credential: Sendable { case password(String); case key(String) }
+    enum Credential: Sendable {
+        case password(String)
+        case key(String)
+        /// A Touch ID–protected key; `FileBrowserModel` turns it into `.vaultKey`
+        /// after authorization, before connecting.
+        case protected(fingerprint: String)
+        case vaultKey(SSHPrivateKey, material: String)
+    }
     struct Fail: LocalizedError { let msg: String; var errorDescription: String? { msg } }
 
     private var client: SSHClient?
@@ -38,6 +45,21 @@ actor SFTPConnection {
                 auth = .rsa(username: user, privateKey: rsa)
             } else {
                 throw Fail(msg: "暂不支持该密钥（可能已加密或类型不支持），可改用密码认证。")
+            }
+        case .protected:
+            throw Fail(msg: "Protected key used without authorization")
+        case .vaultKey(let key, let material):
+            switch key.kind {
+            case .ed25519(let seed):
+                auth = .ed25519(username: user, privateKey: try Curve25519.Signing.PrivateKey(rawRepresentation: seed))
+            case .ecdsa(.p256, let d):
+                auth = .p256(username: user, privateKey: try P256.Signing.PrivateKey(rawRepresentation: d))
+            case .ecdsa(.p384, let d):
+                auth = .p384(username: user, privateKey: try P384.Signing.PrivateKey(rawRepresentation: d))
+            case .ecdsa(.p521, let d):
+                auth = .p521(username: user, privateKey: try P521.Signing.PrivateKey(rawRepresentation: d))
+            case .rsa:
+                auth = .rsa(username: user, privateKey: try Insecure.RSA.PrivateKey(sshRsa: material))
             }
         }
         let c = try await SSHClient.connect(
@@ -164,12 +186,22 @@ final class FileBrowserModel {
         let port = host.effectivePort
         Task {
             do {
+                var credential = credential
+                if case .protected(let fp) = credential {
+                    status = Localizer.shared.t("等待 Touch ID…", "Waiting for Touch ID…")
+                    let (key, material) = try await SSHAgentController.shared.authorizedKey(fp)
+                    status = Localizer.shared.t("连接中…", "Connecting…")
+                    credential = .vaultKey(key, material: material)
+                }
                 let (home, items) = try await conn.connectAndList(
                     hostname: hostname, port: port, user: user, credential: credential)
                 path = home
                 entries = items
                 connected = true
                 status = nil
+                if let wanted = Self.pendingPath.removeValue(forKey: host.alias) {
+                    await reveal(wanted, home: home)
+                }
             } catch {
                 status = "连接失败：\(friendly(error))"
             }
@@ -180,9 +212,13 @@ final class FileBrowserModel {
     /// Returns the credential to try, or nil when the host needs a password we
     /// don't have yet.
     private func resolveCredential() -> SFTPConnection.Credential? {
-        // 1) An explicit IdentityFile in the config wins.
-        if let idf = host.identityFile, !idf.isEmpty, let key = readKey(idf) {
-            return .key(key)
+        // 1) An explicit IdentityFile in the config wins. A Touch ID–protected
+        //    key comes from the vault (its file may be in the Trash by now).
+        if let idf = host.identityFile, !idf.isEmpty {
+            if let info = SSHAgentController.shared.info(forPrivateKeyPath: idf) {
+                return .protected(fingerprint: info.fingerprint)
+            }
+            if let key = readKey(idf) { return .key(key) }
         }
         // 2) A password saved in the Keychain.
         if let pw = store.password(for: host), !pw.isEmpty {
@@ -192,6 +228,9 @@ final class FileBrowserModel {
         //    no IdentityFile is set), so agent/default-key hosts still work.
         if host.identityFile == nil || host.identityFile?.isEmpty == true {
             for candidate in ["~/.ssh/id_ed25519", "~/.ssh/id_rsa", "~/.ssh/id_ecdsa"] {
+                if let info = SSHAgentController.shared.info(forPrivateKeyPath: candidate) {
+                    return .protected(fingerprint: info.fingerprint)
+                }
                 if let key = readKey(candidate) { return .key(key) }
             }
         }
@@ -201,6 +240,19 @@ final class FileBrowserModel {
     private func readKey(_ path: String) -> String? {
         let expanded = (path as NSString).expandingTildeInPath
         return try? String(contentsOfFile: expanded, encoding: .utf8)
+    }
+
+    /// A path to show once the browser for that host connects (⌘-click on a
+    /// remote path in an SSH terminal).
+    static var pendingPath: [String: String] = [:]
+
+    /// Go to `raw` — a directory, or a file's parent directory.
+    private func reveal(_ raw: String, home: String) async {
+        var p = raw
+        if p == "~" { p = home } else if p.hasPrefix("~/") { p = join(home, String(p.dropFirst(2))) }
+        if (try? await conn.list(p)) != nil { await load(p); return }
+        let parent = (p as NSString).deletingLastPathComponent
+        if !parent.isEmpty { await load(parent) }
     }
 
     func load(_ newPath: String) async {

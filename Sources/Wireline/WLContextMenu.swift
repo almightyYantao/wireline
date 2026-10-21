@@ -18,7 +18,9 @@ struct WLMenuItem: Identifiable {
     }
 }
 
-/// Shared state for the in-window themed context menu.
+/// Shared state for the in-window themed context menu. Behaves like NSMenu:
+/// instant highlight, ↑/↓/Return/Esc, the chosen row blinks before the menu
+/// fades, and the action runs once the fade starts.
 @Observable
 @MainActor
 final class WLMenuState {
@@ -26,34 +28,80 @@ final class WLMenuState {
     private(set) var items: [WLMenuItem] = []
     private(set) var anchor: CGPoint = .zero
     private(set) var visible = false
+    /// The highlighted row (mouse or keyboard — one highlight, like NSMenu).
+    var highlighted: UUID?
+    /// Where the menu actually sits after clamping to the window.
+    var frame: CGRect = .zero
     var menuSize: CGSize = .zero
+    private var selecting = false
     private var monitor: Any?
+
+    private var selectable: [WLMenuItem] { items.filter { !$0.isDivider } }
 
     func show(_ items: [WLMenuItem], at point: CGPoint) {
         self.items = items
         self.anchor = point
-        self.visible = true
+        self.highlighted = nil
+        self.selecting = false
+        wlAnimate(Motion.popIn) { self.visible = true }
         installMonitor()
     }
 
     func hide() {
-        visible = false
+        wlAnimate(Motion.popOut) { visible = false }
         if let monitor { NSEvent.removeMonitor(monitor) }
         monitor = nil
     }
 
-    /// Dismiss on any click outside the menu. Returns the event so an outside
-    /// right-click still reaches the row catcher and opens a fresh menu.
+    /// Blink the chosen row twice, then fade the menu and run the action.
+    func select(_ item: WLMenuItem) {
+        guard !selecting, !item.isDivider else { return }
+        selecting = true
+        Task { @MainActor in
+            for _ in 0..<2 {
+                highlighted = nil
+                try? await Task.sleep(for: .milliseconds(55))
+                highlighted = item.id
+                try? await Task.sleep(for: .milliseconds(55))
+            }
+            hide()
+            item.action()
+        }
+    }
+
+    private func move(_ delta: Int) {
+        let rows = selectable
+        guard !rows.isEmpty else { return }
+        let i = rows.firstIndex { $0.id == highlighted }
+        let next: Int
+        if let i { next = (i + delta + rows.count) % rows.count }
+        else { next = delta > 0 ? 0 : rows.count - 1 }
+        highlighted = rows[next].id
+    }
+
+    /// Dismiss on any click outside the menu (the event still passes through so
+    /// an outside right-click opens a fresh menu); drive it from the keyboard.
     private func installMonitor() {
         guard monitor == nil else { return }
-        monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
-            guard let self, self.visible, let content = event.window?.contentView else { return event }
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .keyDown]) { [weak self] event in
+            guard let self, self.visible else { return event }
+            if event.type == .keyDown {
+                switch event.keyCode {
+                case 125: self.move(1)                                   // ↓
+                case 126: self.move(-1)                                  // ↑
+                case 36, 76:                                             // Return / Enter
+                    if let id = self.highlighted, let item = self.items.first(where: { $0.id == id }) {
+                        self.select(item)
+                    }
+                case 53: self.hide()                                     // Esc
+                default: return event
+                }
+                return nil
+            }
+            guard let content = event.window?.contentView else { return event }
             let p = content.convert(event.locationInWindow, from: nil)
             let y = content.isFlipped ? p.y : content.bounds.height - p.y
-            let size = self.menuSize == .zero ? CGSize(width: 200, height: 360) : self.menuSize
-            if !CGRect(origin: self.anchor, size: size).contains(CGPoint(x: p.x, y: y)) {
-                self.hide()
-            }
+            if !self.frame.contains(CGPoint(x: p.x, y: y)) { self.hide() }
             return event
         }
     }
@@ -124,62 +172,97 @@ private struct RightClickCatcher: NSViewRepresentable {
     }
 }
 
-/// The overlay that renders the active menu inside the window.
+/// The overlay that renders the active menu inside the window, kept fully on
+/// screen: it flips left / up when the pointer is near the right / bottom edge.
 private struct WLMenuOverlay: View {
     @State private var state = WLMenuState.shared
+    private let margin: CGFloat = 6
 
     var body: some View {
-        ZStack(alignment: .topLeading) {
-            if state.visible {
-                WLMenuList(items: state.items, onSelect: { state.hide() })
-                    .fixedSize()
-                    .background(GeometryReader { g in
-                        Color.clear
-                            .onAppear { state.menuSize = g.size }
-                            .onChange(of: g.size) { state.menuSize = $0 }
-                    })
-                    .offset(x: max(0, state.anchor.x - 3), y: max(0, state.anchor.y - 3))
+        GeometryReader { geo in
+            let placed = placement(in: geo.size)
+            ZStack(alignment: .topLeading) {
+                if state.visible {
+                    WLMenuList(items: state.items, state: state)
+                        .fixedSize()
+                        .background(GeometryReader { g in
+                            Color.clear
+                                .onAppear { state.menuSize = g.size }
+                                .onChange(of: g.size) { _, s in state.menuSize = s }
+                        })
+                        .transition(.wlPop(anchor: placed.anchor))
+                        .offset(x: placed.origin.x, y: placed.origin.y)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .onChange(of: CGRect(origin: placed.origin, size: state.menuSize), initial: true) { _, r in
+                state.frame = r
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         // Only the menu itself captures clicks; empty space passes through so a
         // right-click elsewhere can open a new menu (dismissal is via monitor).
         .allowsHitTesting(state.visible)
+    }
+
+    private func placement(in bounds: CGSize) -> (origin: CGPoint, anchor: UnitPoint) {
+        let size = state.menuSize == .zero ? CGSize(width: 200, height: 240) : state.menuSize
+        var x = state.anchor.x - 3, y = state.anchor.y - 3
+        var flipX = false, flipY = false
+        if x + size.width > bounds.width - margin { x = state.anchor.x - size.width + 3; flipX = true }
+        if y + size.height > bounds.height - margin { y = state.anchor.y - size.height + 3; flipY = true }
+        x = min(max(margin, x), max(margin, bounds.width - size.width - margin))
+        y = min(max(margin, y), max(margin, bounds.height - size.height - margin))
+        let anchor: UnitPoint = switch (flipX, flipY) {
+        case (false, false): .topLeading
+        case (true, false): .topTrailing
+        case (false, true): .bottomLeading
+        case (true, true): .bottomTrailing
+        }
+        return (CGPoint(x: x, y: y), anchor)
     }
 }
 
 /// The themed menu content.
 private struct WLMenuList: View {
     let items: [WLMenuItem]
-    let onSelect: () -> Void
+    let state: WLMenuState
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(items) { item in
                 if item.isDivider {
-                    Rectangle().fill(WL.border).frame(height: 1).padding(.vertical, 4)
+                    Rectangle().fill(WL.border).frame(height: 1)
+                        .padding(.vertical, 4).padding(.horizontal, 8)
                 } else {
-                    WLMenuRow(item: item, onSelect: onSelect)
+                    WLMenuRow(item: item, highlighted: state.highlighted == item.id,
+                              onHover: { inside in
+                                  if inside { state.highlighted = item.id }
+                                  else if state.highlighted == item.id { state.highlighted = nil }
+                              },
+                              onSelect: { state.select(item) })
                 }
             }
         }
-        .padding(.vertical, 5)
-        .frame(minWidth: 176, alignment: .leading)
+        .padding(5)
+        .frame(minWidth: 186, alignment: .leading)
         .background(WL.surface)
-        .clipShape(RoundedRectangle(cornerRadius: WL.radius(8)))
-        .overlay(RoundedRectangle(cornerRadius: WL.radius(8)).stroke(WL.border, lineWidth: WL.borderWidth))
-        .shadow(color: .black.opacity(0.4), radius: 14, y: 6)
+        .clipShape(RoundedRectangle(cornerRadius: WL.radius(9)))
+        .overlay(RoundedRectangle(cornerRadius: WL.radius(9)).stroke(WL.border, lineWidth: WL.borderWidth))
+        .shadow(color: .black.opacity(0.18), radius: 2, y: 1)
+        .shadow(color: .black.opacity(WL.depth(0.35)), radius: 16, y: 8)
     }
 }
 
+/// One row. Highlight is instant — no fade — exactly like a native menu.
 private struct WLMenuRow: View {
     let item: WLMenuItem
+    let highlighted: Bool
+    let onHover: (Bool) -> Void
     let onSelect: () -> Void
-    @State private var hover = false
 
     private var fg: Color {
-        if item.destructive { return hover ? WL.red : WL.red.opacity(0.85) }
-        return hover ? WL.greenBright : WL.textPrimary
+        if item.destructive { return highlighted ? WL.red : WL.red.opacity(0.85) }
+        return highlighted ? WL.greenBright : WL.textPrimary
     }
 
     var body: some View {
@@ -191,11 +274,12 @@ private struct WLMenuRow: View {
             Spacer(minLength: 12)
         }
         .foregroundStyle(fg)
-        .padding(.horizontal, 12).padding(.vertical, 6)
+        .padding(.horizontal, 9).padding(.vertical, 5)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(hover ? WL.green.opacity(0.16) : .clear)
+        .background(highlighted ? (item.destructive ? WL.red : WL.green).opacity(0.16) : .clear,
+                    in: RoundedRectangle(cornerRadius: WL.radius(5)))
         .contentShape(Rectangle())
-        .onHover { hover = $0 }
-        .onTapGesture { item.action(); onSelect() }
+        .onHover(perform: onHover)
+        .onTapGesture(perform: onSelect)
     }
 }

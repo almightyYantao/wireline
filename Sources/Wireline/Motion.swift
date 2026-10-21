@@ -1,0 +1,296 @@
+import SwiftUI
+import AppKit
+
+// The motion & interaction layer. Every animation, transition, hover and press
+// response in the app goes through here, so timing stays consistent and the
+// whole UI honours System Settings → Accessibility → Reduce Motion.
+// The rules behind these numbers live in docs/design/motion-spec.md.
+
+/// Motion tokens. Pick by *intent*, never by duration — if no token fits,
+/// the design is probably wrong, not the token list.
+enum Motion {
+    /// The system "Reduce Motion" setting. When on, movement and scale are
+    /// replaced by short cross-fades and ambient loops stop.
+    static var reduce: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
+
+    /// Pointer enters / leaves a control: background tint, text colour.
+    static let hover: Animation = .easeOut(duration: 0.12)
+    /// Mouse down on a control. Fast enough to feel instant.
+    static let press: Animation = .easeOut(duration: 0.08)
+    /// Mouse up — the control settles back with a hint of spring.
+    static let release: Animation = .spring(duration: 0.26, bounce: 0.18)
+    /// A value changes in place: selection by mouse, toggle, status colour.
+    static let state: Animation = .smooth(duration: 0.2)
+    /// Disclosure: group expand / collapse, chevron, an inline row revealing actions.
+    static let disclose: Animation = .spring(duration: 0.3, bounce: 0)
+    /// A menu / popover / small card appearing from its anchor.
+    static let popIn: Animation = .spring(duration: 0.22, bounce: 0)
+    /// …and going away. Exits are always faster than entries.
+    static let popOut: Animation = .easeIn(duration: 0.12)
+    /// A modal surface (⌘K, ⌘P) appearing over a scrim.
+    static let modalIn: Animation = .spring(duration: 0.3, bounce: 0.05)
+    static let modalOut: Animation = .easeIn(duration: 0.14)
+    /// A banner / toast / floating bar sliding in from an edge.
+    static let banner: Animation = .spring(duration: 0.36, bounce: 0.16)
+    /// Expanding a floating surface the user deliberately summoned (pet chat).
+    static let expand: Animation = .spring(duration: 0.34, bounce: 0.12)
+    /// Programmatic scrolling (jump to bottom, follow output).
+    static let scroll: Animation = .smooth(duration: 0.25)
+    /// Cross-fade used in place of movement when Reduce Motion is on.
+    static let fade: Animation = .easeInOut(duration: 0.15)
+
+    /// A slow, autoreversing loop for ambient indicators (pulse, breathe).
+    /// Returns nil under Reduce Motion — callers must leave the view static.
+    static func ambient(_ period: Double) -> Animation? {
+        reduce ? nil : .easeInOut(duration: period).repeatForever(autoreverses: true)
+    }
+
+    /// Resolve a token against Reduce Motion: movement tokens collapse to a fade.
+    static func resolved(_ animation: Animation) -> Animation {
+        reduce ? fade : animation
+    }
+}
+
+/// `withAnimation` that respects Reduce Motion.
+@discardableResult
+func wlAnimate<R>(_ animation: Animation = Motion.state, _ body: () throws -> R) rethrows -> R {
+    try withAnimation(Motion.resolved(animation), body)
+}
+
+/// Run a state change with no animation at all — for anything that resizes the
+/// terminal (sidebar, AI column, broadcast bar). The terminal must reflow once,
+/// not once per frame.
+func wlSnap<R>(_ body: () throws -> R) rethrows -> R {
+    var t = Transaction()
+    t.disablesAnimations = true
+    return try withTransaction(t, body)
+}
+
+// MARK: - Transitions
+
+extension AnyTransition {
+    /// Menus, popovers, small floating cards: grow from the anchor, fade out.
+    static func wlPop(anchor: UnitPoint = .top) -> AnyTransition {
+        if Motion.reduce { return .opacity.animation(Motion.fade) }
+        return .asymmetric(
+            insertion: .scale(scale: 0.96, anchor: anchor).combined(with: .opacity).animation(Motion.popIn),
+            removal: .opacity.animation(Motion.popOut)
+        )
+    }
+
+    /// Modal cards over a scrim: settle in from slightly above, shrink away.
+    static var wlModal: AnyTransition {
+        if Motion.reduce { return .opacity.animation(Motion.fade) }
+        return .asymmetric(
+            insertion: .scale(scale: 0.97).combined(with: .offset(y: -6)).combined(with: .opacity)
+                .animation(Motion.modalIn),
+            removal: .scale(scale: 0.98).combined(with: .opacity).animation(Motion.modalOut)
+        )
+    }
+
+    /// Scrims behind modals.
+    static var wlScrim: AnyTransition {
+        .asymmetric(insertion: .opacity.animation(.easeOut(duration: 0.2)),
+                    removal: .opacity.animation(Motion.modalOut))
+    }
+
+    /// Banners and floating bars that belong to an edge.
+    static func wlSlide(_ edge: Edge) -> AnyTransition {
+        if Motion.reduce { return .opacity.animation(Motion.fade) }
+        let offset: CGSize = switch edge {
+        case .top: CGSize(width: 0, height: -10)
+        case .bottom: CGSize(width: 0, height: 10)
+        case .leading: CGSize(width: -10, height: 0)
+        case .trailing: CGSize(width: 10, height: 0)
+        }
+        return .asymmetric(
+            insertion: .offset(offset).combined(with: .opacity).animation(Motion.banner),
+            removal: .offset(offset).combined(with: .opacity).animation(Motion.popOut)
+        )
+    }
+
+    /// Rows revealed by a disclosure (group expand).
+    static var wlDisclose: AnyTransition {
+        if Motion.reduce { return .opacity }
+        return .asymmetric(insertion: .opacity.combined(with: .offset(y: -4)),
+                           removal: .opacity)
+    }
+
+    /// Small badges and dots popping into existence.
+    static var wlBadge: AnyTransition {
+        if Motion.reduce { return .opacity }
+        return .scale(scale: 0.5).combined(with: .opacity)
+    }
+}
+
+// MARK: - Hover
+
+extension View {
+    /// Track hover with the standard hover timing. Replaces `.wlHover($hover)`.
+    func wlHover(_ hover: Binding<Bool>, perform extra: ((Bool) -> Void)? = nil) -> some View {
+        onHover { h in
+            withAnimation(Motion.hover) { hover.wrappedValue = h }
+            extra?(h)
+        }
+    }
+
+    /// Entrance for content inside a panel whose *frame* must not animate (it
+    /// would resize the terminal every frame). The column snaps into place; only
+    /// its contents fade and drift in. Apply it *before* the panel's background
+    /// modifier — fading a translucent tint flashes the wallpaper behind it.
+    func wlAppear(from edge: Edge = .trailing, distance: CGFloat = 8) -> some View {
+        modifier(AppearModifier(edge: edge, distance: distance))
+    }
+}
+
+private struct AppearModifier: ViewModifier {
+    let edge: Edge
+    let distance: CGFloat
+    @State private var shown = false
+
+    func body(content: Content) -> some View {
+        let d = shown || Motion.reduce ? 0 : distance
+        content
+            .opacity(shown ? 1 : 0)
+            .offset(x: edge == .leading ? -d : edge == .trailing ? d : 0,
+                    y: edge == .top ? -d : edge == .bottom ? d : 0)
+            .onAppear { withAnimation(Motion.resolved(Motion.popIn)) { shown = true } }
+    }
+}
+
+// MARK: - Button styles
+
+/// The default for every text / icon-only button. Like a native borderless
+/// button: dims while pressed, dims when disabled, no scale.
+struct WLPlainButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        PlainBody(configuration: configuration)
+    }
+
+    private struct PlainBody: View {
+        let configuration: ButtonStyleConfiguration
+        @Environment(\.isEnabled) private var enabled
+        var body: some View {
+            configuration.label
+                .contentShape(Rectangle())
+                .opacity(!enabled ? 0.4 : configuration.isPressed ? 0.6 : 1)
+                .animation(configuration.isPressed ? Motion.press : Motion.release,
+                           value: configuration.isPressed)
+        }
+    }
+}
+
+/// Square icon button (toolbar, panel headers): 24pt hit target, a rounded
+/// hover well, and a slight press-in.
+struct WLIconButtonStyle: ButtonStyle {
+    var tint: Color? = nil
+    var size: CGFloat = 24
+
+    func makeBody(configuration: Configuration) -> some View {
+        IconBody(configuration: configuration, tint: tint, size: size)
+    }
+
+    private struct IconBody: View {
+        let configuration: ButtonStyleConfiguration
+        let tint: Color?
+        let size: CGFloat
+        @Environment(\.isEnabled) private var enabled
+        @State private var hover = false
+
+        var body: some View {
+            let pressed = configuration.isPressed
+            configuration.label
+                .foregroundStyle(tint ?? (hover ? WL.textPrimary : WL.textDim))
+                .frame(width: size, height: size)
+                .background(
+                    RoundedRectangle(cornerRadius: WL.radius(6))
+                        .fill(WL.textPrimary.opacity(pressed ? 0.14 : hover ? 0.08 : 0))
+                )
+                .contentShape(Rectangle())
+                .scaleEffect(pressed && !Motion.reduce ? 0.94 : 1)
+                .opacity(enabled ? 1 : 0.4)
+                .animation(pressed ? Motion.press : Motion.release, value: pressed)
+                .wlHover($hover)
+        }
+    }
+}
+
+/// Filled / tinted pill — the app's prominent action button.
+struct WLPillButtonStyle: ButtonStyle {
+    var tint: Color = WL.green
+    var prominent = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        PillBody(configuration: configuration, tint: tint, prominent: prominent)
+    }
+
+    private struct PillBody: View {
+        let configuration: ButtonStyleConfiguration
+        let tint: Color
+        let prominent: Bool
+        @Environment(\.isEnabled) private var enabled
+        @State private var hover = false
+
+        var body: some View {
+            let pressed = configuration.isPressed
+            configuration.label
+                .foregroundStyle(prominent ? WL.bg : (hover ? WL.greenBright : tint))
+                .padding(.horizontal, 10).padding(.vertical, 4)
+                .background(
+                    Capsule().fill(prominent ? tint.opacity(pressed ? 0.8 : hover ? 1 : 0.92)
+                                             : tint.opacity(pressed ? 0.26 : hover ? 0.2 : 0.12))
+                )
+                .contentShape(Capsule())
+                .scaleEffect(pressed && !Motion.reduce ? 0.97 : 1)
+                .opacity(enabled ? 1 : 0.4)
+                .animation(pressed ? Motion.press : Motion.release, value: pressed)
+                .wlHover($hover)
+        }
+    }
+}
+
+extension ButtonStyle where Self == WLPlainButtonStyle {
+    static var wlPlain: WLPlainButtonStyle { WLPlainButtonStyle() }
+}
+extension ButtonStyle where Self == WLIconButtonStyle {
+    static var wlIcon: WLIconButtonStyle { WLIconButtonStyle() }
+    static func wlIcon(tint: Color? = nil, size: CGFloat = 24) -> WLIconButtonStyle {
+        WLIconButtonStyle(tint: tint, size: size)
+    }
+}
+extension ButtonStyle where Self == WLPillButtonStyle {
+    static func wlPill(_ tint: Color = WL.green, prominent: Bool = false) -> WLPillButtonStyle {
+        WLPillButtonStyle(tint: tint, prominent: prominent)
+    }
+}
+
+// MARK: - Ambient indicators
+
+/// An opacity pulse for "in progress" dots. Static under Reduce Motion, and
+/// stops cleanly when `active` turns false.
+struct PulseModifier: ViewModifier {
+    var active: Bool
+    var period: Double = 0.9
+    var low: Double = 0.3
+    @State private var on = false
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(active && on ? low : 1)
+            .onAppear { restart() }
+            .onChange(of: active) { _, _ in restart() }
+    }
+
+    private func restart() {
+        var t = Transaction(); t.disablesAnimations = true
+        withTransaction(t) { on = false }
+        guard active, let a = Motion.ambient(period) else { return }
+        DispatchQueue.main.async { withAnimation(a) { on = true } }
+    }
+}
+
+extension View {
+    func wlPulse(_ active: Bool = true, period: Double = 0.9, low: Double = 0.3) -> some View {
+        modifier(PulseModifier(active: active, period: period, low: low))
+    }
+}

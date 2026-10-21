@@ -47,6 +47,11 @@ public final class PortForwardManager: @unchecked Sendable {
         process.executableURL = URL(fileURLWithPath: sshPath)
         process.arguments = SSHCommand.forwardArguments(for: host, forward: forward)
         process.standardInput = FileHandle.nullDevice
+        if SSHAgentEnvironment.socketPath != nil {
+            var env = ProcessInfo.processInfo.environment
+            SSHAgentEnvironment.apply(to: &env)
+            process.environment = env
+        }
         let errPipe = Pipe()
         process.standardError = errPipe
 

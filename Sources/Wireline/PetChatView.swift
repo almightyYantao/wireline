@@ -105,7 +105,7 @@ struct PetChatView: View {
             }
             Button(action: onClose) {
                 Image(systemName: "chevron.down").font(.system(size: 11, weight: .bold)).foregroundStyle(WL.textDim)
-            }.buttonStyle(.plain)
+            }.buttonStyle(.wlPlain)
         }
         .padding(.horizontal, 14).padding(.top, 12).padding(.bottom, 10)
     }
@@ -137,7 +137,7 @@ struct PetChatView: View {
     }
 
     private func stick(_ proxy: ScrollViewProxy) {
-        withAnimation(.easeOut(duration: 0.12)) { proxy.scrollTo("bottom", anchor: .bottom) }
+        withAnimation(Motion.scroll) { proxy.scrollTo("bottom", anchor: .bottom) }
     }
 
     private var emptyState: some View {
@@ -163,7 +163,7 @@ struct PetChatView: View {
         return Button { input = text; focused = true } label: {
             Text("↳ " + text).font(WL.caption).foregroundStyle(WL.green)
                 .frame(maxWidth: .infinity, alignment: .leading)
-        }.buttonStyle(.plain)
+        }.buttonStyle(.wlPlain)
     }
 
     // MARK: input
@@ -177,12 +177,12 @@ struct PetChatView: View {
             if isBusy {
                 Button { task?.cancel(); isBusy = false; steps = 0 } label: {
                     Image(systemName: "stop.fill").font(.system(size: 12)).foregroundStyle(WL.red)
-                }.buttonStyle(.plain)
+                }.buttonStyle(.wlPlain)
             } else {
                 Button(action: send) {
                     Image(systemName: "arrow.up.circle.fill").font(.system(size: 16))
                         .foregroundStyle(canSend ? WL.green : WL.textDim)
-                }.buttonStyle(.plain).disabled(!canSend)
+                }.buttonStyle(.wlPlain).disabled(!canSend)
             }
         }
         .padding(.horizontal, 12).padding(.vertical, 10)

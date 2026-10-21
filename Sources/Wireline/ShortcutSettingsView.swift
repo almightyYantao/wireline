@@ -68,8 +68,11 @@ struct ShortcutSettingsView: View {
                     .overlay(RoundedRectangle(cornerRadius: WL.radius(5))
                         .stroke(recording == action ? WL.green : WL.border, lineWidth: WL.borderWidth))
             }
-            .buttonStyle(.plain)
-            if keys.shortcut(for: action) != action.defaultShortcut {
+            .buttonStyle(.wlPlain)
+            .disabled(keys.isFromConfig(action))
+            if keys.isFromConfig(action) {
+                ConfigLockTag(key: "keybind")
+            } else if keys.shortcut(for: action) != action.defaultShortcut {
                 BracketButton(loc("默认", "Default")) {
                     keys.reset(action); warning = nil
                     if recording == action { stopRecording() }

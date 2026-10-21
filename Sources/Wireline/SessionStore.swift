@@ -76,7 +76,8 @@ final class TerminalSession: Identifiable {
     func runCapturing(_ command: String) async -> String {
         switch kind {
         case .ssh(let alias, _, _, _, _):
-            return await Self.exec(["/usr/bin/ssh", "-S", controlSocket, "-o", "BatchMode=yes", alias, command], timeout: 1800)
+            return await Self.exec(["/usr/bin/ssh", "-S", controlSocket, "-o", "BatchMode=yes", alias, command],
+                                   timeout: 1800, useAgent: true)
         case .localShell:
             return await Self.exec(["/bin/zsh", "-lc", command], timeout: 1800)
         case .sftp:
@@ -120,12 +121,20 @@ final class TerminalSession: Identifiable {
         return "(执行超时)"
     }
 
-    nonisolated private static func exec(_ argv: [String], timeout: TimeInterval = 30) async -> String {
+    /// `useAgent`: if the ControlMaster has gone away, ssh reconnects on its own,
+    /// so it must be able to reach Wireline's agent for protected keys.
+    nonisolated private static func exec(_ argv: [String], timeout: TimeInterval = 30,
+                                         useAgent: Bool = false) async -> String {
         await withCheckedContinuation { cont in
             DispatchQueue.global().async {
                 let p = Process()
                 p.executableURL = URL(fileURLWithPath: argv[0])
                 p.arguments = Array(argv.dropFirst())
+                if useAgent, SSHAgentEnvironment.socketPath != nil {
+                    var env = ProcessInfo.processInfo.environment
+                    SSHAgentEnvironment.apply(to: &env)
+                    p.environment = env
+                }
                 let pipe = Pipe()
                 p.standardOutput = pipe
                 p.standardError = pipe
@@ -153,8 +162,16 @@ final class TerminalSession: Identifiable {
 
     weak var store: SessionStore?
     private var askpassURL: URL?
-    /// SSH ControlMaster socket path, for out-of-band stats polling.
-    private let controlSocket = NSTemporaryDirectory() + "wl-\(UUID().uuidString.prefix(8)).sock"
+    /// SSH ControlMaster socket path, for out-of-band stats polling. A split
+    /// opened from an SSH pane reuses its source's socket: the new `ssh` rides
+    /// the already-authenticated connection (no password / Touch ID, instant).
+    /// ControlPersist keeps that master alive in the background, so closing the
+    /// source pane doesn't take the split down with it.
+    let controlSocket: String
+    /// Only the session that created the socket deletes it.
+    private let ownsControlSocket: Bool
+    /// Where a local shell starts (a split inherits its source's directory).
+    private let startDirectory: String?
 
     /// Stable key for this session's persisted scrollback file (survives relaunch
     /// via the snapshot). Defaults to the session id; overwritten on restore.
@@ -163,9 +180,13 @@ final class TerminalSession: Identifiable {
     /// history reappears as if the app was never closed.
     var pendingScrollback: Data?
 
-    init(kind: SessionKind, title: String) {
+    init(kind: SessionKind, title: String, sharingControlSocket shared: String? = nil,
+         startDirectory: String? = nil) {
         self.kind = kind
         self.title = title
+        self.controlSocket = shared ?? NSTemporaryDirectory() + "wl-\(UUID().uuidString.prefix(8)).sock"
+        self.ownsControlSocket = shared == nil
+        self.startDirectory = startDirectory
         self.scrollbackKey = id.uuidString
         switch kind {
         case .ssh(let a, _, _, _, _): self.alias = a
@@ -187,6 +208,10 @@ final class TerminalSession: Identifiable {
             // Only ping when the app isn't frontmost — if you're watching, you
             // already see the prompt return.
             guard !NSApp.isActive else { return }
+            // HostStore's `notifyCommandAfter` (Settings / config file), read
+            // where it persists — the session doesn't hold the HostStore.
+            let threshold = UserDefaults.standard.object(forKey: "notifyCommandAfter") as? Double ?? 10
+            guard elapsed >= threshold else { return }
             let loc = Localizer.shared
             Notifier.post(title: loc.t("命令完成 · \(self.title)", "Command finished · \(self.title)"),
                           body: loc.t("耗时 \(Int(elapsed)) 秒", "took \(Int(elapsed))s"))
@@ -212,6 +237,14 @@ final class TerminalSession: Identifiable {
         terminalView.onDirectoryChange = { [weak self] dir in
             self?.applyReportedDirectory(dir)
         }
+        terminalView.onTitleReport = { [weak self] title in
+            self?.applyReportedTitle(title)
+        }
+        terminalView.onOpenPath = { [weak self] path in self?.openPath(path) }
+        terminalView.isActivePane = { [weak self] in
+            guard let self else { return false }
+            return self.store?.activeID == self.id
+        }
         terminalView.onCommentRequest = { [weak self] nl in
             guard let self, self.store?.activeID == self.id else { return }
             self.inlineAI.activate(prefill: nl)
@@ -224,10 +257,67 @@ final class TerminalSession: Identifiable {
     /// to the directory's basename. SSH/SFTP tabs keep their host alias as the title.
     private func applyReportedDirectory(_ raw: String?) {
         guard let raw, let path = Self.parseOSC7Path(raw) else { return }
-        currentDirectory = path
-        guard !isManuallyRenamed, case .localShell = kind else { return }
-        let name = Self.tabTitle(forPath: path)
+        switch kind {
+        case .localShell:
+            currentDirectory = path
+            guard !isManuallyRenamed else { return }
+            let name = Self.tabTitle(forPath: path)
+            if name != title { title = name }
+        case .ssh:
+            applyRemoteDirectory(path)
+        case .sftp:
+            break
+        }
+    }
+
+    /// The remote shell's directory, when it reports one (OSC 7, or an
+    /// oh-my-zsh-style `user@host: ~/dir` window title). The tab reads
+    /// "alias · dir" so you can tell two panes on one host apart. Not stored in
+    /// `currentDirectory` — that's a local path a local split would `cd` into.
+    private(set) var remoteDirectory: String?
+
+    private func applyRemoteDirectory(_ path: String) {
+        remoteDirectory = path
+        guard !isManuallyRenamed else { return }
+        let leaf = path == "~" || path == "/" ? path : ((path as NSString).lastPathComponent)
+        let name = "\(alias) · \(leaf)"
         if name != title { title = name }
+    }
+
+    /// A path ⌘-clicked in the terminal: a local one opens with its default app
+    /// (folders in Finder); a remote one opens in the SFTP browser.
+    private func openPath(_ raw: String) {
+        switch kind {
+        case .localShell:
+            var p = (raw as NSString).expandingTildeInPath
+            if !p.hasPrefix("/") {
+                p = ((currentDirectory ?? NSHomeDirectory()) as NSString).appendingPathComponent(p)
+            }
+            guard FileManager.default.fileExists(atPath: p) else { NSSound.beep(); return }
+            NSWorkspace.shared.open(URL(fileURLWithPath: p))
+        case .ssh:
+            var p = raw
+            if !p.hasPrefix("/"), !p.hasPrefix("~"), let dir = remoteDirectory {
+                p = (dir as NSString).appendingPathComponent(p)
+            }
+            FileBrowserModel.pendingPath[alias] = p
+            NotificationCenter.default.post(name: .aiOpenFiles, object: alias)
+        case .sftp:
+            break
+        }
+    }
+
+    /// Program-set window titles (OSC 0/2) are ignored as tab titles — except an
+    /// SSH session's idle `user@host: path` title, which is mined for the
+    /// remote directory.
+    private func applyReportedTitle(_ text: String) {
+        guard case .ssh = kind else { return }
+        let t = text.trimmingCharacters(in: .whitespaces)
+        guard let at = t.firstIndex(of: "@"), let colon = t[at...].firstIndex(of: ":"),
+              !t[t.startIndex..<at].contains(" "), !t[at..<colon].contains(" ") else { return }
+        let path = t[t.index(after: colon)...].trimmingCharacters(in: .whitespaces)
+        guard path.hasPrefix("/") || path.hasPrefix("~") else { return }
+        applyRemoteDirectory(path)
     }
 
     /// Parse an OSC-7 payload (`file://host/path`, or occasionally a bare path)
@@ -339,7 +429,7 @@ final class TerminalSession: Identifiable {
         stats.stop()
         busyTimer?.cancel(); busyTimer = nil
         if isRunning { terminalView.terminate() }
-        try? FileManager.default.removeItem(atPath: controlSocket)
+        if ownsControlSocket { try? FileManager.default.removeItem(atPath: controlSocket) }
         if let askpassURL { try? FileManager.default.removeItem(at: askpassURL); self.askpassURL = nil }
 
         // Forget per-connection heuristics (password prompts, prompt/busy tracking)
@@ -372,6 +462,8 @@ final class TerminalSession: Identifiable {
                 env.append("SSH_ASKPASS_REQUIRE=force")
                 env.append("WIRELINE_ASKPASS_PW=\(password)")
             }
+            // Touch ID–protected keys are served by Wireline's own ssh-agent.
+            SSHAgentEnvironment.apply(to: &env)
             // Enable ControlMaster so a side channel can poll server stats over
             // the same authenticated connection (no re-auth, no PTY interference).
             let args = [
@@ -389,6 +481,7 @@ final class TerminalSession: Identifiable {
                 env.append("SSH_ASKPASS_REQUIRE=force")
                 env.append("WIRELINE_ASKPASS_PW=\(password)")
             }
+            SSHAgentEnvironment.apply(to: &env)
             terminalView.startProcess(
                 executable: "/usr/bin/sftp",
                 args: ["-o", "StrictHostKeyChecking=accept-new"] + extraArgs + [alias],
@@ -414,8 +507,9 @@ final class TerminalSession: Identifiable {
                 args: ["-l"],
                 environment: env,
                 execName: "-\(name)",
-                // Start in the user's home, not the app's cwd (which is `/`).
-                currentDirectory: FileManager.default.homeDirectoryForCurrentUser.path
+                // Start in the source pane's directory for a split, else the
+                // user's home (not the app's cwd, which is `/`).
+                currentDirectory: startDirectory ?? FileManager.default.homeDirectoryForCurrentUser.path
             )
             startBusyPolling()
         }
@@ -469,7 +563,7 @@ final class TerminalSession: Identifiable {
         terminalView.stopLogging()
         isLogging = false
         terminalView.terminate()
-        try? FileManager.default.removeItem(atPath: controlSocket)
+        if ownsControlSocket { try? FileManager.default.removeItem(atPath: controlSocket) }
         if let askpassURL { try? FileManager.default.removeItem(at: askpassURL) }
         askpassURL = nil
     }
@@ -510,11 +604,17 @@ final class TerminalSession: Identifiable {
 
         # --- Wireline shell integration: report cwd via OSC 7 (tab title tracking) ---
         _wireline_osc7() { printf '\\033]7;file://%s%s\\a' "${HOST:-}" "$PWD"; }
+        # OSC 133 prompt marks: A right before the prompt, C when a command starts.
+        # Lets Wireline blank the prompt before a resize reflow so zsh's SIGWINCH
+        # redraw replaces it in place instead of stacking duplicates.
+        _wireline_osc133_prompt() { printf '\\033]133;A\\a'; }
+        _wireline_osc133_exec() { printf '\\033]133;C\\a'; }
         if [[ -z "${_wireline_osc7_installed:-}" ]]; then
           _wireline_osc7_installed=1
-          typeset -ag precmd_functions chpwd_functions
-          precmd_functions+=(_wireline_osc7)
+          typeset -ag precmd_functions chpwd_functions preexec_functions
+          precmd_functions+=(_wireline_osc7 _wireline_osc133_prompt)
           chpwd_functions+=(_wireline_osc7)
+          preexec_functions+=(_wireline_osc133_exec)
         fi
         """
         // `/etc/zshrc` derives HISTFILE from ZDOTDIR, which at that point is this
@@ -582,6 +682,22 @@ struct SessionSnapshot: Codable, Sendable {
     /// Whether the title was set by hand (so directory auto-tracking leaves it
     /// alone). Optional so snapshots written before this field decode cleanly.
     var manuallyRenamed: Bool?
+    /// A local shell's working directory, so it reopens where it was.
+    var directory: String?
+}
+
+/// The tab / split arrangement, saved next to the session list. Leaves refer to
+/// sessions by their index in that list.
+struct LayoutSnapshot: Codable {
+    indirect enum Node: Codable {
+        case leaf(Int)
+        case branch(vertical: Bool, ratio: Double, first: Node, second: Node)
+    }
+    var tabs: [Node]
+    var activeTab: Int?
+    var activeSession: Int?
+    /// tab index → zoomed session index
+    var zoomed: [Int: Int] = [:]
 }
 
 /// How the terminal area is split into panes.
@@ -601,7 +717,7 @@ final class SessionStore {
     private(set) var tabs: [PaneNode] = []
     /// Which tab (pane group) is currently shown.
     var activeTabID: UUID? {
-        didSet { clearUnread(inTab: activeTabID) }
+        didSet { clearUnread(inTab: activeTabID); if activeTabID != oldValue { persistLayout() } }
     }
 
     /// Mark every session in a tab as read (its "new output" dot goes away once
@@ -612,7 +728,9 @@ final class SessionStore {
     }
     /// The focused session within the active tab (drives which pane is highlighted
     /// and where the keyboard goes).
-    var activeID: UUID?
+    var activeID: UUID? {
+        didSet { if activeID != oldValue { persistLayout() } }
+    }
 
     var activeTab: PaneNode? { tabs.first { $0.id == activeTabID } }
 
@@ -640,7 +758,12 @@ final class SessionStore {
     /// Open a plain local shell session.
     @discardableResult
     func openLocalShell() -> UUID {
-        add(TerminalSession(kind: .localShell, title: "Local Shell"))
+        // Like Ghostty's window-inherit-working-directory: start where the
+        // focused local shell is. (HostStore's setting, read where it persists.)
+        let inherit = UserDefaults.standard.object(forKey: "inheritWorkingDirectory") as? Bool ?? true
+        var dir: String?
+        if inherit, let s = activeSession, case .localShell = s.kind { dir = s.currentDirectory }
+        return add(TerminalSession(kind: .localShell, title: "Local Shell", startDirectory: dir))
     }
 
     private func add(_ session: TerminalSession) -> UUID {
@@ -659,7 +782,10 @@ final class SessionStore {
     private func spawn(_ session: TerminalSession) -> UUID {
         session.store = self
         let id = session.id
-        session.terminalView.onCloseRequested = { [weak self] in self?.close(id) }
+        session.terminalView.onCloseRequested = { [weak self] in
+            // Remaining panes grow into the space: animate, one reflow.
+            wlAnimateTerminalLayout { self?.close(id) }
+        }
         sessions.append(session)
         session.start()
         return id
@@ -687,6 +813,139 @@ final class SessionStore {
         tabs[target] = tabs[target].splitting(leaf: targetLeaf, insertNode: draggedNode, edge: e)
         activeTabID = tabs[target].id
         activeID = draggedNode.sessionIDs.first ?? activeID
+    }
+
+    // MARK: - Splits (keyboard)
+
+    /// Split ratios per branch id (first child's share, 0…1). Missing = even.
+    private(set) var splitRatios: [UUID: CGFloat] = [:]
+    /// The leaf session zoomed to fill its tab, per tab id.
+    private(set) var zoomedSession: [UUID: UUID] = [:]
+    /// Last laid-out frame of every visible pane (window coordinates), for
+    /// directional focus. Not observed: layout writes it every pass.
+    @ObservationIgnored var paneFrames: [UUID: CGRect] = [:]
+
+    func ratio(for branch: UUID) -> CGFloat { splitRatios[branch] ?? 0.5 }
+
+    func setRatio(_ r: CGFloat, for branch: UUID) {
+        splitRatios[branch] = min(max(r, 0.12), 0.88)
+        persistLayout()
+    }
+
+    /// Rebuild tabs and splits for freshly restored sessions (`restored` is
+    /// index-aligned with the saved session list). Sessions the saved layout
+    /// doesn't place — or every session, for data from before layouts were
+    /// saved — get a tab of their own.
+    private func restoreLayout(_ restored: [TerminalSession?]) {
+        let layout = UserDefaults.standard.data(forKey: Self.layoutKey)
+            .flatMap { try? JSONDecoder().decode(LayoutSnapshot.self, from: $0) }
+        func id(_ i: Int) -> UUID? { restored.indices.contains(i) ? restored[i]?.id : nil }
+        func build(_ n: LayoutSnapshot.Node) -> PaneNode? {
+            switch n {
+            case .leaf(let i):
+                return id(i).map(PaneNode.makeLeaf)
+            case .branch(let vertical, let ratio, let a, let b):
+                switch (build(a), build(b)) {
+                case (let x?, let y?):
+                    let bid = UUID()
+                    if abs(ratio - 0.5) > 0.001 { splitRatios[bid] = min(max(CGFloat(ratio), 0.12), 0.88) }
+                    return .branch(id: bid, axis: vertical ? .vertical : .horizontal, first: x, second: y)
+                case (let x?, nil): return x
+                case (nil, let y?): return y
+                case (nil, nil): return nil
+                }
+            }
+        }
+        var built: [PaneNode] = []
+        var tabIndexMap: [Int: Int] = [:]   // saved tab index → built tab index
+        for (i, node) in (layout?.tabs ?? []).enumerated() {
+            if let t = build(node) { tabIndexMap[i] = built.count; built.append(t) }
+        }
+        let placed = Set(built.flatMap(\.sessionIDs))
+        for s in restored.compactMap({ $0 }) where !placed.contains(s.id) {
+            built.append(PaneNode.makeLeaf(s.id))
+        }
+        tabs = built
+        for (ti, si) in layout?.zoomed ?? [:] {
+            if let bt = tabIndexMap[ti], let sid = id(si) { zoomedSession[tabs[bt].id] = sid }
+        }
+        let activeTab = layout?.activeTab.flatMap { tabIndexMap[$0] }.map { tabs[$0] } ?? tabs.last
+        activeTabID = activeTab?.id
+        let wanted = layout?.activeSession.flatMap(id)
+        activeID = wanted.flatMap { w in activeTab?.leafID(for: w) != nil ? w : nil } ?? activeTab?.sessionIDs.first
+    }
+
+    /// Make every split in the active tab even.
+    func equalizeSplits() {
+        guard let tab = activeTab else { return }
+        for id in tab.branchIDs { splitRatios[id] = nil }
+        persistLayout()
+    }
+
+    /// Open a new pane next to the active one, like the source: a local shell
+    /// in the same directory, or the same host over the same SSH connection.
+    @discardableResult
+    func splitActive(_ edge: PaneEdge) -> UUID? {
+        guard let source = activeSession, let ti = tabIndex(containing: source.id),
+              let leaf = tabs[ti].leafID(for: source.id) else { return nil }
+        let session: TerminalSession
+        switch source.kind {
+        case .ssh:
+            session = TerminalSession(kind: source.kind, title: source.alias,
+                                      sharingControlSocket: source.controlSocket)
+        case .sftp, .localShell:
+            session = TerminalSession(kind: .localShell, title: "Local Shell",
+                                      startDirectory: source.currentDirectory)
+        }
+        if let tabID = activeTabID { zoomedSession[tabID] = nil }
+        let id = spawn(session)
+        tabs[ti] = tabs[ti].splitting(leaf: leaf, insert: id, edge: edge)
+        // Splitting a single-pane tab turns its root leaf into a new branch, so
+        // the tab's id changes — follow it, or the active tab is "lost" and the
+        // view falls back to showing one pane until the tab is clicked.
+        activeTabID = tabs[ti].id
+        activeID = id
+        persist()
+        return id
+    }
+
+    /// Zoom the active pane to fill its tab, or restore the split.
+    func toggleZoom() {
+        guard let tabID = activeTabID, let tab = activeTab, tab.sessionIDs.count > 1,
+              let active = activeID else { return }
+        zoomedSession[tabID] = zoomedSession[tabID] == nil ? active : nil
+        persistLayout()
+    }
+
+    func zoomedSession(inTab tabID: UUID?) -> UUID? {
+        guard let tabID, let z = zoomedSession[tabID],
+              tabs.first(where: { $0.id == tabID })?.leafID(for: z) != nil else { return nil }
+        return z
+    }
+
+    enum Direction { case left, right, up, down }
+
+    /// Focus the nearest pane in `direction` from the active one: it must lie
+    /// beyond the active pane's edge; prefer the most overlap, then the closest.
+    func focusPane(_ direction: Direction) {
+        guard let tab = activeTab, let active = activeID, let from = paneFrames[active] else { return }
+        let candidates = tab.sessionIDs.filter { $0 != active }.compactMap { id in paneFrames[id].map { (id, $0) } }
+        func overlap(_ a: CGFloat, _ b: CGFloat, _ c: CGFloat, _ d: CGFloat) -> CGFloat { max(0, min(b, d) - max(a, c)) }
+        let scored: [(UUID, CGFloat, CGFloat)] = candidates.compactMap { id, r in
+            switch direction {
+            case .left:  guard r.maxX <= from.minX + 2 else { return nil }
+                return (id, overlap(r.minY, r.maxY, from.minY, from.maxY), from.minX - r.maxX)
+            case .right: guard r.minX >= from.maxX - 2 else { return nil }
+                return (id, overlap(r.minY, r.maxY, from.minY, from.maxY), r.minX - from.maxX)
+            case .up:    guard r.maxY <= from.minY + 2 else { return nil }
+                return (id, overlap(r.minX, r.maxX, from.minX, from.maxX), from.minY - r.maxY)
+            case .down:  guard r.minY >= from.maxY - 2 else { return nil }
+                return (id, overlap(r.minX, r.maxX, from.minX, from.maxX), r.minY - from.maxY)
+            }
+        }
+        let best = scored.filter { $0.1 > 0 }.min { $0.2 != $1.2 ? $0.2 < $1.2 : $0.1 > $1.1 }
+            ?? scored.min { $0.2 < $1.2 }
+        if let best { activeID = best.0 }
     }
 
     /// Detach a pane (session) from its multi-pane tab into its own new tab.
@@ -772,13 +1031,21 @@ final class SessionStore {
         sessions.remove(at: index)
         // Remove the session from its tab; drop the tab if it becomes empty.
         if let ti = tabIndex(containing: id) {
-            if let remaining = tabs[ti].removingSession(id) { tabs[ti] = remaining }
-            else { tabs.remove(at: ti) }
+            let wasActive = tabs[ti].id == activeTabID
+            if let remaining = tabs[ti].removingSession(id) {
+                tabs[ti] = remaining
+                // Collapsing a split can promote a child to the root, changing
+                // the tab's id — keep the same tab active.
+                if wasActive { activeTabID = remaining.id }
+            } else {
+                tabs.remove(at: ti)
+            }
         }
         // Re-derive the active tab / session.
         if !tabs.contains(where: { $0.id == activeTabID }) {
             activeTabID = tabs.indices.contains(index) ? tabs[index].id : tabs.last?.id
         }
+        zoomedSession = zoomedSession.filter { id, s in tabs.contains { $0.id == id && $0.leafID(for: s) != nil } }
         if let at = activeTab {
             if at.leafID(for: activeID ?? UUID()) == nil { activeID = at.sessionIDs.first }
         } else {
@@ -836,8 +1103,44 @@ final class SessionStore {
         if let data = try? JSONEncoder().encode(snaps) {
             UserDefaults.standard.set(data, forKey: Self.persistKey)
         }
+        persistLayout()
         for s in sessions { s.saveScrollback(dir: Self.scrollbackDir) }
         pruneScrollback(keeping: Set(sessions.map(\.scrollbackKey)))
+    }
+
+    private static let layoutKey = "wireline.sessionLayout"
+
+    /// Save just the arrangement (cheap — no scrollback), on every split /
+    /// ratio / focus / zoom change.
+    func persistLayout() {
+        guard didRestore else { return }   // don't clobber it before it's been read
+        let index = Dictionary(uniqueKeysWithValues: sessions.enumerated().map { ($1.id, $0) })
+        func encode(_ n: PaneNode) -> LayoutSnapshot.Node? {
+            switch n {
+            case .leaf(_, let s):
+                return index[s].map { .leaf($0) }
+            case .branch(let id, let axis, let a, let b):
+                switch (encode(a), encode(b)) {
+                case (let x?, let y?):
+                    return .branch(vertical: axis == .vertical, ratio: Double(ratio(for: id)), first: x, second: y)
+                case (let x?, nil): return x
+                case (nil, let y?): return y
+                case (nil, nil): return nil
+                }
+            }
+        }
+        var zoomed: [Int: Int] = [:]
+        for (ti, tab) in tabs.enumerated() {
+            if let z = zoomedSession(inTab: tab.id), let si = index[z] { zoomed[ti] = si }
+        }
+        let layout = LayoutSnapshot(
+            tabs: tabs.compactMap(encode),
+            activeTab: tabs.firstIndex { $0.id == activeTabID },
+            activeSession: activeID.flatMap { index[$0] },
+            zoomed: zoomed)
+        if let data = try? JSONEncoder().encode(layout) {
+            UserDefaults.standard.set(data, forKey: Self.layoutKey)
+        }
     }
 
     private func pruneScrollback(keeping keys: Set<String>) {
@@ -857,8 +1160,11 @@ final class SessionStore {
         case .sftp:       kind = .sftp
         case .localShell: kind = .local
         }
+        var dir: String?
+        if case .localShell = s.kind { dir = s.currentDirectory }
         return SessionSnapshot(kind: kind, alias: s.alias, title: s.title,
-                               scrollbackKey: s.scrollbackKey, manuallyRenamed: s.isManuallyRenamed)
+                               scrollbackKey: s.scrollbackKey, manuallyRenamed: s.isManuallyRenamed,
+                               directory: dir)
     }
 
     /// Reopen (and reconnect) the sessions that were open at last quit. Runs once.
@@ -868,6 +1174,7 @@ final class SessionStore {
         didRestore = true
         guard let data = UserDefaults.standard.data(forKey: Self.persistKey),
               let snaps = try? JSONDecoder().decode([SessionSnapshot].self, from: data) else { return }
+        var restored: [TerminalSession?] = []
         for snap in snaps {
             let built: TerminalSession?
             switch snap.kind {
@@ -883,16 +1190,21 @@ final class SessionStore {
                                                 args: h.launchArgTokens), title: snap.title)
                 }
             case .local:
-                built = TerminalSession(kind: .localShell, title: snap.title)
+                built = TerminalSession(kind: .localShell, title: snap.title,
+                                        startDirectory: snap.directory.flatMap {
+                                            FileManager.default.fileExists(atPath: $0) ? $0 : nil
+                                        })
             }
+            restored.append(built)
             guard let s = built else { continue }
             // Reuse the persisted key so we load THIS session's saved scrollback.
             if !snap.scrollbackKey.isEmpty { s.scrollbackKey = snap.scrollbackKey }
             s.pendingScrollback = loadScrollback(s.scrollbackKey)
             s.title = snap.title
             s.isManuallyRenamed = snap.manuallyRenamed ?? false
-            _ = add(s)                      // spawns + starts (start() replays scrollback first)
+            _ = spawn(s)                    // starts (start() replays scrollback first)
         }
+        restoreLayout(restored)
         persist()
         // Focus is re-asserted from WirelineApp's .task after the pet window opens
         // (which grabs key status), so we don't fight it with a racing call here.

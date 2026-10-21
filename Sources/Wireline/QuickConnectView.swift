@@ -12,6 +12,7 @@ struct QuickConnectView: View {
     var onClose: () -> Void
     @State private var query = ""
     @State private var highlighted = 0
+    @State private var keyboardNav = false
     @State private var results: [Host] = []
     @FocusState private var focused: Bool
 
@@ -32,9 +33,11 @@ struct QuickConnectView: View {
                     .onSubmit(connectHighlighted)
                     .onChange(of: query) { recompute() }
                     .onKeyPress(.downArrow) {
+                        keyboardNav = true
                         highlighted = min(highlighted + 1, max(results.count - 1, 0)); return .handled
                     }
                     .onKeyPress(.upArrow) {
+                        keyboardNav = true
                         highlighted = max(highlighted - 1, 0); return .handled
                     }
             }
@@ -44,31 +47,39 @@ struct QuickConnectView: View {
 
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(spacing: 0) {
+                    LazyVStack(spacing: 2) {
                         ForEach(Array(results.enumerated()), id: \.element.id) { index, host in
                             QuickConnectRow(host: host,
                                             status: store.statuses[host.alias],
                                             isHighlighted: index == highlighted)
                                 .contentShape(Rectangle())
+                                .onContinuousHover { phase in
+                                    if case .active = phase, highlighted != index, !keyboardNav {
+                                        highlighted = index
+                                    }
+                                }
                                 .onTapGesture { connect(host) }
                         }
                     }
+                    .padding(6)
                 }
                 .onChange(of: highlighted) {
-                    if results.indices.contains(highlighted) {
-                        proxy.scrollTo(results[highlighted].id, anchor: .center)
-                    }
+                    guard keyboardNav, results.indices.contains(highlighted) else { return }
+                    proxy.scrollTo(results[highlighted].id)
                 }
             }
             .overlay {
                 if results.isEmpty {
                     Text(loc("无匹配主机", "No matching hosts"))
                         .font(WL.body).foregroundStyle(WL.textDim)
+                        .transition(.opacity)
                 }
             }
+            .animation(Motion.state, value: results.isEmpty)
+            .background(MouseMoveWatcher { keyboardNav = false })
         }
         .background(WL.bg)
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(WL.colorScheme)
         .onAppear { focused = true; recompute() }
         .onExitCommand { onClose() }
     }
@@ -97,17 +108,13 @@ struct QuickConnectRow: View {
                 .font(.system(size: 9)).foregroundStyle(WL.textDim)
             VStack(alignment: .leading, spacing: 1) {
                 Text(host.alias).font(WL.body)
-                    .foregroundStyle(isHighlighted ? WL.greenBright : WL.textPrimary)
+                    .foregroundStyle(WL.textPrimary)
                 Text(host.connectionSummary).font(WL.caption).foregroundStyle(WL.textDim)
             }
             Spacer()
             if let g = host.group { Text(g).font(WL.caption).foregroundStyle(WL.textDim) }
             Text(s.tagText).font(WL.small).foregroundStyle(s.tagColor)
         }
-        .padding(.horizontal, 16).padding(.vertical, 8)
-        .background(isHighlighted ? WL.green.opacity(0.16) : .clear)
-        .overlay(alignment: .leading) {
-            Rectangle().fill(WL.green).frame(width: 2).opacity(isHighlighted ? 1 : 0)
-        }
+        .wlResultHighlight(isHighlighted)
     }
 }

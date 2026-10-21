@@ -10,14 +10,46 @@ struct MCPSettingsView: View {
     var onClose: () -> Void = {}
 
     var body: some View {
-        VStack(spacing: 0) {
-            header
-            Rectangle().fill(WL.border).frame(height: 1)
-            content
+        WLSheet(loc("MCP 服务器", "MCP Servers"),
+                subtitle: loc("让 AI 调用外部工具", "Let the AI call external tools"),
+                symbol: "point.3.connected.trianglepath.dotted", width: 560, height: 560,
+                onClose: onClose) {
+            WLFormSection("", footer: loc("MCP 让 AI 调用外部工具（filesystem / github / k8s…）。工具在本机通过 stdio 启动，密钥存 Keychain；写操作类调用会二次确认。",
+                                          "MCP lets the AI call external tools (filesystem / github / k8s…). Servers launch locally over stdio, secrets live in the Keychain, and mutating calls ask first.")) {
+                Toggle(isOn: Binding(get: { store.enabled }, set: { on in
+                    store.enabled = on
+                    Task { on ? await store.connectEnabled() : await store.disconnectAll() }
+                })) {
+                    Text(loc("启用 MCP", "Enable MCP")).font(WL.body).foregroundStyle(WL.textPrimary)
+                }
+                .toggleStyle(.wlSwitch)
+                .frame(minHeight: 38).padding(.vertical, 4)
+            }
+
+            WLFormSection(loc("服务器", "Servers")) {
+                if store.servers.isEmpty {
+                    Text(loc("还没有配置 MCP server。", "No MCP servers configured yet."))
+                        .font(WL.body).foregroundStyle(WL.textDim)
+                        .frame(maxWidth: .infinity, alignment: .center).padding(.vertical, 30)
+                } else {
+                    ForEach(Array(store.servers.enumerated()), id: \.element.id) { i, s in
+                        if i > 0 { WLFormDivider() }
+                        serverRow(s)
+                    }
+                }
+            }
+        } footer: {
+            Button {
+                isNew = true
+                editing = MCPServerConfig(name: "", command: "", args: [], envKeys: [], enabled: true)
+            } label: {
+                Label(loc("添加 Server", "Add Server"), systemImage: "plus")
+            }
+            .buttonStyle(.wlSecondary)
+            Spacer()
+            Button(loc("完成", "Done")) { onClose() }
+                .buttonStyle(.wlPrimary).keyboardShortcut(.defaultAction)
         }
-        .frame(width: 560, height: 560)
-        .background(WL.bg)
-        .preferredColorScheme(.dark)
         .sheet(item: $editing) { cfg in
             MCPServerEditor(config: cfg, isNew: isNew) { saved in
                 if isNew { store.add(saved) } else { store.update(saved) }
@@ -25,50 +57,6 @@ struct MCPSettingsView: View {
                 editing = nil
             } onCancel: { editing = nil }
             .environment(loc)
-        }
-    }
-
-    private var header: some View {
-        HStack(spacing: 12) {
-            Text("> mcp servers").font(WL.mono(15, .bold)).foregroundStyle(WL.green)
-            Spacer()
-            Toggle(isOn: Binding(get: { store.enabled }, set: { on in
-                store.enabled = on
-                Task { on ? await store.connectEnabled() : await store.disconnectAll() }
-            })) {
-                Text(loc("启用 MCP", "Enable MCP")).font(WL.small).foregroundStyle(WL.textPrimary)
-            }.toggleStyle(.checkbox).tint(WL.green)
-            Button(loc("完成", "Done")) { onClose() }.buttonStyle(.plain)
-                .font(WL.small).foregroundStyle(WL.green)
-        }
-        .padding(.horizontal, 18).padding(.vertical, 14)
-    }
-
-    private var content: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
-                Text(loc("MCP 让 AI 调用外部工具（filesystem / github / k8s…）。工具在本机通过 stdio 启动，密钥存 Keychain；写操作类调用会二次确认。",
-                         "MCP lets the AI call external tools (filesystem / github / k8s…). Servers launch locally over stdio, secrets live in the Keychain, and mutating calls ask first."))
-                    .font(WL.caption).foregroundStyle(WL.textDim)
-
-                if store.servers.isEmpty {
-                    Text(loc("还没有配置 MCP server。", "No MCP servers configured yet."))
-                        .font(WL.body).foregroundStyle(WL.textDim)
-                        .frame(maxWidth: .infinity, alignment: .center).padding(.vertical, 40)
-                } else {
-                    ForEach(store.servers) { s in serverRow(s) }
-                }
-
-                Button {
-                    isNew = true
-                    editing = MCPServerConfig(name: "", command: "", args: [], envKeys: [], enabled: true)
-                } label: {
-                    Label(loc("添加 Server", "Add Server"), systemImage: "plus")
-                        .font(WL.small).foregroundStyle(WL.green)
-                }
-                .buttonStyle(.plain).padding(.top, 4)
-            }
-            .padding(18)
         }
     }
 
@@ -90,18 +78,16 @@ struct MCPSettingsView: View {
                 Button(loc("删除", "Delete"), role: .destructive) { store.remove(s) }
                 Spacer()
             }
-            .font(WL.caption).buttonStyle(.plain).foregroundStyle(WL.green)
+            .font(WL.caption).buttonStyle(.wlPlain).foregroundStyle(WL.green)
         }
-        .padding(12)
-        .background(WL.surface, in: RoundedRectangle(cornerRadius: WL.radius(7)))
-        .overlay(RoundedRectangle(cornerRadius: WL.radius(7)).stroke(WL.border, lineWidth: WL.borderWidth))
+        .padding(.vertical, 10)
     }
 
     private func statusColor(_ st: MCPConnState?) -> Color {
         switch st {
         case .connected: return WL.green
         case .connecting: return WL.amber
-        case .failed: return .red
+        case .failed: return WL.red
         default: return WL.textDim
         }
     }
@@ -131,81 +117,88 @@ private struct MCPServerEditor: View {
     private struct EnvRow: Identifiable { let id = UUID(); var key: String; var value: String }
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text(isNew ? "> add server" : "> edit server").font(WL.mono(14, .bold)).foregroundStyle(WL.green)
-                Spacer()
-            }.padding(.horizontal, 18).padding(.vertical, 14)
-            Rectangle().fill(WL.border).frame(height: 1)
+        WLSheet(isNew ? loc("添加 MCP Server", "Add MCP Server") : loc("编辑 MCP Server", "Edit MCP Server"),
+                subtitle: loc("本地 stdio 进程或远程 HTTP 服务", "A local stdio process or a remote HTTP server"),
+                symbol: isNew ? "plus.square.on.square" : "slider.horizontal.3",
+                width: 520, height: 520, onClose: onCancel) {
+            WLFormSection(loc("基本", "General")) {
+                stacked(loc("名称", "Name")) { field("github", $config.name) }
+                WLFormDivider()
+                WLSegmented(selection: $config.kind, options: [
+                    WLOption(MCPKind.stdio, loc("本地 stdio", "Local stdio")),
+                    WLOption(MCPKind.http, "HTTP"),
+                ])
+                .padding(.vertical, 10)
+            }
 
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    field(loc("名称", "Name"), "github", $config.name)
-                    Picker("", selection: $config.kind) {
-                        Text(loc("本地 stdio", "Local stdio")).tag(MCPKind.stdio)
-                        Text("HTTP").tag(MCPKind.http)
-                    }.labelsHidden().pickerStyle(.segmented)
-
-                    if config.kind == .stdio {
-                        field(loc("命令", "Command"), "npx", $config.command)
-                        field(loc("参数（空格分隔）", "Args (space-separated)"), "-y @modelcontextprotocol/server-filesystem /path",
+            if config.kind == .stdio {
+                WLFormSection(loc("启动", "Launch")) {
+                    stacked(loc("命令", "Command")) { field("npx", $config.command) }
+                    WLFormDivider()
+                    stacked(loc("参数（空格分隔）", "Args (space-separated)")) {
+                        field("-y @modelcontextprotocol/server-filesystem /path",
                               Binding(get: { argsText }, set: { argsText = $0 }))
-                        keyValueSection(loc("环境变量（密钥存 Keychain）", "Environment (secrets go to Keychain)"), $envRows)
-                    } else {
-                        field(loc("服务地址 (URL)", "Server URL"), "https://example.com/mcp", $config.url)
-                        keyValueSection(loc("请求头（值存 Keychain，如 Authorization）", "Headers (values in Keychain, e.g. Authorization)"), $headerRows)
                     }
                 }
-                .padding(18)
+                keyValueSection(loc("环境变量", "Environment"),
+                                footer: loc("值（密钥）存入 Keychain。", "Values (secrets) go to the Keychain."), $envRows)
+            } else {
+                WLFormSection(loc("连接", "Connection")) {
+                    stacked(loc("服务地址 (URL)", "Server URL")) { field("https://example.com/mcp", $config.url) }
+                }
+                keyValueSection(loc("请求头", "Headers"),
+                                footer: loc("值存入 Keychain，如 Authorization。", "Values are stored in the Keychain, e.g. Authorization."),
+                                $headerRows)
             }
-
-            Rectangle().fill(WL.border).frame(height: 1)
-            HStack {
-                Spacer()
-                Button(loc("取消", "Cancel")) { onCancel() }.buttonStyle(.plain).foregroundStyle(WL.textDim)
-                Button(loc("保存", "Save")) { save() }.buttonStyle(.plain).foregroundStyle(WL.green)
-                    .disabled(!canSave)
-            }
-            .font(WL.small).padding(.horizontal, 18).padding(.vertical, 12)
+        } footer: {
+            Spacer()
+            Button(loc("取消", "Cancel")) { onCancel() }
+                .buttonStyle(.wlSecondary).keyboardShortcut(.cancelAction)
+            Button(loc("保存", "Save")) { save() }
+                .buttonStyle(.wlPrimary).keyboardShortcut(.defaultAction)
+                .disabled(!canSave)
         }
-        .frame(width: 520, height: 480)
-        .background(WL.bg)
         .onAppear(perform: populate)
     }
 
-    private func keyValueSection(_ title: String, _ rows: Binding<[EnvRow]>) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text(title).font(WL.small).foregroundStyle(WL.textDim)
-                Spacer()
-                Button { rows.wrappedValue.append(EnvRow(key: "", value: "")) } label: {
-                    Image(systemName: "plus").font(.system(size: 10)).foregroundStyle(WL.green)
-                }.buttonStyle(.plain)
-            }
+    private func keyValueSection(_ title: String, footer: String, _ rows: Binding<[EnvRow]>) -> some View {
+        WLFormSection(title, footer: footer) {
             ForEach(rows) { $row in
                 HStack(spacing: 8) {
-                    TextField("KEY", text: $row.key).textFieldStyle(.plain).font(WL.mono(11))
-                        .frame(width: 150).padding(6)
-                        .background(WL.surface, in: RoundedRectangle(cornerRadius: WL.radius(5)))
-                    SecureField(loc("值", "value"), text: $row.value).textFieldStyle(.plain).font(WL.mono(11))
-                        .padding(6).background(WL.surface, in: RoundedRectangle(cornerRadius: WL.radius(5)))
+                    TextField("KEY", text: $row.key)
+                        .wlField(font: WL.mono(11))
+                        .frame(width: 150)
+                    SecureField(loc("值", "value"), text: $row.value)
+                        .wlField(font: WL.mono(11))
                     Button { rows.wrappedValue.removeAll { $0.id == row.id } } label: {
-                        Image(systemName: "trash").font(.system(size: 10)).foregroundStyle(.red)
-                    }.buttonStyle(.plain)
+                        Image(systemName: "trash").font(.system(size: 10))
+                    }
+                    .buttonStyle(.wlIcon(tint: WL.red, size: 24))
+                    .help(loc("删除", "Remove"))
                 }
+                .padding(.vertical, 6)
+                WLFormDivider()
             }
+            Button { rows.wrappedValue.append(EnvRow(key: "", value: "")) } label: {
+                Label(loc("添加", "Add"), systemImage: "plus").font(WL.small).foregroundStyle(WL.green)
+            }
+            .buttonStyle(.wlPlain)
+            .frame(minHeight: 34)
         }
     }
 
-    private func field(_ label: String, _ prompt: String, _ text: Binding<String>) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
+    /// Label above a full-width field.
+    private func stacked<V: View>(_ label: String, @ViewBuilder _ content: () -> V) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
             Text(label).font(WL.small).foregroundStyle(WL.textDim)
-            TextField("", text: text, prompt: Text(prompt).foregroundStyle(WL.textDim))
-                .textFieldStyle(.plain).font(WL.mono(12)).foregroundStyle(WL.textPrimary)
-                .padding(.horizontal, 10).padding(.vertical, 7)
-                .background(WL.surface, in: RoundedRectangle(cornerRadius: WL.radius(5)))
-                .overlay(RoundedRectangle(cornerRadius: WL.radius(5)).stroke(WL.border, lineWidth: WL.borderWidth))
+            content()
         }
+        .padding(.vertical, 10)
+    }
+
+    private func field(_ prompt: String, _ text: Binding<String>) -> some View {
+        TextField("", text: text, prompt: Text(prompt).foregroundStyle(WL.textDim))
+            .wlField()
     }
 
     private func populate() {

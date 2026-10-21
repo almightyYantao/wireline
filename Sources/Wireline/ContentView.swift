@@ -63,9 +63,13 @@ struct ContentView: View {
             WallpaperView(path: store.terminalBgImagePath)
                 .ignoresSafeArea()
             HStack(spacing: 0) {
-                if sidebarCollapsed {
+                // A drawer: the panel stays mounted at its full 340pt and slides
+                // under a clip whose width animates, so its contents never re-lay
+                // out mid-animation (and search text / scroll position survive).
+                ZStack(alignment: .leading) {
                     collapsedSidebarStrip
-                } else {
+                        .opacity(sidebarCollapsed ? 1 : 0)
+                        .allowsHitTesting(sidebarCollapsed)
                     LeftPanel(query: $query, operation: $operation, selectedAlias: $selectedAlias,
                               onAdd: { editing = HostEditContext(host: nil, defaultGroup: $0) },
                               onEdit: { editing = HostEditContext(host: $0) },
@@ -73,7 +77,18 @@ struct ContentView: View {
                               onOpenFiles: { fileHost = $0; operation = .files },
                               onCollapse: toggleSidebar)
                         .frame(width: 340)
+                        .offset(x: sidebarCollapsed ? -340 : 0)
+                        .opacity(sidebarCollapsed ? 0 : 1)
+                        .allowsHitTesting(!sidebarCollapsed)
+                        .accessibilityHidden(sidebarCollapsed)
                 }
+                .frame(width: sidebarCollapsed ? 34 : 340, alignment: .leading)
+                // One tint for the whole drawer, constant through the animation.
+                // If the panel and strip each carried their own, the panel's fade
+                // and the gap between its sliding edge and the shrinking clip
+                // would let the undimmed wallpaper flash through.
+                .background(WL.bg.opacity(store.terminalOpacity * WL.chromeOpacity))
+                .clipped()
                 Rectangle().fill(WL.border).frame(width: 1)
                 RightPanel(operation: $operation, fileHost: $fileHost, selectedAlias: $selectedAlias,
                            onEditHost: { editing = HostEditContext(host: $0) },
@@ -86,13 +101,13 @@ struct ContentView: View {
         .wlMenuHost()
         .background(WindowAccessor { w in chrome.attach(to: w) })
         .id(palette.version)   // rebuild the tree when the theme recolors the UI
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(WL.colorScheme)
         .onChange(of: sessions.sessions.count) { old, new in
             // A new session opened (⌘T / quick connect / host connect): jump to
             // the terminal view and auto-collapse the sidebar for more room.
             if new > old {
                 operation = nil
-                sidebarCollapsed = true
+                if !sidebarCollapsed { wlAnimateTerminalLayout { sidebarCollapsed = true } }
                 UserDefaults.standard.set(true, forKey: "sidebarCollapsed")
             }
         }
@@ -123,13 +138,13 @@ struct ContentView: View {
             BackupView().environment(store)
         }
         .onReceive(NotificationCenter.default.publisher(for: .showQuickConnect)) { _ in
-            showQuickConnect = true
+            wlAnimate(Motion.modalIn) { showQuickConnect = true }
         }
         // Global-hotkey entry points: the app was just activated by the Carbon
         // handler; bring the right window forward and open the surface.
         .onReceive(NotificationCenter.default.publisher(for: .summonQuickConnect)) { _ in
             openWindow(id: "main")
-            showQuickConnect = true
+            wlAnimate(Motion.modalIn) { showQuickConnect = true }
         }
         .onReceive(NotificationCenter.default.publisher(for: .summonPet)) { _ in
             openWindow(id: "pet")
@@ -154,50 +169,51 @@ struct ContentView: View {
         return alias.flatMap { a in store.hosts.first { $0.alias == a } }
     }
 
-    /// The keyboard-driven overlays (Quick Connect, Command Palette). Grouped so
-    /// the main `body` stays simple enough for the type-checker.
+    /// The keyboard-driven overlays (Quick Connect, Command Palette) — in-window
+    /// overlays, not sheets, so they never trigger the AppKit title-bar reset /
+    /// flash. Scrim and card are separate children of the `if` so each gets its
+    /// own transition (scrim fades, card settles in).
     @ViewBuilder
     private var overlays: some View {
-        if showQuickConnect { quickConnectOverlay }
-        if showCommandPalette { commandPaletteOverlay }
+        ZStack {
+            ConfigToast()
+            if showQuickConnect {
+                scrim { wlAnimate(Motion.modalOut) { showQuickConnect = false } }
+                modalCard(width: 620, height: 420) {
+                    QuickConnectView(onClose: { wlAnimate(Motion.modalOut) { showQuickConnect = false } })
+                }
+            }
+            if showCommandPalette {
+                scrim { wlAnimate(Motion.modalOut) { showCommandPalette = false } }
+                modalCard(width: 640, height: 460) {
+                    CommandPaletteView(onClose: { wlAnimate(Motion.modalOut) { showCommandPalette = false } })
+                }
+            }
+        }
     }
 
-    /// The ⌘K quick-connect palette, as an in-window overlay (not a sheet) so it
-    /// never triggers the AppKit title-bar reset / flash.
-    private var quickConnectOverlay: some View {
-        ZStack {
-            Color.black.opacity(0.4)
-                .ignoresSafeArea()
-                .onTapGesture { showQuickConnect = false }
-            QuickConnectView(onClose: { showQuickConnect = false })
-                .frame(width: 620, height: 420)
-                .background(WL.bg, in: RoundedRectangle(cornerRadius: WL.radius(12)))
-                .overlay(RoundedRectangle(cornerRadius: WL.radius(12)).stroke(WL.border, lineWidth: WL.borderWidth))
-                .clipShape(RoundedRectangle(cornerRadius: WL.radius(12)))
-                .shadow(color: .black.opacity(0.5), radius: 24, y: 8)
-        }
-        .transition(.opacity)
+    private func scrim(onTap: @escaping () -> Void) -> some View {
+        Color.black.opacity(WL.depth(0.4))
+            .ignoresSafeArea()
+            .onTapGesture(perform: onTap)
+            .transition(.wlScrim)
     }
 
-    /// The ⌘P command palette — an in-window overlay (not a sheet), same as Quick
-    /// Connect, so it never triggers the AppKit title-bar reset / flash.
-    private var commandPaletteOverlay: some View {
-        ZStack {
-            Color.black.opacity(0.4)
-                .ignoresSafeArea()
-                .onTapGesture { showCommandPalette = false }
-            CommandPaletteView(onClose: { showCommandPalette = false })
-                .frame(width: 640, height: 460)
-                .background(WL.bg, in: RoundedRectangle(cornerRadius: WL.radius(12)))
-                .overlay(RoundedRectangle(cornerRadius: WL.radius(12)).stroke(WL.border, lineWidth: WL.borderWidth))
-                .clipShape(RoundedRectangle(cornerRadius: WL.radius(12)))
-                .shadow(color: .black.opacity(0.5), radius: 24, y: 8)
-        }
-        .transition(.opacity)
+    private func modalCard<C: View>(width: CGFloat, height: CGFloat,
+                                    @ViewBuilder _ content: () -> C) -> some View {
+        content()
+            .frame(width: width, height: height)
+            .background(WL.bg, in: RoundedRectangle(cornerRadius: WL.radius(12)))
+            .overlay(RoundedRectangle(cornerRadius: WL.radius(12)).stroke(WL.border, lineWidth: WL.borderWidth))
+            .clipShape(RoundedRectangle(cornerRadius: WL.radius(12)))
+            .shadow(color: .black.opacity(WL.depth(0.5)), radius: 24, y: 8)
+            .transition(.wlModal)
     }
 
     private func toggleSidebar() {
-        sidebarCollapsed.toggle()
+        // The sidebar's width resizes the terminal: animate the layout with the
+        // terminal grid frozen, then reflow it exactly once at the end.
+        wlAnimateTerminalLayout { sidebarCollapsed.toggle() }
         UserDefaults.standard.set(sidebarCollapsed, forKey: "sidebarCollapsed")
     }
 
@@ -205,16 +221,15 @@ struct ContentView: View {
     private var collapsedSidebarStrip: some View {
         VStack(spacing: 0) {
             Button(action: toggleSidebar) {
-                Image(systemName: "sidebar.left").font(.system(size: 13)).foregroundStyle(WL.green)
+                Image(systemName: "sidebar.left").font(.system(size: 13))
             }
-            .buttonStyle(.plain)
-            .padding(.top, 34).padding(.bottom, 10)
+            .buttonStyle(.wlIcon(tint: WL.green, size: 26))
+            .padding(.top, 30).padding(.bottom, 10)
             .help("展开侧边栏")
             Spacer()
         }
         .frame(width: 34)
         .frame(maxHeight: .infinity)
-        .background(WL.bg.opacity(store.terminalOpacity * WL.chromeOpacity))
     }
 }
 
@@ -229,7 +244,7 @@ private struct PaletteTabHandlers: ViewModifier {
     func body(content: Content) -> some View {
         content
             .onReceive(NotificationCenter.default.publisher(for: .showCommandPalette)) { _ in
-                showCommandPalette = true
+                wlAnimate(Motion.modalIn) { showCommandPalette = true }
             }
             .onReceive(NotificationCenter.default.publisher(for: .cycleTab)) { note in
                 if let d = note.object as? Int { sessions.focusAdjacentTab(d) }
@@ -288,9 +303,8 @@ struct LeftPanel: View {
         VStack(alignment: .leading, spacing: 0) {
             header
             searchBar
-            Rectangle().fill(WL.border).frame(height: 1)
             functionRow
-            Rectangle().fill(WL.border).frame(height: 1)
+            Rectangle().fill(WL.border.opacity(0.5)).frame(height: 1)
             ScrollView {
                 hostSections
                     .padding(.bottom, 8)
@@ -298,10 +312,9 @@ struct LeftPanel: View {
                     .contentShape(Rectangle())
                     .wlContextMenuBackground([.item(loc("新建分组…", "New Group…"), systemImage: "plus") { presentNewGroup() }])
             }
-            Rectangle().fill(WL.border).frame(height: 1)
+            Rectangle().fill(WL.border.opacity(0.5)).frame(height: 1)
             bottomBar
         }
-        .background(WL.bg.opacity(store.terminalOpacity * WL.chromeOpacity))
         .sheet(isPresented: $showNewGroup) {
             NewGroupSheet { name in store.createGroup(name) }
         }
@@ -309,27 +322,32 @@ struct LeftPanel: View {
 
     private func presentNewGroup() { showNewGroup = true }
 
+    /// Title row, level with the traffic lights; actions are quiet icons.
     private var header: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack {
-                Text("> ssh_client").font(WL.title).foregroundStyle(WL.green)
-                Spacer()
-                BracketButton(loc("刷新", "Refresh")) { Task { await store.checkAll() } }
-                BracketButton(loc("备份", "Backup"), action: onBackup)
-                Button(action: onCollapse) {
-                    Image(systemName: "sidebar.left").font(.system(size: 12)).foregroundStyle(WL.textDim)
-                }.buttonStyle(.plain).help(loc("收起侧边栏", "Collapse sidebar"))
-            }
-            Text(loc("连接管理器 v0.1", "connection manager v0.1")).font(WL.small).foregroundStyle(WL.textDim)
+        HStack(spacing: 2) {
+            Text(loc("主机", "Hosts")).font(WL.mono(13, .semibold)).foregroundStyle(WL.textPrimary)
+            Text("\(store.hosts.count)").font(WL.caption).foregroundStyle(WL.textDim)
+                .padding(.leading, 6)
+            Spacer()
+            Button { Task { await store.checkAll() } } label: {
+                Image(systemName: "arrow.clockwise").font(.system(size: 11, weight: .medium))
+            }.buttonStyle(.wlIcon).help(loc("刷新状态", "Refresh statuses"))
+            Button(action: onBackup) {
+                Image(systemName: "externaldrive").font(.system(size: 11, weight: .medium))
+            }.buttonStyle(.wlIcon).help(loc("备份", "Backup"))
+            Button(action: onCollapse) {
+                Image(systemName: "sidebar.left").font(.system(size: 12, weight: .medium))
+            }.buttonStyle(.wlIcon).help(loc("收起侧边栏", "Collapse sidebar"))
         }
-        .padding(.horizontal, 16).padding(.top, 30).padding(.bottom, 12)
+        .padding(.leading, 84).padding(.trailing, 10)
+        .frame(height: 52)
     }
 
     private var searchBar: some View {
-        HStack(spacing: 6) {
-            Text("/").font(WL.body).foregroundStyle(WL.green)
-            TextField(loc("搜索连接 ...", "Search hosts ..."), text: $query)
-                .textFieldStyle(.plain).font(WL.body).foregroundStyle(WL.textPrimary)
+        HStack(spacing: 7) {
+            Image(systemName: "magnifyingglass").font(.system(size: 11)).foregroundStyle(WL.textDim)
+            TextField(loc("搜索主机", "Search hosts"), text: $query)
+                .textFieldStyle(.plain).font(WL.small).foregroundStyle(WL.textPrimary)
                 .focused($searchFocused)
                 .onReceive(NotificationCenter.default.publisher(for: .focusSearch)) { _ in
                     searchFocused = true
@@ -346,28 +364,33 @@ struct LeftPanel: View {
                 }
             if !query.isEmpty {
                 Button { query = "" } label: {
-                    Image(systemName: "xmark").font(.system(size: 9))
-                }.buttonStyle(.plain).foregroundStyle(WL.textDim)
+                    Image(systemName: "xmark.circle.fill").font(.system(size: 11))
+                }.buttonStyle(.wlPlain).foregroundStyle(WL.textDim)
+                .transition(.opacity)
             }
         }
-        .padding(.horizontal, 16).padding(.vertical, 12)
+        .padding(.horizontal, 10).padding(.vertical, 7)
+        .background(WL.textPrimary.opacity(searchFocused ? 0.07 : 0.045),
+                    in: RoundedRectangle(cornerRadius: WL.radius(7)))
+        .overlay(RoundedRectangle(cornerRadius: WL.radius(7))
+            .stroke(WL.green.opacity(searchFocused ? 0.6 : 0), lineWidth: 1))
+        .animation(Motion.hover, value: searchFocused)
+        .animation(Motion.hover, value: query.isEmpty)
+        .padding(.horizontal, 12).padding(.bottom, 8)
     }
 
     private var functionRow: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(loc("功能", "FEATURES")).font(WL.caption).foregroundStyle(WL.textDim)
-            HStack(spacing: 8) {
-                FeatureButton(title: "SSH", symbol: "chevron.right.square", tint: WL.green,
-                              active: operation == nil) { operation = nil }
-                FeatureButton(title: loc("端口", "Ports"), symbol: "arrow.left.arrow.right", tint: WL.teal,
-                              active: operation == .forwarding) { operation = .forwarding }
-                FeatureButton(title: loc("文件", "Files"), symbol: "folder", tint: WL.purple,
-                              active: operation == .files) { operation = .files }
-                FeatureButton(title: loc("密钥", "Keys"), symbol: "key", tint: WL.amber,
-                              active: operation == .keys) { operation = .keys }
-            }
+        HStack(spacing: 4) {
+            FeatureButton(title: "SSH", symbol: "terminal", tint: WL.green,
+                          active: operation == nil) { operation = nil }
+            FeatureButton(title: loc("端口", "Ports"), symbol: "arrow.left.arrow.right", tint: WL.green,
+                          active: operation == .forwarding) { operation = .forwarding }
+            FeatureButton(title: loc("文件", "Files"), symbol: "folder", tint: WL.green,
+                          active: operation == .files) { operation = .files }
+            FeatureButton(title: loc("密钥", "Keys"), symbol: "key", tint: WL.green,
+                          active: operation == .keys) { operation = .keys }
         }
-        .padding(.horizontal, 16).padding(.vertical, 12)
+        .padding(.horizontal, 12).padding(.bottom, 10)
     }
 
     @ViewBuilder
@@ -405,7 +428,7 @@ struct LeftPanel: View {
         if !isCollapsed {
             ForEach(hosts) { host in
                 hostItem(host)
-                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .transition(.wlDisclose)
             }
         }
     }
@@ -423,7 +446,7 @@ struct LeftPanel: View {
     }
 
     private func toggle(_ group: String) {
-        withAnimation(.easeInOut(duration: 0.22)) {
+        wlAnimate(Motion.disclose) {
             if collapsed.contains(group) { collapsed.remove(group) } else { collapsed.insert(group) }
         }
         UserDefaults.standard.set(Array(collapsed), forKey: "collapsedGroups")
@@ -467,14 +490,15 @@ struct LeftPanel: View {
     private var bottomBar: some View {
         HStack {
             Button { onAdd(nil) } label: {
-                Text(loc("$ 新建连接", "$ new host")).font(WL.body).foregroundStyle(WL.green)
-            }.buttonStyle(.plain)
+                Label(loc("新建主机", "New Host"), systemImage: "plus").font(WL.small)
+            }
+            .buttonStyle(.wlPlain).foregroundStyle(WL.green)
             Spacer()
             Button { openWindow(id: "settings") } label: {
-                Text("[\(loc("设置", "Settings"))]").font(WL.small).foregroundStyle(WL.textDim)
-            }.buttonStyle(.plain)
+                Image(systemName: "gearshape").font(.system(size: 12, weight: .medium))
+            }.buttonStyle(.wlIcon).help(loc("设置", "Settings"))
         }
-        .padding(.horizontal, 16).padding(.vertical, 12)
+        .padding(.leading, 16).padding(.trailing, 10).padding(.vertical, 8)
     }
 }
 
@@ -491,19 +515,18 @@ struct FeatureButton: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 5) {
-                Image(systemName: symbol).font(.system(size: 10))
-                Text(title).font(WL.small)
+                Image(systemName: symbol).font(.system(size: 10, weight: .medium))
+                Text(title).font(WL.small.weight(active ? .semibold : .regular))
             }
             .foregroundStyle(active ? tint : (hover ? WL.textPrimary : WL.textDim))
-            .padding(.horizontal, 9).padding(.vertical, 7)
+            .padding(.vertical, 6)
             .frame(maxWidth: .infinity)
-            .background(active ? tint.opacity(0.14) : WL.surface.opacity(hover ? 0.7 : 0.4),
+            .background(active ? tint.opacity(0.13) : WL.textPrimary.opacity(hover ? 0.05 : 0),
                         in: RoundedRectangle(cornerRadius: WL.radius(6)))
-            .overlay(RoundedRectangle(cornerRadius: WL.radius(6))
-                .stroke(active ? tint.opacity(0.6) : WL.border, lineWidth: WL.borderWidth))
+            .animation(Motion.state, value: active)
         }
-        .buttonStyle(.plain)
-        .onHover { hover = $0 }
+        .buttonStyle(.wlPlain)
+        .wlHover($hover)
     }
 }
 
@@ -517,8 +540,8 @@ struct BracketButton: View {
             Text("[\(label)]").font(WL.small)
                 .foregroundStyle(hover ? WL.greenBright : WL.textDim)
         }
-        .buttonStyle(.plain)
-        .onHover { hover = $0 }
+        .buttonStyle(.wlPlain)
+        .wlHover($hover)
     }
 }
 
@@ -529,46 +552,31 @@ struct NewGroupSheet: View {
     var onCreate: (String) -> Void
     @State private var name = ""
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text(loc("新建分组", "New Group"))
-                .font(WL.body.weight(.semibold)).foregroundStyle(WL.green)
-                .padding(.horizontal, 20).padding(.top, 22).padding(.bottom, 14)
-            Rectangle().fill(WL.border).frame(height: 1)
+    private var trimmed: String { name.trimmingCharacters(in: .whitespaces) }
 
+    var body: some View {
+        WLSheet(loc("新建分组", "New Group"),
+                subtitle: loc("创建后把主机拖进去即可", "Create it, then drag hosts in"),
+                symbol: "folder.badge.plus", width: 400, scrolls: false,
+                onClose: { dismiss() }) {
             VStack(alignment: .leading, spacing: 6) {
                 Text(loc("分组名称", "Group name")).font(WL.small).foregroundStyle(WL.textDim)
                 TextField("", text: $name,
                           prompt: Text(loc("如 生产环境", "e.g. Production")).foregroundStyle(WL.textDim))
-                    .textFieldStyle(.plain).font(WL.body).foregroundStyle(WL.textPrimary)
-                    .padding(.horizontal, 10).padding(.vertical, 7)
-                    .background(WL.surface, in: RoundedRectangle(cornerRadius: WL.radius(5)))
-                    .overlay(RoundedRectangle(cornerRadius: WL.radius(5)).stroke(WL.border, lineWidth: WL.borderWidth))
+                    .wlField(font: WL.body)
                     .onSubmit(create)
-                Text(loc("创建后把主机拖进去即可。", "Create it, then drag hosts in."))
-                    .font(WL.caption).foregroundStyle(WL.textDim)
             }
-            .padding(20)
-
+        } footer: {
             Spacer()
-            Rectangle().fill(WL.border).frame(height: 1)
-            HStack(spacing: 18) {
-                Spacer()
-                BracketButton(loc("取消", "Cancel")) { dismiss() }
-                Button(action: create) {
-                    Text("[\(loc("创建", "Create"))]").font(WL.small)
-                        .foregroundStyle(name.trimmingCharacters(in: .whitespaces).isEmpty ? WL.textDim : WL.green)
-                }.buttonStyle(.plain).disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
-            }
-            .padding(.horizontal, 20).padding(.vertical, 18)
+            Button(loc("取消", "Cancel")) { dismiss() }
+                .buttonStyle(.wlSecondary).keyboardShortcut(.cancelAction)
+            Button(loc("创建", "Create"), action: create)
+                .buttonStyle(.wlPrimary).keyboardShortcut(.defaultAction)
+                .disabled(trimmed.isEmpty)
         }
-        .frame(width: 380, height: 240)
-        .background(WL.bg)
-        .preferredColorScheme(.dark)
     }
 
     private func create() {
-        let trimmed = name.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return }
         onCreate(trimmed)
         dismiss()
@@ -594,36 +602,37 @@ struct GroupHeader: View {
     private var headerRow: some View {
         HStack(spacing: 6) {
             if onToggle != nil {
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 9)).foregroundStyle(WL.green)
-                    .rotationEffect(.degrees(collapsed ? -90 : 0))
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 8, weight: .bold)).foregroundStyle(WL.textDim)
+                    .rotationEffect(.degrees(collapsed ? 0 : 90))
                     .frame(width: 10)
             }
             Text(displayTitle).font(WL.small.weight(.semibold))
-                .foregroundStyle(targeted ? WL.greenBright : WL.green)
+                .foregroundStyle(targeted ? WL.green : WL.textDim)
             if count > 0 {
-                Text("\(count)").font(WL.caption).foregroundStyle(WL.textDim)
-                    .padding(.horizontal, 5).padding(.vertical, 1)
-                    .background(WL.bg, in: Capsule())
+                Text("\(count)").font(WL.caption).foregroundStyle(WL.textDim.opacity(0.7))
+                    .contentTransition(.numericText())
+                    .animation(Motion.state, value: count)
             }
             Spacer()
             if let onAdd {
                 Button(action: onAdd) {
-                    Image(systemName: "plus").font(.system(size: 10)).foregroundStyle(WL.textDim)
+                    Image(systemName: "plus").font(.system(size: 10, weight: .medium))
                 }
-                .buttonStyle(.plain)
-                .help("在此分组新建主机")
+                .buttonStyle(.wlIcon(size: 20))
+                .opacity(hover ? 1 : 0)
+                .help(loc("在此分组新建主机", "New host in this group"))
             }
         }
-        .padding(.horizontal, 16).padding(.vertical, 7)
-        .background(background)
-        .overlay(alignment: .bottom) { Rectangle().fill(WL.border).frame(height: 1) }
+        .padding(.leading, 14).padding(.trailing, 10).padding(.top, 10).padding(.bottom, 4)
+        .background(background, in: RoundedRectangle(cornerRadius: WL.radius(6)))
+        .padding(.horizontal, 4)
         .contentShape(Rectangle())
         .onTapGesture { onToggle?() }
-        .onHover { hover = $0 }
+        .wlHover($hover)
         .dropDestination(for: String.self) { aliases, _ in
             onDrop?(aliases); return onDrop != nil
-        } isTargeted: { if onDrop != nil { targeted = $0 } }
+        } isTargeted: { t in if onDrop != nil { withAnimation(Motion.hover) { targeted = t } } }
     }
 
     private var displayTitle: String {
@@ -634,9 +643,35 @@ struct GroupHeader: View {
         }
     }
 
-    private var background: some ShapeStyle {
-        if targeted { return AnyShapeStyle(WL.green.opacity(0.18)) }
-        if hover && onToggle != nil { return AnyShapeStyle(WL.surface) }
-        return AnyShapeStyle(WL.surface.opacity(0.45))
+    private var background: Color {
+        targeted ? WL.green.opacity(0.14) : .clear
+    }
+}
+
+/// Bottom-center capsule announcing a config reload (or its problems).
+private struct ConfigToast: View {
+    @State private var config = ConfigStore.shared
+
+    var body: some View {
+        VStack {
+            Spacer()
+            if let t = config.toast {
+                HStack(spacing: 8) {
+                    Image(systemName: t.isError ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+                        .font(.system(size: 11))
+                        .foregroundStyle(t.isError ? WL.amber : WL.green)
+                    Text(t.text).font(WL.small).foregroundStyle(WL.textPrimary)
+                }
+                .padding(.horizontal, 14).padding(.vertical, 8)
+                .background(.ultraThinMaterial, in: Capsule())
+                .overlay(Capsule().stroke(WL.border.opacity(0.7), lineWidth: 1))
+                .shadow(color: .black.opacity(0.25), radius: 12, y: 4)
+                .padding(.bottom, 44)
+                .transition(.wlSlide(.bottom))
+                .id(t.id)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .allowsHitTesting(false)
     }
 }

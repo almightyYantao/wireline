@@ -33,6 +33,21 @@ struct WirelineApp: App {
                 .environment(loc)
                 .frame(minWidth: 900, minHeight: 560)
                 .task {
+                    // Bring up the Touch ID ssh-agent first (when any key is
+                    // protected) so restored sessions launch already pointed at it.
+                    SSHAgentController.shared.startIfNeeded()
+                    // Apply ~/.config/wireline/config over the GUI settings and
+                    // start watching it.
+                    ConfigStore.shared.attach(store)
+                    QuickTerminalController.shared.attach(store)
+                    // Follow the system's light / dark switch when a theme pair is set.
+                    store.applyAppearanceTheme()
+                    DistributedNotificationCenter.default().addObserver(
+                        forName: Notification.Name("AppleInterfaceThemeChangedNotification"),
+                        object: nil, queue: .main
+                    ) { [store] _ in MainActor.assumeIsolated { store.applyAppearanceTheme() } }
+                    // Scan installed fonts off the main thread so Settings opens instantly.
+                    FontCatalog.shared.warm()
                     // Let the backup layer see the to-do list without coupling
                     // HostStore to TodoStore.
                     store.currentTodos = { [todos] in todos.todos }
@@ -65,6 +80,7 @@ struct WirelineApp: App {
                             NSApp.activate(ignoringOtherApps: true)
                             NotificationCenter.default.post(name: .summonPet, object: nil)
                         },
+                        .toggleQuickTerminal: { QuickTerminalController.shared.toggle() },
                         .quickConnect: {
                             NSApp.activate(ignoringOtherApps: true)
                             NotificationCenter.default.post(name: .summonQuickConnect, object: nil)
@@ -111,6 +127,29 @@ struct WirelineApp: App {
                     .shortcut(.focusNextPane, keys)
                 Button("Focus Previous Pane") { NotificationCenter.default.post(name: .focusPrevPane, object: nil) }
                     .shortcut(.focusPrevPane, keys)
+                // Splits — every layout change runs freeze → animate → one reflow.
+                Button("Split Right") { wlAnimateTerminalLayout { sessions.splitActive(.trailing) } }
+                    .shortcut(.splitRight, keys)
+                Button("Split Down") { wlAnimateTerminalLayout { sessions.splitActive(.bottom) } }
+                    .shortcut(.splitDown, keys)
+                Button("Focus Pane Left") { sessions.focusPane(.left) }.shortcut(.focusPaneLeft, keys)
+                Button("Focus Pane Right") { sessions.focusPane(.right) }.shortcut(.focusPaneRight, keys)
+                Button("Focus Pane Up") { sessions.focusPane(.up) }.shortcut(.focusPaneUp, keys)
+                Button("Focus Pane Down") { sessions.focusPane(.down) }.shortcut(.focusPaneDown, keys)
+                Button("Equalize Splits") { wlAnimateTerminalLayout { sessions.equalizeSplits() } }
+                    .shortcut(.equalizeSplits, keys)
+                Button("Zoom Pane") { wlAnimateTerminalLayout { sessions.toggleZoom() } }
+                    .shortcut(.toggleSplitZoom, keys)
+                Divider()
+                // OSC 133 command marks (shell integration).
+                Button("Jump to Previous Prompt") { sessions.activeSession?.terminalView.jumpToPrompt(-1) }
+                    .shortcut(.jumpToPreviousPrompt, keys)
+                Button("Jump to Next Prompt") { sessions.activeSession?.terminalView.jumpToPrompt(1) }
+                    .shortcut(.jumpToNextPrompt, keys)
+                Button("Copy Last Command Output") { copyLastOutput(sessions) }
+                    .shortcut(.copyLastOutput, keys)
+                Button("Quick Terminal") { QuickTerminalController.shared.toggle() }
+                    .shortcut(.toggleQuickTerminal, keys)
                 Button("Edit Host") { NotificationCenter.default.post(name: .editHost, object: nil) }
                     .shortcut(.editHost, keys)
                 if todos.enabled {
@@ -151,8 +190,11 @@ struct WirelineApp: App {
             }
             // Route ⌘, to our own settings window instead of the native one.
             CommandGroup(replacing: .appSettings) {
-                Button("Settings…") { openWindow(id: "settings") }
+                Button(loc("设置…", "Settings…")) { openWindow(id: "settings") }
                     .keyboardShortcut(",", modifiers: [.command])
+                Button(loc("打开配置文件…", "Open Config File…")) { ConfigStore.shared.openInEditor() }
+                Button(loc("重新加载配置", "Reload Configuration")) { ConfigStore.shared.reload() }
+                    .keyboardShortcut(",", modifiers: [.command, .shift])
             }
             CommandGroup(after: .appInfo) {
                 Button("检查更新…") { Updater.shared.checkForUpdates() }
@@ -166,7 +208,7 @@ struct WirelineApp: App {
                 .environment(store)
                 .environment(todos)
                 .environment(loc)
-                .preferredColorScheme(.dark)
+                .preferredColorScheme(WL.colorScheme)
         }
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentSize)
@@ -213,4 +255,19 @@ struct WirelineApp: App {
         }
         .menuBarExtraStyle(.window)
     }
+}
+
+/// Put the active session's last command output on the pasteboard.
+@MainActor
+func copyLastOutput(_ sessions: SessionStore) {
+    let loc = Localizer.shared
+    guard let text = sessions.activeSession?.terminalView.lastCommandOutput() else {
+        ConfigStore.shared.announce(loc.t("没有可复制的命令输出（需要 shell 集成）",
+                                          "No command output to copy (needs shell integration)"), isError: true)
+        return
+    }
+    NSPasteboard.general.clearContents()
+    NSPasteboard.general.setString(text, forType: .string)
+    let n = text.split(separator: "\n", omittingEmptySubsequences: false).count
+    ConfigStore.shared.announce(loc.t("已复制上一条命令的输出（\(n) 行）", "Copied last command output (\(n) lines)"))
 }

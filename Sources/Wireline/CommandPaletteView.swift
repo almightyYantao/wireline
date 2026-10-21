@@ -25,6 +25,9 @@ struct CommandPaletteView: View {
 
     @State private var query = ""
     @State private var highlighted = 0
+    /// Set by arrow keys so the list scrolling under a resting pointer doesn't
+    /// yank the highlight back; cleared as soon as the mouse actually moves.
+    @State private var keyboardNav = false
     @FocusState private var focused: Bool
 
     var body: some View {
@@ -39,9 +42,11 @@ struct CommandPaletteView: View {
                     .onSubmit(runHighlighted)
                     .onChange(of: query) { highlighted = 0 }
                     .onKeyPress(.downArrow) {
+                        keyboardNav = true
                         highlighted = min(highlighted + 1, max(results.count - 1, 0)); return .handled
                     }
                     .onKeyPress(.upArrow) {
+                        keyboardNav = true
                         highlighted = max(highlighted - 1, 0); return .handled
                     }
             }
@@ -51,30 +56,40 @@ struct CommandPaletteView: View {
 
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(spacing: 0) {
+                    LazyVStack(spacing: 2) {
                         ForEach(Array(results.enumerated()), id: \.element.id) { index, cmd in
                             PaletteRow(command: cmd, isHighlighted: index == highlighted)
                                 .contentShape(Rectangle())
+                                // Hover moves the one shared highlight (keyboard and
+                                // mouse never show two). Instant, like the keyboard.
+                                .onContinuousHover { phase in
+                                    if case .active = phase, highlighted != index, !keyboardNav {
+                                        highlighted = index
+                                    }
+                                }
                                 .onTapGesture { run(cmd) }
                                 .id(cmd.id)
                         }
                     }
+                    .padding(6)
                 }
                 .onChange(of: highlighted) {
-                    if results.indices.contains(highlighted) {
-                        proxy.scrollTo(results[highlighted].id, anchor: .center)
-                    }
+                    guard keyboardNav, results.indices.contains(highlighted) else { return }
+                    proxy.scrollTo(results[highlighted].id)
                 }
             }
             .overlay {
                 if results.isEmpty {
                     Text(loc("无匹配命令", "No matching commands"))
                         .font(WL.body).foregroundStyle(WL.textDim)
+                        .transition(.opacity)
                 }
             }
+            .animation(Motion.state, value: results.isEmpty)
+            .background(MouseMoveWatcher { keyboardNav = false })
         }
         .background(WL.bg)
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(WL.colorScheme)
         .onAppear { focused = true }
         .onExitCommand { onClose() }
     }
@@ -99,7 +114,9 @@ struct CommandPaletteView: View {
         // Run on the next tick so this palette fully dismisses first — otherwise a
         // command that opens another overlay (e.g. Quick Connect) races with our
         // teardown and the new field never grabs focus.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) { cmd.run() }
+        // …and only once its exit animation has finished, so a command that opens
+        // a window (Settings) doesn't start its own animation over ours.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.16) { cmd.run() }
     }
 
     // MARK: - The command list
@@ -131,6 +148,28 @@ struct CommandPaletteView: View {
                            systemImage: "sparkles", tint: WL.purple) { post(.toggleAI) },
             PaletteCommand(title: loc("聚焦终端输入", "Focus Terminal"), category: actions,
                            systemImage: "cursorarrow", tint: WL.textDim) { post(.focusTerminal) },
+            PaletteCommand(title: loc("向右分屏", "Split Right"), category: actions,
+                           systemImage: "rectangle.split.2x1", tint: WL.green) {
+                wlAnimateTerminalLayout { sessions.splitActive(.trailing) }
+            },
+            PaletteCommand(title: loc("向下分屏", "Split Down"), category: actions,
+                           systemImage: "rectangle.split.1x2", tint: WL.green) {
+                wlAnimateTerminalLayout { sessions.splitActive(.bottom) }
+            },
+            PaletteCommand(title: loc("均分分屏", "Equalize Splits"), category: actions,
+                           systemImage: "equal.square", tint: WL.textDim) {
+                wlAnimateTerminalLayout { sessions.equalizeSplits() }
+            },
+            PaletteCommand(title: loc("放大 / 还原分屏", "Zoom / Restore Pane"), category: actions,
+                           systemImage: "arrow.up.left.and.arrow.down.right", tint: WL.textDim) {
+                wlAnimateTerminalLayout { sessions.toggleZoom() }
+            },
+            PaletteCommand(title: loc("复制上一条命令的输出", "Copy Last Command Output"), category: actions,
+                           systemImage: "doc.on.clipboard", tint: WL.teal) { copyLastOutput(sessions) },
+            PaletteCommand(title: loc("快捷终端", "Quick Terminal"), category: actions,
+                           systemImage: "rectangle.topthird.inset.filled", tint: WL.green) {
+                QuickTerminalController.shared.toggle()
+            },
             PaletteCommand(title: loc("待办清单", "To-Do List"), category: actions,
                            systemImage: "checklist", tint: WL.amber) { openWindow(id: "todos") },
             PaletteCommand(title: loc("设置", "Settings"), category: actions,
@@ -182,21 +221,44 @@ private struct PaletteRow: View {
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: command.systemImage)
-                .font(.system(size: 11)).foregroundStyle(command.tint).frame(width: 16)
+                .font(.system(size: 11, weight: .medium)).foregroundStyle(command.tint)
+                .frame(width: 26, height: 26)
+                .background(command.tint.opacity(isHighlighted ? 0.16 : 0.1), in: RoundedRectangle(cornerRadius: WL.radius(6)))
             VStack(alignment: .leading, spacing: 1) {
-                Text(command.title).font(WL.body)
-                    .foregroundStyle(isHighlighted ? WL.greenBright : WL.textPrimary).lineLimit(1)
+                Text(command.title).font(WL.body).foregroundStyle(WL.textPrimary).lineLimit(1)
                 if let sub = command.subtitle {
                     Text(sub).font(WL.caption).foregroundStyle(WL.textDim).lineLimit(1)
                 }
             }
             Spacer()
             Text(command.category).font(WL.caption).foregroundStyle(WL.textDim)
+            if isHighlighted {
+                Image(systemName: "return").font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(WL.textDim)
+            }
         }
-        .padding(.horizontal, 16).padding(.vertical, 8)
-        .background(isHighlighted ? WL.green.opacity(0.16) : .clear)
-        .overlay(alignment: .leading) {
-            Rectangle().fill(WL.green).frame(width: 2).opacity(isHighlighted ? 1 : 0)
+        .wlResultHighlight(isHighlighted)
+    }
+}
+
+/// Calls back on real mouse movement inside the view (not on content scrolling
+/// under a still pointer) — lets hover take over from keyboard navigation.
+struct MouseMoveWatcher: NSViewRepresentable {
+    let onMove: () -> Void
+    func makeNSView(context: Context) -> NSView { Tracker(onMove: onMove) }
+    func updateNSView(_ nsView: NSView, context: Context) { (nsView as? Tracker)?.onMove = onMove }
+
+    final class Tracker: NSView {
+        var onMove: () -> Void
+        init(onMove: @escaping () -> Void) { self.onMove = onMove; super.init(frame: .zero) }
+        @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
+        override func updateTrackingAreas() {
+            super.updateTrackingAreas()
+            trackingAreas.forEach(removeTrackingArea)
+            addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseMoved, .activeInKeyWindow, .inVisibleRect],
+                                           owner: self))
         }
+        override func mouseMoved(with event: NSEvent) { onMove() }
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
     }
 }

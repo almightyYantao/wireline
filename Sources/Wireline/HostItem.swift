@@ -53,16 +53,20 @@ struct HostItem: View {
                     Spacer()
                 }
                 .padding(.leading, 16).padding(.bottom, 8)
+                .transition(.wlDisclose)
             }
         }
+        .animation(Motion.disclose, value: isActive)
         .background(rowBackground)
+        .animation(Motion.state, value: isSelected)
         .overlay(alignment: .leading) {
             Rectangle().fill(WL.green).frame(width: 2).opacity(isActive || isSelected ? 1 : 0)
         }
-        .onHover { hover = $0 }
+        .wlHover($hover)
         .draggable(host.alias) {
             Text(host.alias).font(WL.body).foregroundStyle(WL.green)
-                .padding(6).background(WL.surface)
+                .padding(.horizontal, 10).padding(.vertical, 6)
+                .background(WL.surface, in: RoundedRectangle(cornerRadius: WL.radius(6)))
         }
         .wlContextMenu(menuItems)
     }
@@ -102,6 +106,9 @@ struct HostItem: View {
                 Text(loc("已连接", "connected")).font(WL.small).foregroundStyle(WL.green)
             } else {
                 Text(statusText).font(WL.small).foregroundStyle(s.tagColor)
+                    .wlPulse(s == .checking, period: 0.8, low: 0.45)
+                    .contentTransition(.opacity)
+                    .animation(Motion.state, value: statusText)
             }
         }
     }
@@ -122,7 +129,7 @@ struct InlineAction: View {
             }
             .foregroundStyle(hover ? tint : tint.opacity(0.8))
         }
-        .buttonStyle(.plain)
-        .onHover { hover = $0 }
+        .buttonStyle(.wlPlain)
+        .wlHover($hover)
     }
 }

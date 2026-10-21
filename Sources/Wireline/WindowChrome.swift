@@ -35,7 +35,7 @@ struct WallpaperBackground: ViewModifier {
         }
         .background(WindowAccessor { chrome.attach(to: $0) })
         .id(Palette.shared.version)
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(WL.colorScheme)
     }
 }
 

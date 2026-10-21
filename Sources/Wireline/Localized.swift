@@ -10,6 +10,14 @@ enum AppLanguage: String, CaseIterable, Sendable {
         case .en: return "English"
         }
     }
+    /// Compact label for segmented controls.
+    @MainActor var shortName: String {
+        switch self {
+        case .system: return Localizer.shared.t("跟随系统", "System")
+        case .zh: return "中文"
+        case .en: return "English"
+        }
+    }
 }
 
 /// Lightweight runtime localization with a system default and a user override.

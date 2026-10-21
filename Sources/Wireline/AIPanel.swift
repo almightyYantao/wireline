@@ -228,7 +228,7 @@ struct AIPanelView: View {
                         Text("\(useFast ? "[x]" : "[ ]") \(loc("快速", "Fast"))")
                             .font(WL.small).foregroundStyle(useFast ? WL.green : WL.textDim)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.wlPlain)
                     .help(loc("用便宜/快速模型跑这条", "Use the fast/cheap model"))
                 }
                 // Bracket checkbox — matches the app's [button] motif, clearly clickable.
@@ -237,7 +237,7 @@ struct AIPanelView: View {
                         .font(WL.small)
                         .foregroundStyle(ai.agentMode ? WL.green : WL.textDim)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.wlPlain)
                 .help(loc("开启后 AI 会自动执行命令并根据输出继续", "Let AI run commands and continue from their output"))
                 if !messages.isEmpty {
                     BracketButton(loc("清空", "Clear")) {
@@ -247,7 +247,7 @@ struct AIPanelView: View {
                 }
                 Button(action: onClose) {
                     Image(systemName: "xmark").font(.system(size: 11, weight: .bold)).foregroundStyle(WL.textDim)
-                }.buttonStyle(.plain)
+                }.buttonStyle(.wlPlain)
             }
             if sessionTokens > 0 {
                 Text(usageText).font(WL.caption).foregroundStyle(WL.textDim)
@@ -297,7 +297,7 @@ struct AIPanelView: View {
             .background(WL.surface.opacity(0.6), in: RoundedRectangle(cornerRadius: WL.radius(5)))
             .overlay(RoundedRectangle(cornerRadius: WL.radius(5)).stroke(WL.border, lineWidth: WL.borderWidth))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.wlPlain)
         .disabled(isStreaming)
     }
 
@@ -397,7 +397,7 @@ struct AIPanelView: View {
     private func jumpToBottomButton(_ proxy: ScrollViewProxy) -> some View {
         Button {
             atBottom = true
-            withAnimation(.easeOut(duration: 0.18)) { proxy.scrollTo("bottom", anchor: .bottom) }
+            withAnimation(Motion.scroll) { proxy.scrollTo("bottom", anchor: .bottom) }
         } label: {
             Image(systemName: isStreaming ? "arrow.down.circle.fill" : "arrow.down")
                 .font(.system(size: 13, weight: .semibold))
@@ -407,11 +407,11 @@ struct AIPanelView: View {
                 .overlay(Circle().stroke(WL.bg.opacity(0.25), lineWidth: 1))
                 .shadow(color: .black.opacity(0.3), radius: 4, y: 1)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.wlPlain)
         .help(loc("回到底部", "Jump to bottom"))
         .padding(.trailing, 14)
         .padding(.bottom, 12)
-        .transition(.opacity.combined(with: .scale(scale: 0.8)))
+        .transition(.wlPop(anchor: .bottom))
     }
 
     private var emptyState: some View {
@@ -454,13 +454,13 @@ struct AIPanelView: View {
             if isStreaming {
                 Button { task?.cancel(); isStreaming = false; agentSteps = 0 } label: {
                     Image(systemName: "stop.fill").font(.system(size: 12)).foregroundStyle(WL.red)
-                }.buttonStyle(.plain)
+                }.buttonStyle(.wlPlain)
             } else {
                 Button(action: sendFreeform) {
                     Image(systemName: "arrow.up.circle.fill").font(.system(size: 16))
                         .foregroundStyle(input.trimmingCharacters(in: .whitespaces).isEmpty ? WL.textDim : WL.green)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.wlPlain)
                 .disabled(input.trimmingCharacters(in: .whitespaces).isEmpty)
             }
         }
@@ -1175,7 +1175,7 @@ private struct MessageBubble: View {
                             } label: {
                                 Text("[\(loc.t("运行", "Run")) ▾]").font(WL.small).foregroundStyle(WL.textDim)
                             }
-                            .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
+                            .menuStyle(.button).buttonStyle(.wlPlain).menuIndicator(.hidden).fixedSize()
                             .help(loc.t("选择要运行的主机", "Choose a host to run on"))
                         } else {
                             BracketButton(loc.t("运行", "Run")) { session.runInTerminal(cmd) }

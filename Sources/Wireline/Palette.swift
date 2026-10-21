@@ -22,6 +22,9 @@ final class Palette: @unchecked Sendable {
     var red = Color(hex: 0xF85149)
     var purple = Color(hex: 0xB084F0)
     var teal = Color(hex: 0x35D0C0)
+    /// True when the active theme has a light background. Drives the system
+    /// appearance (menus, scrollers, color wells) and light-tuned derivations.
+    var isLight = false
 
     // MARK: Non-color style tokens (driven by the active AppTheme)
 
@@ -61,13 +64,18 @@ final class Palette: @unchecked Sendable {
             return
         }
         let bgc = t.background, fg = t.foreground
+        isLight = luminance(bgc) > 0.5
         bg = rgb(bgc)
         textPrimary = rgb(fg)
         accent = rgb(t.cursor)
-        accentBright = rgb(lighten(t.cursor, 0.25))
-        surface = rgb(mix(bgc, fg, 0.10))
-        border = rgb(mix(bgc, fg, 0.22))
-        textDim = rgb(mix(fg, bgc, 0.45))
+        // "Bright" means more contrast against the background: lighter on dark
+        // themes, deeper on light ones.
+        accentBright = rgb(isLight ? darken(t.cursor, 0.12) : lighten(t.cursor, 0.25))
+        // Light themes need gentler steps — a 10% mix toward near-black text
+        // already reads as a heavy grey slab on paper.
+        surface = rgb(mix(bgc, fg, isLight ? 0.05 : 0.10))
+        border = rgb(mix(bgc, fg, isLight ? 0.13 : 0.22))
+        textDim = rgb(mix(fg, bgc, isLight ? 0.42 : 0.45))
         amber = rgb(t.ansi[3])       // yellow
         red = rgb(t.ansi[1])         // red
         purple = rgb(t.ansi[5])      // magenta
@@ -76,6 +84,7 @@ final class Palette: @unchecked Sendable {
     }
 
     private func resetDefaults() {
+        isLight = false
         bg = Color(hex: 0x0A0E0A); surface = Color(hex: 0x0F150F); border = Color(hex: 0x1B241B)
         accent = Color(hex: 0x35D07F); accentBright = Color(hex: 0x5CF0A2)
         textPrimary = Color(hex: 0xC8D3C8); textDim = Color(hex: 0x63755F)
@@ -92,5 +101,11 @@ final class Palette: @unchecked Sendable {
     }
     private func lighten(_ c: [Double], _ t: Double) -> [Double] {
         [min(1, c[0] + t), min(1, c[1] + t), min(1, c[2] + t)]
+    }
+    private func darken(_ c: [Double], _ t: Double) -> [Double] {
+        [max(0, c[0] - t), max(0, c[1] - t), max(0, c[2] - t)]
+    }
+    private func luminance(_ c: [Double]) -> Double {
+        0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
     }
 }

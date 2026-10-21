@@ -81,6 +81,7 @@ public struct BatchExecutor: Sendable {
         process.environment = {
             var env = ProcessInfo.processInfo.environment
             env["SSH_ASKPASS"] = "/usr/bin/false"
+            SSHAgentEnvironment.apply(to: &env)
             return env
         }()
 

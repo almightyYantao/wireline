@@ -1,4 +1,5 @@
 import AppKit
+import MetalKit
 import SwiftTerm
 import WirelineCore
 
@@ -78,6 +79,8 @@ final class WirelineTerminalView: LocalProcessTerminalView {
     /// `SessionStore`/`zshIntegrationZDOTDIR`); remote shells only emit it when
     /// configured to.
     var onDirectoryChange: ((String?) -> Void)?
+    /// A program-set window title (OSC 0/2).
+    var onTitleReport: ((String) -> Void)?
 
     /// Fired when the user submits a `# …` line at the prompt — a natural-language
     /// AI request. The payload is the text after the `#`. Detected from the echoed
@@ -165,9 +168,285 @@ final class WirelineTerminalView: LocalProcessTerminalView {
         let forwarder = ProcessCallbackForwarder(owner: self)
         processForwarder = forwarder
         processDelegate = forwarder
+        // Debounce the PTY's window-size updates (see ResizeDebouncer).
+        let debouncer = ResizeDebouncer(base: self)
+        resizeDebouncer = debouncer
+        terminalDelegate = debouncer
+        installPromptTracking()
+        // SwiftTerm swaps any cursor for a thick hollow box when unfocused; we
+        // keep the shape and fade the colour instead (see refreshCaretFocus).
+        caretViewTracksFocus = false
+    }
+
+    // MARK: Cursor focus
+
+    /// The theme's cursor colour; shown at full strength only while focused.
+    private var baseCaretColor = NSColor(red: 0.20, green: 0.82, blue: 0.50, alpha: 1)
+    private var focusObservers: [NSObjectProtocol] = []
+    private var responderObservation: NSKeyValueObservation?
+
+    func setCaretColor(_ color: NSColor) {
+        baseCaretColor = color
+        refreshCaretFocus()
+    }
+
+    /// Focused = key window + first responder. Unfocused keeps the shape at
+    /// 35% so you can still see where it is, like Terminal.app / Ghostty.
+    private func refreshCaretFocus() {
+        let focused = window?.isKeyWindow == true && window?.firstResponder === self
+        let c = focused ? baseCaretColor : baseCaretColor.withAlphaComponent(0.35)
+        guard caretColor != c else { return }
+        caretColor = c
+        // The Metal renderer reads the colour per frame; ask it for one.
+        for case let v as MTKView in subviews { v.setNeedsDisplay(v.bounds) }
+    }
+
+    private func observeFocus() {
+        focusObservers.forEach(NotificationCenter.default.removeObserver)
+        focusObservers = []
+        responderObservation = nil
+        guard let window else { return }
+        for name in [NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification] {
+            focusObservers.append(NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) {
+                [weak self] _ in MainActor.assumeIsolated { self?.refreshCaretFocus() }
+            })
+        }
+        responderObservation = window.observe(\.firstResponder, options: [.new]) { [weak self] _, _ in
+            DispatchQueue.main.async { self?.refreshCaretFocus() }
+        }
+        refreshCaretFocus()
+    }
+
+    // MARK: Prompt-aware resizing (OSC 133)
+    //
+    // The kitty / Ghostty technique. A shell integration (p10k with
+    // POWERLEVEL9K_TERM_SHELL_INTEGRATION=true, or our local zsh hook) marks the
+    // prompt start with OSC 133;A. Right before the grid reflows we blank
+    // everything from that mark to the end of the screen, leaving the cursor
+    // where it was. Blank lines don't grow when reflowed, so the distance zsh
+    // remembers between prompt start and cursor stays true, and its SIGWINCH
+    // redraw lands exactly on the old prompt instead of stacking a copy below
+    // it. See powerlevel10k's README, "Horrific mess when resizing terminal window".
+
+    private enum PromptRedraw { case full, last, none }
+    /// Absolute row of the current prompt's start; nil while a command runs.
+    private var promptStartRow: Int?
+    private var promptRedraw: PromptRedraw = .full
+    /// Set while a resize burst has blanked the prompt: prompt-start → cursor rows.
+    private var promptClearOffset: Int?
+
+    private var absoluteCursorRow: Int {
+        let b = getTerminal().buffer
+        return b.totalLinesTrimmed + b.yDisp + b.y
+    }
+
+    /// The view is showing the live bottom (not scrolled back into history),
+    /// so `yDisp` is the buffer base and row maths is valid.
+    private var showingLiveBottom: Bool { !canScroll || scrollPosition >= 0.999 }
+
+    private func installPromptTracking() {
+        getTerminal().registerOscHandler(code: 133) { [weak self] data in
+            // SwiftTerm feeds PTY output on the main queue.
+            MainActor.assumeIsolated { self?.handlePromptMark(String(decoding: data, as: UTF8.self)) }
+        }
+        for code in [10, 11] {
+            getTerminal().registerOscHandler(code: code) { [weak self] data in
+                MainActor.assumeIsolated { self?.answerColorQuery(code: code, String(decoding: data, as: UTF8.self)) }
+            }
+        }
+    }
+
+    // MARK: Colour queries (OSC 10 / 11)
+
+    /// The theme's real foreground / background (0…1 RGB). The view itself
+    /// paints a clear background so the wallpaper shows through, and SwiftTerm
+    /// would answer a background query with that — i.e. black — making bat,
+    /// vim, delta, fzf … pick dark palettes on a light theme.
+    var reportedColors: (fg: [Double], bg: [Double])?
+
+    /// Answer `OSC 10;?` / `OSC 11;?` (and the `10;?;?` form, which asks for
+    /// foreground then background) like xterm: `ESC ] 1x ; rgb:RRRR/GGGG/BBBB ST`.
+    /// Requests to *set* the colours are ignored — the theme owns them.
+    private func answerColorQuery(code: Int, _ payload: String) {
+        guard let colors = reportedColors else { return }
+        for (offset, part) in payload.split(separator: ";", omittingEmptySubsequences: false).enumerated()
+        where part == "?" {
+            let which = code + offset
+            guard which == 10 || which == 11 else { continue }
+            let c = which == 10 ? colors.fg : colors.bg
+            func hex(_ v: Double) -> String { String(format: "%04x", Int((min(max(v, 0), 1) * 65535).rounded())) }
+            send(txt: "\u{1b}]\(which);rgb:\(hex(c[0]))/\(hex(c[1]))/\(hex(c[2]))\u{1b}\\")
+        }
+    }
+
+    private func handlePromptMark(_ payload: String) {
+        let parts = payload.split(separator: ";").map(String.init)
+        guard let kind = parts.first else { return }
+        switch kind {
+        case "A":
+            guard showingLiveBottom else { promptStartRow = nil; return }
+            promptStartRow = absoluteCursorRow
+            promptRedraw = .full
+            for opt in parts.dropFirst() where opt.hasPrefix("redraw=") {
+                switch opt.dropFirst("redraw=".count) {
+                case "0": promptRedraw = .none
+                case "last": promptRedraw = .last
+                default: promptRedraw = .full
+                }
+            }
+            recordPrompt(at: absoluteCursorRow)
+        case "C":
+            promptStartRow = nil
+            if let i = commands.indices.last, commands[i].outputStart == nil {
+                // Output begins on the line after the command line.
+                commands[i].outputStart = absoluteCursorRow + 1
+            }
+        case "D":
+            promptStartRow = nil
+            if let i = commands.indices.last, commands[i].outputStart != nil, commands[i].outputEnd == nil {
+                commands[i].outputEnd = absoluteCursorRow
+            }
+        default:
+            break
+        }
+    }
+
+    // MARK: Command history (OSC 133) — jump to prompt, copy last output
+
+    /// One shell command as the marks describe it, in absolute buffer rows.
+    struct CommandRecord {
+        var prompt: Int
+        var outputStart: Int?
+        var outputEnd: Int?
+    }
+    private(set) var commands: [CommandRecord] = []
+
+    private func recordPrompt(at row: Int) {
+        // A redraw of the same prompt (SIGWINCH, reset-prompt) re-sends A —
+        // move the open record instead of starting a new one.
+        if let i = commands.indices.last, commands[i].outputStart == nil {
+            commands[i].prompt = row
+        } else {
+            if let i = commands.indices.last, commands[i].outputEnd == nil {
+                commands[i].outputEnd = row          // shell without D marks
+            }
+            commands.append(CommandRecord(prompt: row))
+        }
+        let top = getTerminal().buffer.totalLinesTrimmed
+        commands.removeAll { $0.prompt < top }
+        if commands.count > 2000 { commands.removeFirst(commands.count - 2000) }
+    }
+
+    /// Shift every record by `delta` rows. A reflow moves rows by varying
+    /// amounts; anchoring on the live prompt (whose position we know exactly)
+    /// keeps recent commands right and older ones close.
+    private func shiftCommands(by delta: Int) {
+        guard delta != 0 else { return }
+        for i in commands.indices {
+            commands[i].prompt += delta
+            commands[i].outputStart = commands[i].outputStart.map { $0 + delta }
+            commands[i].outputEnd = commands[i].outputEnd.map { $0 + delta }
+        }
+    }
+
+    /// Scroll so the previous / next prompt is at the top (Ghostty's
+    /// jump_to_prompt). Returns false when there's no prompt that way.
+    @discardableResult
+    func jumpToPrompt(_ delta: Int) -> Bool {
+        let b = getTerminal().buffer
+        let topAbs = b.totalLinesTrimmed + b.yDisp
+        let rows = commands.map(\.prompt)
+        let target = delta < 0 ? rows.last { $0 < topAbs } : rows.first { $0 > topAbs }
+        guard let target else {
+            if delta > 0 { scrollTo(row: Int.max) }      // past the last prompt: back to live
+            return false
+        }
+        scrollTo(row: target - b.totalLinesTrimmed)
+        return true
+    }
+
+    /// Text of the most recent finished command's output, trailing blanks trimmed.
+    func lastCommandOutput() -> String? {
+        let t = getTerminal()
+        guard let rec = commands.last(where: { $0.outputStart != nil && $0.outputEnd != nil }),
+              let start = rec.outputStart, let end = rec.outputEnd, end > start else { return nil }
+        var lines: [String] = []
+        for row in start..<end {
+            guard let line = t.getScrollInvariantLine(row: row) else { continue }
+            lines.append(line.translateToString(trimRight: true))
+        }
+        while lines.last?.isEmpty == true { lines.removeLast() }
+        let text = lines.joined(separator: "\n")
+        return text.isEmpty ? nil : text
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        // Only when the grid really changes: the kernel sends SIGWINCH only for a
+        // new rows×cols, and a blanked prompt with no redraw coming would stay
+        // blank (sub-cell size changes are common at the tail of a spring).
+        if newSize != frame.size, let g = predictedGrid(for: newSize) {
+            let t = getTerminal()
+            if g.cols != t.cols || g.rows != t.rows { blankPromptBeforeReflow() }
+        }
+        super.setFrameSize(newSize)
+    }
+
+    /// The rows×cols SwiftTerm will pick for `size`, using its own formula
+    /// (pixel-snapped "W" advance; row height from the optimal frame). Returns
+    /// nil unless the formula reproduces the *current* grid exactly — then we'd
+    /// rather not blank than blank wrongly.
+    private func predictedGrid(for size: NSSize) -> (cols: Int, rows: Int)? {
+        let t = getTerminal()
+        guard t.cols > 0, t.rows > 0, frame.width > 0, frame.height > 0, size.width > 0 else { return nil }
+        let optimal = getOptimalFrameSize()
+        let cellH = optimal.height / CGFloat(t.rows)
+        let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
+        let rawW = font.advancement(forGlyph: font.glyph(withName: "W")).width
+        let cellW = ceil(rawW * scale) / scale
+        guard cellW > 0, cellH > 0 else { return nil }
+        let reserved = optimal.width - cellW * CGFloat(t.cols)
+        func grid(_ s: NSSize) -> (cols: Int, rows: Int) {
+            (Int(max(0, s.width - reserved) / cellW), Int(s.height / cellH))
+        }
+        let now = grid(frame.size)
+        guard now.cols == t.cols, now.rows == t.rows else { return nil }
+        return grid(size)
+    }
+
+    /// Called after every chunk of PTY output is rendered, while set — used to
+    /// reveal a resized terminal only once the shell's redraw has finished.
+    var outputObserver: (() -> Void)?
+
+    /// Send a pending debounced size to the PTY now. True if one was pending.
+    @discardableResult
+    func flushPendingResize() -> Bool { resizeDebouncer?.flush() ?? false }
+
+    private func blankPromptBeforeReflow() {
+        guard promptClearOffset == nil, let start = promptStartRow, promptRedraw != .none,
+              !getTerminal().isCurrentBufferAlternate, showingLiveBottom else { return }
+        var k = absoluteCursorRow - start
+        guard k >= 0, k < getTerminal().rows else { return }
+        if promptRedraw == .last { k = 0 }
+        // Save cursor, go to the prompt's first line, erase to end of screen,
+        // restore cursor. Fed to the emulator only — nothing reaches the PTY.
+        getTerminal().feed(text: "\u{1b}7" + (k > 0 ? "\u{1b}[\(k)A" : "") + "\r\u{1b}[J\u{1b}8")
+        promptClearOffset = k
+    }
+
+    /// Called once the debounced size has gone to the PTY: the reflow is done,
+    /// so re-anchor the prompt start from the (unchanged) prompt→cursor distance.
+    func didDeliverResize() {
+        guard let k = promptClearOffset else { return }
+        promptClearOffset = nil
+        if let old = promptStartRow, showingLiveBottom {
+            promptStartRow = absoluteCursorRow - k
+            shiftCommands(by: (absoluteCursorRow - k) - old)
+        }
     }
 
     private var processForwarder: ProcessCallbackForwarder?
+    /// `terminalDelegate` is weak, hence the strong hold.
+    private var resizeDebouncer: ResizeDebouncer?
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) unavailable") }
@@ -175,13 +454,24 @@ final class WirelineTerminalView: LocalProcessTerminalView {
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         // Intercept the "close shell" shortcut so it closes this session rather
         // than the containing window. The binding is user-customizable.
+        // AppKit offers key equivalents to *every* view in the window, front to
+        // back — not just the focused one — so with split panes the first pane
+        // in the hierarchy would grab ⌘W and close itself. Only the pane that
+        // has keyboard focus answers; if focus is elsewhere (AI panel, sidebar),
+        // the active pane does.
         if event.type == .keyDown,
            KeyBindingStore.shared.shortcut(for: .closeShell).matches(event) {
+            let focusedTerminal = window?.firstResponder as? WirelineTerminalView
+            let mine = focusedTerminal.map { $0 === self } ?? (isActivePane?() ?? true)
+            guard mine else { return super.performKeyEquivalent(with: event) }
             onCloseRequested?()
             return true
         }
         return super.performKeyEquivalent(with: event)
     }
+
+    /// Whether this view's session is the active pane (set by the session).
+    var isActivePane: (() -> Bool)?
 
     /// Tame the overlay scrollbar during streaming output.
     ///
@@ -248,6 +538,90 @@ final class WirelineTerminalView: LocalProcessTerminalView {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         setupCustomScrollbar()
+        // Moving windows rebuilds SwiftTerm's Metal view — re-clear it.
+        makeMetalLayerTransparent()
+        observeFocus()
+    }
+
+    // MARK: GPU rendering
+
+    /// Switch between SwiftTerm's Metal renderer and CoreGraphics. Falls back to
+    /// CoreGraphics silently if Metal can't start.
+    func applyRenderer(gpu: Bool) {
+        guard gpu != isUsingMetalRenderer else { return }
+        // SwiftTerm loads its shaders from its resource bundle and traps if it's
+        // missing — check first and stay on CoreGraphics instead of crashing.
+        if gpu, !Self.hasSwiftTermResources { return }
+        try? setUseMetal(gpu)
+        makeMetalLayerTransparent()
+    }
+
+    private static let hasSwiftTermResources =
+        Bundle.main.url(forResource: "SwiftTerm_SwiftTerm", withExtension: "bundle") != nil
+
+    /// SwiftTerm's MTKView is opaque by default; we draw over the app wallpaper
+    /// with a clear background, so let the layer composite with alpha.
+    private func makeMetalLayerTransparent() {
+        guard isUsingMetalRenderer else { return }
+        for case let v as MTKView in subviews {
+            v.layer?.isOpaque = false
+        }
+    }
+
+    /// An image of the current screen. `cacheDisplay` can't read a Metal layer,
+    /// so under Metal this briefly draws one frame with CoreGraphics — callers
+    /// take it while the terminal is about to be covered anyway.
+    func snapshotImage() -> NSImage? {
+        guard bounds.width > 0, bounds.height > 0 else { return nil }
+        let metal = isUsingMetalRenderer
+        if metal { try? setUseMetal(false) }
+        defer { if metal { try? setUseMetal(true); makeMetalLayerTransparent() } }
+        guard let rep = bitmapImageRepForCachingDisplay(in: bounds) else { return nil }
+        cacheDisplay(in: bounds, to: rep)
+        let image = NSImage(size: bounds.size)
+        image.addRepresentation(rep)
+        return image
+    }
+
+    // MARK: ⌘-click paths
+
+    /// Asked to open a file path ⌘-clicked in the terminal (URLs are SwiftTerm's).
+    var onOpenPath: ((String) -> Void)?
+
+    override func mouseUp(with event: NSEvent) {
+        if event.modifierFlags.contains(.command), event.clickCount == 1,
+           let token = pathToken(at: convert(event.locationInWindow, from: nil)) {
+            onOpenPath?(token)
+            return
+        }
+        super.mouseUp(with: event)
+    }
+
+    /// The path-looking word under `point`, or nil (URLs excluded — SwiftTerm
+    /// opens those itself).
+    private func pathToken(at point: NSPoint) -> String? {
+        let t = getTerminal()
+        guard t.rows > 0 else { return nil }
+        let optimal = getOptimalFrameSize()
+        let cellH = optimal.height / CGFloat(t.rows)
+        let scale = window?.backingScaleFactor ?? 2
+        let cellW = ceil(font.advancement(forGlyph: font.glyph(withName: "W")).width * scale) / scale
+        guard cellW > 0, cellH > 0 else { return nil }
+        let y = isFlipped ? point.y : bounds.height - point.y
+        let row = Int(y / cellH), col = Int(point.x / cellW)
+        guard row >= 0, row < t.rows, let line = t.getLine(row: row) else { return nil }
+        let chars = Array(line.translateToString(trimRight: false))
+        guard col >= 0, col < chars.count, !chars[col].isWhitespace else { return nil }
+        let stop: (Character) -> Bool = { $0.isWhitespace || "'\"`()[]{}<>|,;".contains($0) }
+        var a = col, b = col
+        while a > 0, !stop(chars[a - 1]) { a -= 1 }
+        while b + 1 < chars.count, !stop(chars[b + 1]) { b += 1 }
+        var token = String(chars[a...b])
+        // Drop a trailing ":line:col" (compiler output) and sentence punctuation.
+        if let r = token.range(of: #"(:\d+)+:?$"#, options: .regularExpression) { token.removeSubrange(r) }
+        while let last = token.last, ".:".contains(last) { token.removeLast() }
+        guard !token.contains("://"), token.contains("/") || token.hasPrefix("~") else { return nil }
+        return token
     }
 
     /// The child process (ssh / shell) exited — the connection is gone. Let the
@@ -301,7 +675,7 @@ final class WirelineTerminalView: LocalProcessTerminalView {
             field.layer?.backgroundColor = markedTextBackground.cgColor
             field.layer?.cornerRadius = 4
             field.layer?.borderWidth = 1
-            field.layer?.borderColor = NSColor.white.withAlphaComponent(0.14).cgColor
+            field.layer?.borderColor = NSColor.labelColor.withAlphaComponent(0.14).cgColor
         }
     }
 
@@ -350,6 +724,7 @@ final class WirelineTerminalView: LocalProcessTerminalView {
         }
 
         super.dataReceived(slice: slice)
+        outputObserver?()
         let chunk = String(decoding: slice, as: UTF8.self)
         detectFullScreenApp(chunk)
         let clean = Self.stripAnsi(chunk)
@@ -382,7 +757,8 @@ final class WirelineTerminalView: LocalProcessTerminalView {
                     let elapsed = leftPromptAt.map {
                         Double(DispatchTime.now().uptimeNanoseconds - $0.uptimeNanoseconds) / 1e9
                     } ?? 0
-                    if elapsed >= 20 { onCommandFinished?(elapsed) }
+                    // The session applies the user's threshold.
+                    if elapsed >= 1 { onCommandFinished?(elapsed) }
                     onBusyChange?(false, elapsed)
                 }
             } else if hasSeenFirstPrompt {
@@ -606,7 +982,12 @@ final class ProcessCallbackForwarder: LocalProcessTerminalViewDelegate {
     // We deliberately ignore program-set window titles (OSC 0/2): the tab title is
     // driven by the working directory (OSC 7) so it stays predictable and doesn't
     // flicker with whatever `vim`/`top`/etc. push.
-    func setTerminalTitle(source: LocalProcessTerminalView, title: String) {}
+    func setTerminalTitle(source: LocalProcessTerminalView, title: String) {
+        // Not used as the tab title, but an SSH session mines it for the remote
+        // directory (see TerminalSession.applyReportedTitle).
+        guard let owner else { return }
+        DispatchQueue.main.async { owner.onTitleReport?(title) }
+    }
 
     func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {
         // Pull `owner` into a local (it's a `@MainActor` view, hence Sendable) so
@@ -683,7 +1064,7 @@ final class TerminalScrollbar: NSView {
         if hovering || dragging {
             let track = CGRect(x: bounds.width - hoverThumbW - rightPad, y: vInset,
                                width: hoverThumbW, height: trackHeight)
-            NSColor.white.withAlphaComponent(0.06).setFill()
+            NSColor.labelColor.withAlphaComponent(0.06).setFill()
             NSBezierPath(roundedRect: track, xRadius: hoverThumbW / 2, yRadius: hoverThumbW / 2).fill()
         }
         let r = thumbRect()
@@ -769,5 +1150,87 @@ final class TerminalScrollbar: NSView {
         let pos = (p.y - vInset - thumbH / 2) / travel
         term.scroll(toPosition: Double(min(1, max(0, pos))))
         needsDisplay = true
+    }
+}
+
+/// Sits between SwiftTerm's view and its own `LocalProcessTerminalView` delegate
+/// so the *screen* reflows live on every resize, but the *PTY* only learns the
+/// new size once resizing settles. Each PTY resize is a SIGWINCH, and shells
+/// with fancy prompts (p10k, starship) reprint the prompt on every one — a
+/// fullscreen transition delivers ~30 intermediate sizes, which used to stack
+/// dozens of duplicate prompts and smear right prompts into a staircase. Now
+/// the remote side gets exactly one, final size. Everything else is forwarded.
+final class ResizeDebouncer: TerminalViewDelegate {
+    private weak var base: WirelineTerminalView?
+    private var pending: DispatchWorkItem?
+    /// At most one PTY resize per this interval (Ghostty coalesces for 25 ms).
+    private let settle: TimeInterval = 0.05
+
+    init(base: WirelineTerminalView) { self.base = base }
+
+    /// Run a pending resize immediately. True if there was one.
+    func flush() -> Bool {
+        guard let work = pending, !work.isCancelled else { return false }
+        work.cancel()
+        pending = nil
+        deliver()
+        return true
+    }
+
+    private func deliver() {
+        guard let base else { return }
+        MainActor.assumeIsolated {
+            let t = base.getTerminal()
+            base.sizeChanged(source: base, newCols: t.cols, newRows: t.rows)
+            base.didDeliverResize()
+        }
+    }
+
+    func sizeChanged(source: TerminalView, newCols: Int, newRows: Int) {
+        // Throttle, not debounce: while a drag keeps resizing, still deliver at
+        // most every `settle` seconds, so the shell keeps redrawing its prompt
+        // instead of leaving it blank until the mouse stops. Animated layout and
+        // fullscreen never get here mid-flight — those freeze the grid and flush
+        // once at the end.
+        guard pending == nil else { return }
+        // Runs on the main queue (SwiftTerm resizes there too) and reads the size
+        // at fire time: always the latest, never a stale one.
+        let work = DispatchWorkItem { [weak self] in
+            self?.pending = nil
+            self?.deliver()
+        }
+        pending = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + settle, execute: work)
+    }
+
+    func setTerminalTitle(source: TerminalView, title: String) {
+        base?.setTerminalTitle(source: source, title: title)
+    }
+    func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {
+        base?.hostCurrentDirectoryUpdate(source: source, directory: directory)
+    }
+    func send(source: TerminalView, data: ArraySlice<UInt8>) {
+        base?.send(source: source, data: data)
+    }
+    func scrolled(source: TerminalView, position: Double) {
+        base?.scrolled(source: source, position: position)
+    }
+    func requestOpenLink(source: TerminalView, link: String, params: [String: String]) {
+        base?.requestOpenLink(source: source, link: link, params: params)
+    }
+    func bell(source: TerminalView) {
+        base?.bell(source: source)
+    }
+    func clipboardCopy(source: TerminalView, content: Data) {
+        base?.clipboardCopy(source: source, content: content)
+    }
+    func clipboardRead(source: TerminalView) -> Data? {
+        base?.clipboardRead(source: source)
+    }
+    func iTermContent(source: TerminalView, content: ArraySlice<UInt8>) {
+        base?.iTermContent(source: source, content: content)
+    }
+    func rangeChanged(source: TerminalView, startY: Int, endY: Int) {
+        base?.rangeChanged(source: source, startY: startY, endY: endY)
     }
 }

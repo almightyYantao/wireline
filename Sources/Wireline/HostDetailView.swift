@@ -55,7 +55,7 @@ struct HostDetailView: View {
                 connectHost(host, store: store, sessions: sessions, openWindow: openWindow)
             } label: {
                 Text("[\(loc("连接", "Connect"))]").font(WL.body).foregroundStyle(WL.green)
-            }.buttonStyle(.plain)
+            }.buttonStyle(.wlPlain)
         }
     }
 
@@ -83,7 +83,7 @@ struct HostDetailView: View {
                         Spacer()
                         Button { mem.remove(fact, for: host.alias) } label: {
                             Image(systemName: "xmark").font(.system(size: 8)).foregroundStyle(WL.textDim)
-                        }.buttonStyle(.plain)
+                        }.buttonStyle(.wlPlain)
                     }
                 }
             }

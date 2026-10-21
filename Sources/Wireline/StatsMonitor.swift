@@ -46,6 +46,10 @@ final class StatsMonitor {
             DispatchQueue.global().async {
                 let p = Process()
                 p.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
+                // Deliberately NOT pointed at Wireline's agent: if the master is
+                // gone ssh would reconnect on its own, and a background poll every
+                // 3 s must never pop a Touch ID prompt. Stats simply wait for the
+                // terminal's (already authorized) multiplexed connection.
                 p.arguments = ["-S", socket, "-o", "BatchMode=yes", alias, command]
                 let out = Pipe()
                 p.standardOutput = out

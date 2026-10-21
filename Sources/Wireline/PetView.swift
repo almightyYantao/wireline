@@ -22,10 +22,11 @@ struct PetView: View {
         VStack(alignment: .trailing, spacing: 8) {
             if expanded {
                 PetChatView {
-                    withAnimation(spring) { expanded = false }
+                    wlAnimate(Motion.expand) { expanded = false }
                 }
                 .clipShape(RoundedRectangle(cornerRadius: WL.radius(10)))
-                .transition(.scale(scale: 0.94, anchor: .bottomTrailing).combined(with: .opacity))
+                .transition(Motion.reduce ? .opacity
+                            : .scale(scale: 0.94, anchor: .bottomTrailing).combined(with: .opacity))
             }
 
             HStack(alignment: .bottom, spacing: 8) {
@@ -37,12 +38,12 @@ struct PetView: View {
                     .allowsHitTesting(false)
                 PetSprite(active: expanded)
                     .contentShape(Circle())
-                    .onTapGesture { withAnimation(spring) { expanded.toggle() } }
-                    .onHover { hovering = $0 }
+                    .onTapGesture { wlAnimate(Motion.expand) { expanded.toggle() } }
+                    .wlHover($hovering)
                     .help(loc("点我聊天 · 拖我移动", "Click to chat · drag to move"))
                     .contextMenu {
                         Button(loc(expanded ? "收起对话" : "开始对话", expanded ? "Collapse" : "Chat")) {
-                            withAnimation(spring) { expanded.toggle() }
+                            wlAnimate(Motion.expand) { expanded.toggle() }
                         }
                         Divider()
                         Button(loc("隐藏宠物", "Hide pet")) { dismissWindow(id: "pet") }
@@ -52,9 +53,9 @@ struct PetView: View {
         .padding(12)
         .fixedSize()
         .background(WindowAccessor { chrome.configure($0) })
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(WL.colorScheme)
         .onReceive(NotificationCenter.default.publisher(for: .focusPet)) { _ in
-            withAnimation(spring) { expanded.toggle() }
+            wlAnimate(Motion.expand) { expanded.toggle() }
         }
         // Grab key focus when the chat opens; hand it back to the terminal when it
         // collapses — via any path (chevron, tap, context menu, ⌘J). Otherwise the
@@ -65,8 +66,6 @@ struct PetView: View {
         }
     }
 
-    private var spring: Animation { .spring(response: 0.34, dampingFraction: 0.82) }
-
     private var hintBubble: some View {
         Text(loc("有事找我～", "Need me?"))
             .font(WL.small)
@@ -74,7 +73,6 @@ struct PetView: View {
             .padding(.horizontal, 10).padding(.vertical, 6)
             .background(WL.surface.opacity(0.95), in: RoundedRectangle(cornerRadius: WL.radius(8)))
             .overlay(RoundedRectangle(cornerRadius: WL.radius(8)).stroke(WL.border, lineWidth: WL.borderWidth))
-            .animation(.easeInOut(duration: 0.15), value: hovering)
     }
 }
 
@@ -138,8 +136,8 @@ private struct PetSprite: View {
         .frame(width: 96, height: 104)
         .scaleEffect(breathe ? 1.03 : 0.98)
         .onAppear {
-            withAnimation(.easeInOut(duration: 2.2).repeatForever(autoreverses: true)) { breathe = true }
-            withAnimation(.easeInOut(duration: 1.5).repeatForever(autoreverses: true)) { tailWag = true }
+            if let a = Motion.ambient(2.2) { withAnimation(a) { breathe = true } }
+            if let a = Motion.ambient(1.5) { withAnimation(a) { tailWag = true } }
         }
         .task { await blinkLoop() }
     }
@@ -148,9 +146,10 @@ private struct PetSprite: View {
     private func blinkLoop() async {
         while !Task.isCancelled {
             try? await Task.sleep(for: .seconds(Double.random(in: 2.5...5.5)))
-            withAnimation(.easeInOut(duration: 0.09)) { eyeOpen = false }
-            try? await Task.sleep(for: .milliseconds(120))
-            withAnimation(.easeInOut(duration: 0.09)) { eyeOpen = true }
+            guard !Motion.reduce else { continue }
+            withAnimation(.easeIn(duration: 0.07)) { eyeOpen = false }
+            try? await Task.sleep(for: .milliseconds(110))
+            withAnimation(.easeOut(duration: 0.1)) { eyeOpen = true }
         }
     }
 }

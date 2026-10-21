@@ -14,6 +14,13 @@ struct KeyShortcut: Codable, Equatable {
     /// At least one modifier is required so a binding can never swallow plain typing.
     var hasModifier: Bool { command || control || option }
 
+    /// Non-character keys, stored by name (as written in the config file).
+    static let namedKeys: [String: (glyph: String, equivalent: KeyEquivalent, keyCode: UInt16)] = [
+        "left": ("←", .leftArrow, 123), "right": ("→", .rightArrow, 124),
+        "down": ("↓", .downArrow, 125), "up": ("↑", .upArrow, 126),
+        "return": ("↩", .return, 36),
+    ]
+
     /// Human-readable badge, e.g. "⇧⌘T".
     var display: String {
         var s = ""
@@ -21,12 +28,14 @@ struct KeyShortcut: Codable, Equatable {
         if option { s += "⌥" }
         if shift { s += "⇧" }
         if command { s += "⌘" }
-        s += key.uppercased()
+        s += Self.namedKeys[key]?.glyph ?? key.uppercased()
         return s
     }
 
     // SwiftUI menu bridging ------------------------------------------------
-    var keyEquivalent: KeyEquivalent { KeyEquivalent(Character(key.isEmpty ? " " : key)) }
+    var keyEquivalent: KeyEquivalent {
+        Self.namedKeys[key]?.equivalent ?? KeyEquivalent(Character(key.isEmpty ? " " : key))
+    }
 
     var eventModifiers: EventModifiers {
         var m: EventModifiers = []
@@ -39,7 +48,11 @@ struct KeyShortcut: Codable, Equatable {
 
     /// Does an AppKit key event match this shortcut? Used by the terminal view.
     func matches(_ event: NSEvent) -> Bool {
-        guard event.charactersIgnoringModifiers?.lowercased() == key else { return false }
+        if let named = Self.namedKeys[key] {
+            guard event.keyCode == named.keyCode else { return false }
+        } else {
+            guard event.charactersIgnoringModifiers?.lowercased() == key else { return false }
+        }
         let f = event.modifierFlags
         return f.contains(.command) == command
             && f.contains(.shift) == shift
@@ -49,6 +62,11 @@ struct KeyShortcut: Codable, Equatable {
 
     /// Build from a captured AppKit key-down event (nil if it has no usable key).
     static func from(event: NSEvent) -> KeyShortcut? {
+        let f0 = event.modifierFlags
+        if let name = namedKeys.first(where: { $0.value.keyCode == event.keyCode })?.key {
+            return KeyShortcut(key: name, command: f0.contains(.command), shift: f0.contains(.shift),
+                               option: f0.contains(.option), control: f0.contains(.control))
+        }
         guard let chars = event.charactersIgnoringModifiers?.lowercased(),
               let first = chars.first, first.isLetter || first.isNumber || "`-=[]\\;',./".contains(first)
         else { return nil }
@@ -87,6 +105,18 @@ enum ShortcutAction: String, CaseIterable, Identifiable {
     case focusPrevPane
     case commandPalette
     case showPet
+    case splitRight
+    case splitDown
+    case focusPaneLeft
+    case focusPaneRight
+    case focusPaneUp
+    case focusPaneDown
+    case equalizeSplits
+    case toggleSplitZoom
+    case jumpToPreviousPrompt
+    case jumpToNextPrompt
+    case copyLastOutput
+    case toggleQuickTerminal
 
     var id: String { rawValue }
 
@@ -109,6 +139,18 @@ enum ShortcutAction: String, CaseIterable, Identifiable {
         case .focusPrevPane:    return loc.t("上一个分屏", "Focus Previous Pane")
         case .commandPalette:   return loc.t("命令面板", "Command Palette")
         case .showPet:          return loc.t("宠物对话窗口", "Desktop Pet Chat")
+        case .splitRight:       return loc.t("向右分屏", "Split Right")
+        case .splitDown:        return loc.t("向下分屏", "Split Down")
+        case .focusPaneLeft:    return loc.t("聚焦左侧分屏", "Focus Pane Left")
+        case .focusPaneRight:   return loc.t("聚焦右侧分屏", "Focus Pane Right")
+        case .focusPaneUp:      return loc.t("聚焦上方分屏", "Focus Pane Up")
+        case .focusPaneDown:    return loc.t("聚焦下方分屏", "Focus Pane Down")
+        case .equalizeSplits:   return loc.t("均分分屏", "Equalize Splits")
+        case .toggleSplitZoom:  return loc.t("放大 / 还原分屏", "Zoom / Restore Pane")
+        case .jumpToPreviousPrompt: return loc.t("跳到上一个提示符", "Jump to Previous Prompt")
+        case .jumpToNextPrompt:     return loc.t("跳到下一个提示符", "Jump to Next Prompt")
+        case .copyLastOutput:       return loc.t("复制上一条命令的输出", "Copy Last Command Output")
+        case .toggleQuickTerminal:  return loc.t("快捷终端（全局）", "Quick Terminal (global)")
         }
     }
 
@@ -124,12 +166,25 @@ enum ShortcutAction: String, CaseIterable, Identifiable {
         case .suggestCommand:   return KeyShortcut(key: ";")
         case .editHost:         return KeyShortcut(key: "e")
         case .closeShell:       return KeyShortcut(key: "w")
-        case .showTodos:        return KeyShortcut(key: "d")
+        case .showTodos:        return KeyShortcut(key: "d", option: true)   // ⌘D is Split Right
         case .focusTerminal:    return KeyShortcut(key: "l")
         case .focusNextPane:    return KeyShortcut(key: "]")
         case .focusPrevPane:    return KeyShortcut(key: "[")
         case .commandPalette:   return KeyShortcut(key: "p")
         case .showPet:          return KeyShortcut(key: "j", option: true)
+        // Same keys as Ghostty / iTerm2.
+        case .splitRight:       return KeyShortcut(key: "d")
+        case .splitDown:        return KeyShortcut(key: "d", shift: true)
+        case .focusPaneLeft:    return KeyShortcut(key: "left", option: true)
+        case .focusPaneRight:   return KeyShortcut(key: "right", option: true)
+        case .focusPaneUp:      return KeyShortcut(key: "up", option: true)
+        case .focusPaneDown:    return KeyShortcut(key: "down", option: true)
+        case .equalizeSplits:   return KeyShortcut(key: "=", control: true)
+        case .toggleSplitZoom:  return KeyShortcut(key: "return", shift: true)
+        case .jumpToPreviousPrompt: return KeyShortcut(key: "up")      // Ghostty's default
+        case .jumpToNextPrompt:     return KeyShortcut(key: "down")
+        case .copyLastOutput:       return KeyShortcut(key: "c", option: true)
+        case .toggleQuickTerminal:  return KeyShortcut(key: "`", command: false, control: true)
         }
     }
 }
@@ -150,7 +205,19 @@ final class KeyBindingStore: @unchecked Sendable {
     init() { load() }
 
     func shortcut(for action: ShortcutAction) -> KeyShortcut {
-        map[action.rawValue] ?? action.defaultShortcut
+        configOverrides[action] ?? map[action.rawValue] ?? action.defaultShortcut
+    }
+
+    /// `keybind` lines from the config file; they win over the GUI bindings.
+    private(set) var configOverrides: [ShortcutAction: KeyShortcut] = [:]
+
+    func isFromConfig(_ action: ShortcutAction) -> Bool { configOverrides[action] != nil }
+
+    func setConfigOverrides(_ overrides: [ShortcutAction: KeyShortcut]) {
+        guard overrides != configOverrides else { return }
+        configOverrides = overrides
+        version += 1
+        NotificationCenter.default.post(name: .keyBindingsChanged, object: nil)
     }
 
     /// The action currently bound to `s`, if any (used for conflict detection).

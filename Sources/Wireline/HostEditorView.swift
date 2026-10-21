@@ -27,77 +27,74 @@ struct HostEditorView: View {
     private var originalAlias: String? { context.host?.alias }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text(isEditing ? loc("编辑主机", "Edit Host") : loc("新建主机", "New Host"))
-                .font(WL.body.weight(.semibold)).foregroundStyle(WL.green)
-                .padding(.horizontal, 20).padding(.top, 22).padding(.bottom, 14)
-            Rectangle().fill(WL.border).frame(height: 1)
-
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    section(loc("身份", "Identity")) {
-                        field(loc("别名", "Alias")) {
-                            input(loc("如 web-hk-1", "e.g. web-hk-1"), $alias).focused($aliasFocused)
-                        }
-                        field(loc("分组", "Group")) { input(loc("如 Hong Kong", "e.g. Hong Kong"), $group) }
-                        field(loc("描述", "Description")) { input("", $descriptionText) }
-                    }
-                    section(loc("连接", "Connection")) {
-                        field(loc("主机 / IP", "HostName / IP")) { input("", $hostname) }
-                        field(loc("用户", "User")) { input("root", $user) }
-                        field(loc("端口", "Port")) { input("22", $portText) }
-                        field(loc("跳板机 (ProxyJump)", "Jump Host (ProxyJump)")) {
-                            input(loc("可选", "optional bastion alias"), $proxyJump)
-                        }
-                        field(loc("启动参数", "Launch args")) {
-                            input(loc("可选，如 -o HostKeyAlgorithms=+ssh-rsa",
-                                      "optional, e.g. -o HostKeyAlgorithms=+ssh-rsa"), $launchArgs)
-                        }
-                    }
-                    section(loc("认证", "Authentication")) {
-                        Picker("", selection: $authMethod) {
-                            Text(loc("公钥", "Public Key")).tag(AuthMethod.key)
-                            Text(loc("密码", "Password")).tag(AuthMethod.password)
-                        }
-                        .pickerStyle(.segmented).labelsHidden()
-                        if authMethod == .key {
-                            field(loc("密钥文件", "Identity File")) { identityPicker }
-                        } else {
-                            field(loc("密码 (存入 Keychain)", "Password (stored in Keychain)")) {
-                                secure($password)
-                            }
-                            Toggle(isOn: $autoSudo) {
-                                Text(loc("登录后自动 sudo -i", "Auto-run sudo -i after login"))
-                                    .font(WL.small).foregroundStyle(WL.textPrimary)
-                            }.toggleStyle(.checkbox).tint(WL.green)
-                        }
-                    }
+        WLSheet(isEditing ? loc("编辑主机", "Edit Host") : loc("新建主机", "New Host"),
+                subtitle: isEditing ? originalAlias : loc("填写连接信息与认证方式", "Connection details and authentication"),
+                symbol: "server.rack", width: 480, height: 580,
+                onClose: { dismiss() }) {
+            WLFormSection(loc("身份", "Identity")) {
+                row(loc("别名", "Alias")) {
+                    TextField("", text: $alias,
+                              prompt: Text(loc("如 web-hk-1", "e.g. web-hk-1")).foregroundStyle(WL.textDim))
+                        .wlField(font: WL.body, focus: $aliasFocused)
                 }
-                .padding(20)
+                WLFormDivider()
+                row(loc("分组", "Group")) { input(loc("如 Hong Kong", "e.g. Hong Kong"), $group) }
+                WLFormDivider()
+                row(loc("描述", "Description")) { input("", $descriptionText) }
             }
-
-            Rectangle().fill(WL.border).frame(height: 1)
-            HStack(spacing: 18) {
-                if isEditing {
-                    Button {
-                        if let h = context.host { store.delete(h) }
-                        dismiss()
-                    } label: {
-                        Text("[\(loc("删除", "Delete"))]").font(WL.small).foregroundStyle(WL.red)
-                    }.buttonStyle(.plain)
+            WLFormSection(loc("连接", "Connection")) {
+                row(loc("主机 / IP", "HostName / IP")) { input("", $hostname) }
+                WLFormDivider()
+                row(loc("用户", "User")) { input("root", $user) }
+                WLFormDivider()
+                row(loc("端口", "Port")) { input("22", $portText) }
+                WLFormDivider()
+                row(loc("跳板机 (ProxyJump)", "Jump Host (ProxyJump)")) {
+                    input(loc("可选", "optional bastion alias"), $proxyJump)
                 }
-                Spacer()
-                BracketButton(loc("取消", "Cancel")) { dismiss() }
-                Button(action: save) {
-                    Text("[\(isEditing ? loc("保存", "Save") : loc("添加", "Add"))]")
-                        .font(WL.small).foregroundStyle(canSave ? WL.green : WL.textDim)
-                }.buttonStyle(.plain).disabled(!canSave)
+                WLFormDivider()
+                stacked(loc("启动参数", "Launch args")) {
+                    input(loc("可选，如 -o HostKeyAlgorithms=+ssh-rsa",
+                              "optional, e.g. -o HostKeyAlgorithms=+ssh-rsa"), $launchArgs)
+                }
             }
-            .padding(.horizontal, 20).padding(.vertical, 18)
+            WLFormSection(loc("认证", "Authentication"),
+                          footer: authMethod == .password
+                            ? loc("密码存入 Keychain。", "The password is stored in the Keychain.") : nil) {
+                WLSegmented(selection: $authMethod, options: [
+                    WLOption(AuthMethod.key, loc("公钥", "Public Key"), symbol: "key"),
+                    WLOption(AuthMethod.password, loc("密码", "Password"), symbol: "lock"),
+                ])
+                .padding(.vertical, 10)
+                WLFormDivider()
+                if authMethod == .key {
+                    stacked(loc("密钥文件", "Identity File")) { identityPicker }
+                } else {
+                    row(loc("密码", "Password")) { secure($password) }
+                    WLFormDivider()
+                    Toggle(isOn: $autoSudo) {
+                        Text(loc("登录后自动 sudo -i", "Auto-run sudo -i after login"))
+                            .font(WL.body).foregroundStyle(WL.textPrimary)
+                    }
+                    .toggleStyle(.wlSwitch)
+                    .frame(minHeight: 38).padding(.vertical, 4)
+                }
+            }
+        } footer: {
+            if isEditing {
+                Button(loc("删除", "Delete")) {
+                    if let h = context.host { store.delete(h) }
+                    dismiss()
+                }
+                .buttonStyle(.wlDestructive)
+            }
+            Spacer()
+            Button(loc("取消", "Cancel")) { dismiss() }
+                .buttonStyle(.wlSecondary).keyboardShortcut(.cancelAction)
+            Button(isEditing ? loc("保存", "Save") : loc("添加", "Add"), action: save)
+                .buttonStyle(.wlPrimary).keyboardShortcut(.defaultAction)
+                .disabled(!canSave)
         }
-        .frame(width: 480, height: 580)
-        .background(WL.bg)
-        .preferredColorScheme(.dark)
         .onAppear {
             populate()
             DispatchQueue.main.async { aliasFocused = true }
@@ -106,18 +103,18 @@ struct HostEditorView: View {
 
     private var canSave: Bool { !alias.trimmingCharacters(in: .whitespaces).isEmpty }
 
-    private func section<V: View>(_ title: String, @ViewBuilder _ content: () -> V) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(title).font(WL.small.weight(.semibold)).foregroundStyle(WL.green).textCase(.uppercase)
-            content()
-        }
+    /// Label on the left, field on the right.
+    private func row<V: View>(_ label: String, @ViewBuilder _ content: () -> V) -> some View {
+        WLFormRow(label) { content().frame(width: 240) }
     }
 
-    private func field<V: View>(_ label: String, @ViewBuilder _ content: () -> V) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
+    /// Label above a full-width control, for long values.
+    private func stacked<V: View>(_ label: String, @ViewBuilder _ content: () -> V) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
             Text(label).font(WL.small).foregroundStyle(WL.textDim)
             content()
         }
+        .padding(.vertical, 10)
     }
 
     /// Dropdown of private keys discovered in `~/.ssh`, plus a browse escape hatch
@@ -143,12 +140,11 @@ struct HostEditorView: View {
                     Image(systemName: "chevron.up.chevron.down").font(.system(size: 10)).foregroundStyle(WL.textDim)
                 }
                 .padding(.horizontal, 10).padding(.vertical, 7)
-                .background(WL.surface, in: RoundedRectangle(cornerRadius: WL.radius(5)))
-                .overlay(RoundedRectangle(cornerRadius: WL.radius(5)).stroke(WL.border, lineWidth: WL.borderWidth))
+                .background(WL.bg.opacity(0.5), in: RoundedRectangle(cornerRadius: WL.radius(6)))
+                .overlay(RoundedRectangle(cornerRadius: WL.radius(6)).stroke(WL.border.opacity(0.6), lineWidth: 1))
             }
             .menuStyle(.borderlessButton).menuIndicator(.hidden)
-            Button(loc("浏览…", "Browse…")) { browseForKey() }
-                .buttonStyle(.plain).font(WL.small).foregroundStyle(WL.green)
+            BracketButton(loc("浏览…", "Browse…")) { browseForKey() }
         }
     }
 
@@ -179,18 +175,11 @@ struct HostEditorView: View {
 
     private func input(_ prompt: String, _ text: Binding<String>) -> some View {
         TextField("", text: text, prompt: Text(prompt).foregroundStyle(WL.textDim))
-            .textFieldStyle(.plain).font(WL.body).foregroundStyle(WL.textPrimary)
-            .padding(.horizontal, 10).padding(.vertical, 7)
-            .background(WL.surface, in: RoundedRectangle(cornerRadius: WL.radius(5)))
-            .overlay(RoundedRectangle(cornerRadius: WL.radius(5)).stroke(WL.border, lineWidth: WL.borderWidth))
+            .wlField(font: WL.body)
     }
 
     private func secure(_ text: Binding<String>) -> some View {
-        SecureField("", text: text)
-            .textFieldStyle(.plain).font(WL.body).foregroundStyle(WL.textPrimary)
-            .padding(.horizontal, 10).padding(.vertical, 7)
-            .background(WL.surface, in: RoundedRectangle(cornerRadius: WL.radius(5)))
-            .overlay(RoundedRectangle(cornerRadius: WL.radius(5)).stroke(WL.border, lineWidth: WL.borderWidth))
+        SecureField("", text: text).wlField(font: WL.body)
     }
 
     private func populate() {

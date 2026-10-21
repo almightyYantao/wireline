@@ -17,6 +17,12 @@ enum WL {
     static var purple: Color      { Palette.shared.purple }
     static var teal: Color        { Palette.shared.teal }
 
+    // Appearance — follows the active theme's background brightness.
+    static var isLight: Bool { Palette.shared.isLight }
+    static var colorScheme: ColorScheme { isLight ? .light : .dark }
+    /// Scale a shadow / scrim opacity tuned for dark chrome down for light themes.
+    static func depth(_ darkOpacity: Double) -> Double { isLight ? darkOpacity * 0.45 : darkOpacity }
+
     // Shape / density — driven by the active theme (see `Palette`).
     /// A corner radius scaled by the theme (base defaults to the stock 6pt).
     static func radius(_ base: CGFloat = 6) -> CGFloat {

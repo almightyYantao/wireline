@@ -110,5 +110,7 @@ final class GlobalHotKeys {
         "\\": kVK_ANSI_Backslash, ";": kVK_ANSI_Semicolon,
         "'": kVK_ANSI_Quote, ",": kVK_ANSI_Comma,
         ".": kVK_ANSI_Period, "/": kVK_ANSI_Slash, "`": kVK_ANSI_Grave,
+        "left": kVK_LeftArrow, "right": kVK_RightArrow, "up": kVK_UpArrow, "down": kVK_DownArrow,
+        "return": kVK_Return,
     ]
 }

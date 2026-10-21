@@ -13,7 +13,7 @@ struct PortForwardView: View {
             HStack {
                 Button { editing = nil; showEditor = true } label: {
                     Text(loc("$ 新建隧道", "$ new tunnel")).font(WL.body).foregroundStyle(WL.green)
-                }.buttonStyle(.plain)
+                }.buttonStyle(.wlPlain)
                 Spacer()
                 Text(loc("\(forwards.forwards.count) 条", "\(forwards.forwards.count)")).font(WL.small).foregroundStyle(WL.textDim)
             }
@@ -82,7 +82,7 @@ struct ForwardRow: View {
             Button(action: onToggle) {
                 Text(running ? "[\(loc("停止", "Stop"))]" : "[\(loc("启动", "Start"))]").font(WL.small)
                     .foregroundStyle(running ? WL.red : WL.green)
-            }.buttonStyle(.plain)
+            }.buttonStyle(.wlPlain)
             BracketButton(loc("编辑", "Edit"), action: onEdit)
             BracketButton(loc("删除", "Delete"), action: onDelete)
         }
@@ -105,41 +105,37 @@ struct ForwardEditor: View {
     @State private var remotePort = ""
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text(existing == nil ? loc("新建隧道", "New Tunnel") : loc("编辑隧道", "Edit Tunnel"))
-                .font(WL.body.weight(.semibold)).foregroundStyle(WL.green)
-                .padding(.horizontal, 20).padding(.top, 22).padding(.bottom, 14)
-            Rectangle().fill(WL.border).frame(height: 1)
-
-            VStack(alignment: .leading, spacing: 14) {
-                field(loc("跳板/主机", "Via host")) {
-                    Picker("", selection: $hostAlias) {
-                        Text(loc("选择主机…", "Select host…")).tag("")
-                        ForEach(store.hosts) { Text($0.alias).tag($0.alias) }
-                    }
-                    .labelsHidden().font(WL.body)
+        WLSheet(existing == nil ? loc("新建隧道", "New Tunnel") : loc("编辑隧道", "Edit Tunnel"),
+                subtitle: loc("把本地端口经 SSH 映射到远端服务", "Map a local port to a remote service over SSH"),
+                symbol: "point.topleft.down.to.point.bottomright.curvepath", width: 460, height: 470,
+                onClose: { dismiss() }) {
+            WLFormSection(loc("经由", "Via")) {
+                WLFormRow(loc("跳板/主机", "Via host")) {
+                    WLMenuPicker(selection: $hostAlias,
+                                 options: [WLOption("", loc("选择主机…", "Select host…"))]
+                                    + store.hosts.map { WLOption($0.alias, $0.alias) },
+                                 minWidth: 200)
                 }
-                field(loc("备注", "Label")) { themedField(loc("可选，如 Prod DB", "optional, e.g. Prod DB"), $label) }
-                field(loc("本地端口", "Local port")) { themedField(loc("如 5432", "e.g. 5432"), $localPort) }
-                field(loc("远端主机", "Remote host")) { themedField(loc("主机可达的服务地址", "service reachable from the host"), $remoteHost) }
-                field(loc("远端端口", "Remote port")) { themedField(loc("如 5432", "e.g. 5432"), $remotePort) }
+                WLFormDivider()
+                row(loc("备注", "Label")) { themedField(loc("可选，如 Prod DB", "optional, e.g. Prod DB"), $label) }
             }
-            .padding(18)
-
+            WLFormSection(loc("端口映射", "Mapping"),
+                          footer: loc("远端主机填从所选主机可达的地址，如 127.0.0.1。",
+                                      "The remote host is resolved from the selected host, e.g. 127.0.0.1.")) {
+                row(loc("本地端口", "Local port")) { themedField(loc("如 5432", "e.g. 5432"), $localPort) }
+                WLFormDivider()
+                row(loc("远端主机", "Remote host")) { themedField(loc("主机可达的服务地址", "service reachable from the host"), $remoteHost) }
+                WLFormDivider()
+                row(loc("远端端口", "Remote port")) { themedField(loc("如 5432", "e.g. 5432"), $remotePort) }
+            }
+        } footer: {
             Spacer()
-            Rectangle().fill(WL.border).frame(height: 1)
-            HStack(spacing: 18) {
-                Spacer()
-                BracketButton(loc("取消", "Cancel")) { dismiss() }
-                Button(action: save) {
-                    Text(existing == nil ? "[\(loc("添加", "Add"))]" : "[\(loc("保存", "Save"))]").font(WL.small)
-                        .foregroundStyle(canSave ? WL.green : WL.textDim)
-                }.buttonStyle(.plain).disabled(!canSave)
-            }.padding(.horizontal, 20).padding(.vertical, 18)
+            Button(loc("取消", "Cancel")) { dismiss() }
+                .buttonStyle(.wlSecondary).keyboardShortcut(.cancelAction)
+            Button(existing == nil ? loc("添加", "Add") : loc("保存", "Save"), action: save)
+                .buttonStyle(.wlPrimary).keyboardShortcut(.defaultAction)
+                .disabled(!canSave)
         }
-        .frame(width: 460, height: 430)
-        .background(WL.bg)
-        .preferredColorScheme(.dark)
         .onAppear(perform: populate)
     }
 
@@ -147,19 +143,13 @@ struct ForwardEditor: View {
         !hostAlias.isEmpty && Int(localPort) != nil && Int(remotePort) != nil
     }
 
-    private func field<V: View>(_ label: String, @ViewBuilder _ content: () -> V) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Text(label).font(WL.small).foregroundStyle(WL.textDim)
-            content()
-        }
+    private func row<V: View>(_ label: String, @ViewBuilder _ content: () -> V) -> some View {
+        WLFormRow(label) { content().frame(width: 220) }
     }
 
     private func themedField(_ prompt: String, _ text: Binding<String>) -> some View {
         TextField("", text: text, prompt: Text(prompt).foregroundStyle(WL.textDim))
-            .textFieldStyle(.plain).font(WL.body).foregroundStyle(WL.textPrimary)
-            .padding(.horizontal, 10).padding(.vertical, 7)
-            .background(WL.surface, in: RoundedRectangle(cornerRadius: WL.radius(5)))
-            .overlay(RoundedRectangle(cornerRadius: WL.radius(5)).stroke(WL.border, lineWidth: WL.borderWidth))
+            .wlField(font: WL.body)
     }
 
     private func populate() {

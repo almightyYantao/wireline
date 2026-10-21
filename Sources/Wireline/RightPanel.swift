@@ -61,6 +61,11 @@ struct RightPanel: View {
                 sessionArea
             }
         }
+        // Switching tool ↔ terminal cross-fades instead of cutting. Each side
+        // mounts at its final size, so the terminal never resizes mid-fade.
+        .id(operation)
+        .transition(.opacity)
+        .animation(Motion.resolved(Motion.fade), value: operation)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(WL.bg.opacity(store.terminalOpacity * WL.chromeOpacity))
         .onReceive(NotificationCenter.default.publisher(for: .toggleAI)) { _ in
@@ -69,13 +74,13 @@ struct RightPanel: View {
                 // Open but not focused → just focus it (don't hide). Only hide
                 // when it already has focus, so ⌘I acts as "bring me to the AI".
                 if aiFocused {
-                    showAI = false
+                    wlAnimateTerminalLayout { showAI = false }
                     sessions.focusActiveTerminal()
                 } else {
                     aiFocused = true
                 }
             } else {
-                showAI = true   // AIPanelView.onAppear takes focus on appear.
+                wlAnimateTerminalLayout { showAI = true }   // AIPanelView.onAppear takes focus on appear.
             }
         }
         .onChange(of: sessions.activeID) { _, _ in
@@ -95,7 +100,7 @@ struct RightPanel: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .searchTerminal)) { _ in
             guard sessions.activeSession != nil else { return }
-            showSearch = true
+            wlAnimate(Motion.banner) { showSearch = true }
             DispatchQueue.main.async { searchFocused = true }
         }
     }
@@ -108,16 +113,17 @@ struct RightPanel: View {
     private var sessionArea: some View {
         // AI panel sits BESIDE the terminal (a real column that shrinks the
         // terminal), not on top of it — so its translucent background reveals the
-        // wallpaper, never the terminal underneath. No width animation, so the
-        // terminal reflows exactly once (no garbling).
+        // wallpaper, never the terminal underneath. The column slides in while the
+        // terminal grid is frozen (see TerminalResizeGate), so it reflows once.
         HStack(spacing: 0) {
             terminalColumn
             if showAI {
                 Rectangle().fill(WL.border).frame(width: 1)
                 AIPanelView(session: sessions.activeSession,
                             host: activeHost,
-                            onClose: { showAI = false; sessions.focusActiveTerminal() },
+                            onClose: { wlAnimateTerminalLayout { showAI = false }; sessions.focusActiveTerminal() },
                             inputFocused: $aiFocused)
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
                     // Bind the panel's identity to the conversation (per host; all
                     // local shells share "__local__"), so switching to a *different*
                     // host gives it a fresh view with that host's transcript. The
@@ -144,18 +150,30 @@ struct RightPanel: View {
                     .overlay(alignment: .trailing) { broadcastToggle.padding(.trailing, 8) }
                 Rectangle().fill(WL.border).frame(height: 1)
                 if showBroadcast {
-                    broadcastBar
-                    Rectangle().fill(WL.border).frame(height: 1)
+                    VStack(spacing: 0) {
+                        broadcastBar
+                        Rectangle().fill(WL.border).frame(height: 1)
+                    }
+                    .transition(.move(edge: .top).combined(with: .opacity))
                 }
             }
             if let tab = sessions.activeTab, tab.sessionIDs.count > 1 {
-                // A merged tab: render its split layout.
-                PaneTreeView(node: tab, aiOpen: showAI)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                // A merged tab: render its split layout — or just the zoomed pane.
+                Group {
+                    if let z = sessions.zoomedSession(inTab: tab.id), let leaf = tab.leafID(for: z) {
+                        PaneLeafView(paneID: leaf, sessionID: z, aiOpen: showAI, zoomed: true)
+                    } else {
+                        PaneTreeView(node: tab, aiOpen: showAI)
+                    }
+                }
+                .id(sessions.zoomedSession(inTab: tab.id))
+                .transition(.opacity)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let session = sessions.activeSession {
                 ConnectionInfoBar(session: session)
                 Rectangle().fill(WL.border).frame(height: 1)
                 TerminalHostView(session: session, autoFocus: !showAI).id(session.id)
+                    .wlTerminalPadding(store)
                     .overlay(alignment: .top) {
                         if showSearch { terminalSearchBar(session) }
                         else if session.connectionState == .disconnected {
@@ -166,7 +184,8 @@ struct RightPanel: View {
                         if session.activeEditor == "vim" { VimHintView() }
                     }
                     .overlay { InlineAICommandView(session: session, isActive: true) }
-                    .animation(.easeInOut(duration: 0.2), value: session.connectionState)
+                    .animation(Motion.banner, value: session.connectionState)
+                    .animation(Motion.banner, value: showSearch)
                     .overlay(dropTargeted ? WL.teal.opacity(0.12) : .clear)
                     .background(GeometryReader { geo in
                         Color.clear
@@ -202,7 +221,7 @@ struct RightPanel: View {
 
     private var broadcastToggle: some View {
         Button {
-            showBroadcast.toggle()
+            wlAnimateTerminalLayout(Motion.disclose, duration: 0.3) { showBroadcast.toggle() }
             if showBroadcast { DispatchQueue.main.async { broadcastFocused = true } }
         } label: {
             HStack(spacing: 4) {
@@ -212,8 +231,9 @@ struct RightPanel: View {
             .foregroundStyle(showBroadcast ? WL.bg : WL.textDim)
             .padding(.horizontal, 8).padding(.vertical, 4)
             .background(showBroadcast ? WL.amber : WL.surface.opacity(0.6), in: Capsule())
+            .animation(Motion.state, value: showBroadcast)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.wlPlain)
         .help(loc("广播输入到所有会话", "Broadcast input to all sessions"))
     }
 
@@ -227,7 +247,9 @@ struct RightPanel: View {
                 .focused($broadcastFocused)
                 .onSubmit(sendBroadcast)
             BracketButton(loc("发送", "Send"), action: sendBroadcast)
-            BracketButton(loc("关闭", "Close")) { showBroadcast = false }
+            BracketButton(loc("关闭", "Close")) {
+                wlAnimateTerminalLayout(Motion.disclose, duration: 0.3) { showBroadcast = false }
+            }
         }
         .padding(.horizontal, 18).padding(.vertical, 8)
         .background(WL.amber.opacity(0.12))
@@ -279,20 +301,22 @@ struct RightPanel: View {
             Divider().frame(height: 14)
             Button { runFind(session, forward: false) } label: {
                 Image(systemName: "chevron.up").font(WL.small)
-            }.buttonStyle(.plain).disabled(matchTotal == 0)
+            }.buttonStyle(.wlPlain).disabled(matchTotal == 0)
                 .help(loc("上一个 (⇧⏎)", "Previous (⇧⏎)"))
             Button { runFind(session, forward: true) } label: {
                 Image(systemName: "chevron.down").font(WL.small)
-            }.buttonStyle(.plain).disabled(matchTotal == 0)
+            }.buttonStyle(.wlPlain).disabled(matchTotal == 0)
                 .help(loc("下一个 (⏎)", "Next (⏎)"))
             Button(action: closeSearch) { Image(systemName: "xmark").font(WL.small) }
-                .buttonStyle(.plain).help(loc("关闭 (Esc)", "Close (Esc)"))
+                .buttonStyle(.wlPlain).help(loc("关闭 (Esc)", "Close (Esc)"))
         }
         .foregroundStyle(WL.textDim)
         .padding(.horizontal, 10).padding(.vertical, 6)
         .background(WL.surface, in: RoundedRectangle(cornerRadius: WL.radius(8)))
         .overlay(RoundedRectangle(cornerRadius: WL.radius(8)).stroke(WL.border, lineWidth: WL.borderWidth))
+        .shadow(color: .black.opacity(0.25), radius: 10, y: 4)
         .padding(8)
+        .transition(.wlSlide(.top))
         .onExitCommand(perform: closeSearch)
     }
 
@@ -312,7 +336,7 @@ struct RightPanel: View {
                 .overlay(RoundedRectangle(cornerRadius: 4)
                     .stroke(isOn.wrappedValue ? Color.clear : WL.border, lineWidth: WL.borderWidth))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.wlPlain)
         .help(help)
     }
 
@@ -342,7 +366,7 @@ struct RightPanel: View {
 
     private func closeSearch() {
         sessions.activeSession?.terminalView.clearSearch()
-        showSearch = false
+        wlAnimate(Motion.popOut) { showSearch = false }
         searchTerm = ""
         matchIndex = 0; matchTotal = 0
     }
@@ -353,6 +377,7 @@ struct RightPanel: View {
 struct SessionTabBar: View {
     @Environment(SessionStore.self) private var sessions
     @Environment(\.openWindow) private var openWindow
+    @Environment(Localizer.self) private var loc
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
@@ -364,9 +389,11 @@ struct SessionTabBar: View {
                 Button {
                     openLocalShell(sessions: sessions, openWindow: openWindow)
                 } label: {
-                    Text("+").font(WL.mono(15)).foregroundStyle(WL.textDim)
-                        .padding(.horizontal, 14).padding(.vertical, 8)
-                }.buttonStyle(.plain)
+                    Image(systemName: "plus").font(.system(size: 11, weight: .medium))
+                }
+                .buttonStyle(.wlIcon)
+                .padding(.horizontal, 6)
+                .help(loc("新建本地终端", "New local terminal"))
                 Spacer()
             }
         }
@@ -388,6 +415,7 @@ struct SessionTab: View {
     let tab: PaneNode
     let isActive: Bool
     @State private var hover = false
+    @State private var closeHover = false
     @State private var isEditing = false
     @State private var draft = ""
     @FocusState private var focused: Bool
@@ -441,21 +469,29 @@ struct SessionTab: View {
                 UnreadDot()
             }
             Button { closeTab() } label: {
-                Text("[x]").font(WL.small)
-                    .foregroundStyle(hover ? WL.red : WL.textDim.opacity(0.7))
-            }.buttonStyle(.plain)
+                Image(systemName: "xmark").font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(closeHover ? WL.textPrimary : WL.textDim)
+                    .frame(width: 16, height: 16)
+                    .background(WL.textPrimary.opacity(closeHover ? 0.1 : 0), in: RoundedRectangle(cornerRadius: WL.radius(4)))
+            }.buttonStyle(.wlPlain)
+            .wlHover($closeHover)
+            .opacity(hover || isActive ? 1 : 0)
+            .help(loc("关闭标签", "Close tab"))
         }
-        .padding(.horizontal, 14).padding(.vertical, 9)
-        .background(isActive ? WL.surface : .clear)
+        .padding(.leading, 14).padding(.trailing, 8).padding(.vertical, 9)
+        .background(isActive ? WL.surface.opacity(0.7) : (hover ? WL.textPrimary.opacity(0.04) : .clear))
         .overlay(alignment: .bottom) {
-            Rectangle().fill(WL.green).frame(height: 2).opacity(isActive ? 1 : 0)
+            Capsule().fill(WL.green).frame(height: 2).padding(.horizontal, 10).opacity(isActive ? 1 : 0)
         }
+        .animation(Motion.state, value: isActive)
+        .animation(Motion.state, value: running)
+        .animation(Motion.state, value: unread)
         .contentShape(Rectangle())
         .simultaneousGesture(TapGesture(count: 2).onEnded { if !isEditing, soleSession != nil { beginEdit() } })
         .simultaneousGesture(TapGesture(count: 1).onEnded { if !isEditing { sessions.focusTab(tab.id) } })
         // Drag this tab onto another tab's pane to merge them into a split.
         .onDrag { NSItemProvider(object: tab.id.uuidString as NSString) }
-        .onHover { hover = $0; TitleBarZoomGuard.shared.pointerInNoZoomZone = $0 }
+        .wlHover($hover) { TitleBarZoomGuard.shared.pointerInNoZoomZone = $0 }
         .help(tooltip)
         .contextMenu {
             if soleSession != nil { Button(loc("重命名…", "Rename…")) { beginEdit() } }
@@ -489,7 +525,6 @@ struct SessionTab: View {
 /// settles to a softly-glowing green when connected, and turns red on disconnect.
 struct ConnectionStatusDot: View {
     let state: ConnectionState
-    @State private var pulse = false
 
     private var color: Color {
         switch state {
@@ -501,11 +536,9 @@ struct ConnectionStatusDot: View {
 
     var body: some View {
         Circle().fill(color).frame(width: 8, height: 8)
-            .opacity(state == .connecting && pulse ? 0.25 : 1)
+            .wlPulse(state == .connecting, period: 0.7, low: 0.25)
             .shadow(color: color.opacity(0.7), radius: state == .connected ? 3 : 0)
-            .animation(.easeInOut(duration: 0.3), value: state)
-            .onAppear { startPulseIfConnecting() }
-            .onChange(of: state) { _, _ in pulse = false; startPulseIfConnecting() }
+            .animation(Motion.state, value: state)
             .help(label)
     }
 
@@ -517,11 +550,6 @@ struct ConnectionStatusDot: View {
         case .disconnected: return l.t("已断开", "Disconnected")
         }
     }
-
-    private func startPulseIfConnecting() {
-        guard state == .connecting else { return }
-        withAnimation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true)) { pulse = true }
-    }
 }
 
 /// A small green dot marking a backgrounded tab that has produced output you
@@ -531,25 +559,22 @@ struct UnreadDot: View {
         Circle().fill(WL.green).frame(width: 6, height: 6)
             .overlay(Circle().stroke(WL.bg.opacity(0.4), lineWidth: 1))
             .help(Localizer.shared.t("有新输出", "New output"))
-            .transition(.scale.combined(with: .opacity))
+            .transition(.wlBadge)
     }
 }
 
 struct RunningBadge: View {
     @Environment(Localizer.self) private var loc
-    @State private var pulse = false
 
     var body: some View {
         HStack(spacing: 4) {
             Circle().fill(WL.amber).frame(width: 5, height: 5)
-                .opacity(pulse ? 0.3 : 1)
+                .wlPulse(period: 0.8)
             Text(loc("运行中…", "running…")).font(WL.caption).foregroundStyle(WL.amber)
         }
         .padding(.horizontal, 5).padding(.vertical, 1)
         .background(WL.amber.opacity(0.12), in: Capsule())
-        .onAppear {
-            withAnimation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true)) { pulse = true }
-        }
+        .transition(.wlBadge)
     }
 }
 
@@ -561,7 +586,6 @@ struct RunningBadge: View {
 struct DisconnectedBanner: View {
     @Environment(Localizer.self) private var loc
     let session: TerminalSession
-    @State private var hover = false
 
     var body: some View {
         HStack(spacing: 10) {
@@ -573,18 +597,15 @@ struct DisconnectedBanner: View {
                     Image(systemName: "arrow.clockwise").font(WL.small)
                     Text(loc("重新连接", "Reconnect")).font(WL.small.weight(.semibold))
                 }
-                .foregroundStyle(hover ? WL.bg : WL.greenBright)
-                .padding(.horizontal, 10).padding(.vertical, 4)
-                .background(hover ? WL.greenBright : WL.green.opacity(0.14), in: Capsule())
             }
-            .buttonStyle(.plain)
-            .onHover { hover = $0 }
+            .buttonStyle(.wlPill(WL.green))
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
         .background(.ultraThinMaterial, in: Capsule())
         .overlay(Capsule().stroke(WL.border, lineWidth: WL.borderWidth))
+        .shadow(color: .black.opacity(0.25), radius: 10, y: 4)
         .padding(.top, 10)
-        .transition(.move(edge: .top).combined(with: .opacity))
+        .transition(.wlSlide(.top))
     }
 }
 
@@ -601,23 +622,28 @@ struct ConnectionInfoBar: View {
     private var host: Host? { store.hosts.first { $0.alias == session.alias } }
 
     var body: some View {
-        HStack(spacing: 18) {
-            HStack(spacing: 8) {
-                ConnectionStatusDot(state: session.connectionState)
-                Text(endpoint).font(WL.body).foregroundStyle(endpointColor)
-            }
-            if let host {
-                info(loc("端口", "Port"), String(host.effectivePort))
-            }
-            info(loc("协议", "Protocol"), "SSH-2")
-            info(loc("延迟", "Latency"), latency)
+        HStack(spacing: 10) {
+            ConnectionStatusDot(state: session.connectionState)
+            Text(endpoint).font(WL.small.weight(.medium)).foregroundStyle(endpointColor)
+                .lineLimit(1).truncationMode(.middle)
+            Text(meta).font(WL.caption).foregroundStyle(WL.textDim).lineLimit(1)
+                .contentTransition(.numericText())
+                .animation(Motion.state, value: latency)
             Spacer()
-            logButton
-            BracketButton(loc("片段", "Snippets")) { showSnippets = true }
-            BracketButton(loc("断开", "Disconnect")) { sessions.close(session.id) }
-            BracketButton(loc("重连", "Reconnect")) { reconnect() }
+            HStack(spacing: 2) {
+                recordButton
+                Button { showSnippets = true } label: {
+                    Image(systemName: "text.badge.plus").font(.system(size: 11, weight: .medium))
+                }.buttonStyle(.wlIcon).help(loc("片段", "Snippets"))
+                Button(action: reconnect) {
+                    Image(systemName: "arrow.clockwise").font(.system(size: 11, weight: .medium))
+                }.buttonStyle(.wlIcon).help(loc("重新连接", "Reconnect"))
+                Button { sessions.close(session.id) } label: {
+                    Image(systemName: "power").font(.system(size: 11, weight: .medium))
+                }.buttonStyle(.wlIcon).help(loc("断开", "Disconnect"))
+            }
         }
-        .padding(.horizontal, 18).padding(.vertical, 9)
+        .padding(.leading, 18).padding(.trailing, 10).frame(height: 34)
         // Transparent so the panel's translucent background (and the wallpaper
         // behind it) shows through here too, instead of an opaque strip.
         .background(.clear)
@@ -626,28 +652,34 @@ struct ConnectionInfoBar: View {
         }
     }
 
-    private func info(_ k: String, _ v: String) -> some View {
-        HStack(spacing: 5) {
-            Text("\(k):").font(WL.small).foregroundStyle(WL.textDim)
-            Text(v).font(WL.small).foregroundStyle(WL.textPrimary)
+    /// "SSH-2 · :2222 · 23 ms" — quiet metadata after the endpoint.
+    private var meta: String {
+        // A local shell has no protocol or latency — show where it is instead.
+        guard case .ssh = session.kind else {
+            return session.currentDirectory.map { ($0 as NSString).abbreviatingWithTildeInPath } ?? ""
         }
+        var parts = ["SSH-2"]
+        if let host, host.effectivePort != 22 { parts.append(":\(host.effectivePort)") }
+        parts.append(latency)
+        return parts.joined(separator: " · ")
     }
 
-    /// Toggle output logging; when a log exists, right-click / long items reveal it.
-    @ViewBuilder private var logButton: some View {
-        if session.isLogging {
-            Button {
-                session.toggleLogging()
-                if let url = session.logURL { NSWorkspace.shared.activateFileViewerSelecting([url]) }
-            } label: {
-                Text("[● \(loc("录制中", "recording"))]").font(WL.small).foregroundStyle(WL.red)
-            }
-            .buttonStyle(.plain)
-            .help(loc("停止录制并在访达中显示", "Stop recording and reveal in Finder"))
-        } else {
-            BracketButton(loc("录制", "Record")) { session.toggleLogging() }
-                .help(loc("把本会话输出录制到日志文件", "Record this session's output to a log file"))
+    /// Toggle output logging. While recording the icon turns red and pulses;
+    /// stopping reveals the log in Finder.
+    private var recordButton: some View {
+        Button {
+            let wasLogging = session.isLogging
+            session.toggleLogging()
+            if wasLogging, let url = session.logURL { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+        } label: {
+            Image(systemName: session.isLogging ? "record.circle.fill" : "record.circle")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(session.isLogging ? WL.red : WL.textDim)
+                .wlPulse(session.isLogging, period: 1.0, low: 0.45)
         }
+        .buttonStyle(.wlIcon(tint: session.isLogging ? WL.red : nil))
+        .help(session.isLogging ? loc("停止录制并在访达中显示", "Stop recording and reveal in Finder")
+                                : loc("把本会话输出录制到日志文件", "Record this session's output to a log file"))
     }
 
     private var endpoint: String {
@@ -665,8 +697,8 @@ struct ConnectionInfoBar: View {
     }
 
     private var latency: String {
-        if case .online(let ms)? = store.statuses[session.alias] { return "\(ms)ms" }
-        return "--"
+        if case .online(let ms)? = store.statuses[session.alias] { return "\(ms) ms" }
+        return "-- ms"
     }
 
     /// Relaunch the PTY in place — keeps the scrollback and tab, and works for
@@ -685,9 +717,11 @@ struct StatusBar: View {
     var body: some View {
         let stats = session.stats.stats
         TimelineView(.periodic(from: .now, by: 1)) { ctx in
-            HStack(spacing: 16) {
-                Text("[\(connLabel)]").font(WL.small).bold()
-                Text("SSH-2").font(WL.small)
+            HStack(spacing: 14) {
+                HStack(spacing: 6) {
+                    Circle().fill(barColor).frame(width: 6, height: 6)
+                    Text(connLabel).foregroundStyle(WL.textPrimary)
+                }
                 if isSSH {
                     metric("CPU", stats.cpuPercent.map { String(format: "%.0f%%", $0) })
                     metric("MEM", stats.memPercent.map { p in
@@ -696,13 +730,14 @@ struct StatusBar: View {
                     })
                 }
                 Spacer()
-                if isSSH, let t = stats.remoteTime { Text(loc("远端 \(t)", "remote \(t)")).font(WL.small) }
-                Text(loc("时长 \(elapsed(to: ctx.date))", "up \(elapsed(to: ctx.date))")).font(WL.small)
+                if isSSH, let t = stats.remoteTime { Text(loc("远端 \(t)", "remote \(t)")) }
+                Text(elapsed(to: ctx.date))
             }
-            .foregroundStyle(WL.bg)
-            .padding(.horizontal, 18).padding(.vertical, 5)
-            .background(barColor)
-            .animation(.easeInOut(duration: 0.3), value: session.connectionState)
+            .font(WL.caption).monospacedDigit()
+            .foregroundStyle(WL.textDim)
+            .padding(.horizontal, 18).frame(height: 24)
+            .overlay(alignment: .top) { Rectangle().fill(WL.border.opacity(0.5)).frame(height: 1) }
+            .animation(Motion.state, value: session.connectionState)
         }
     }
 
@@ -720,14 +755,14 @@ struct StatusBar: View {
         switch session.connectionState {
         case .connecting:   return WL.amber
         case .connected:    return WL.green
-        case .disconnected: return WL.red.opacity(0.85)
+        case .disconnected: return WL.red
         }
     }
 
     private func metric(_ key: String, _ value: String?) -> some View {
         HStack(spacing: 4) {
-            Text("\(key):").font(WL.small).bold()
-            Text(value ?? "--").font(WL.small)
+            Text(key)
+            Text(value ?? "--").foregroundStyle(WL.textPrimary.opacity(0.85))
         }
     }
 

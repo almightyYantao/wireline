@@ -10,6 +10,9 @@ struct SSHKey: Identifiable {
     var publicKey: String     // the full public-key line
     var fingerprint: String   // e.g. "SHA256:…"
     var type: String          // e.g. "ED25519"
+
+    /// The private key file beside the `.pub` ("" for vault-only entries).
+    var privatePath: String { pubPath.isEmpty ? "" : String(pubPath.dropLast(4)) }
 }
 
 /// Lists `~/.ssh` public keys, generates new key pairs, and deploys a key to a
@@ -20,6 +23,10 @@ final class KeyManagerModel {
     var keys: [SSHKey] = []
     var status = ""
     var busy = false
+    /// Set when protecting a passphrase-encrypted key: drives the passphrase sheet.
+    var passphraseRequest: SSHKey?
+
+    let agent = SSHAgentController.shared
 
     private var sshDir: URL {
         FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".ssh", isDirectory: true)
@@ -39,8 +46,76 @@ final class KeyManagerModel {
                 result.append(SSHKey(name: String(f.dropLast(4)), pubPath: url.path,
                                      publicKey: line, fingerprint: fp, type: type))
             }
+            // Protected keys whose `.pub` is gone still need a row (to unprotect).
+            for info in agent.keys where !result.contains(where: { $0.fingerprint == info.fingerprint }) {
+                result.append(SSHKey(name: (info.originalPath as NSString).lastPathComponent, pubPath: "",
+                                     publicKey: info.publicKeyLine, fingerprint: info.fingerprint,
+                                     type: info.keyType))
+            }
             keys = result.sorted { $0.name < $1.name }
         }
+    }
+
+    // MARK: Touch ID protection
+
+    /// Import the key into the Keychain vault behind Touch ID. Asks for the
+    /// passphrase (via `passphraseRequest`) when the file is encrypted.
+    func protect(_ key: SSHKey, passphrase: String? = nil) {
+        let loc = Localizer.shared
+        busy = true
+        status = loc("正在保护 \(key.name)…", "Protecting \(key.name)…")
+        Task {
+            defer { busy = false }
+            do {
+                let info = try await agent.protect(privatePath: key.privatePath, passphrase: passphrase)
+                status = agent.originalExposed(info)
+                    ? loc("已用 Touch ID 保护 \(key.name)。注意：未加密的原私钥仍在 ~/.ssh，ssh 仍可不经 Touch ID 直接读取它；建议把它移到废纸篓（可随时还原）。",
+                          "\(key.name) is now protected by Touch ID. Note: the unencrypted original is still in ~/.ssh, so ssh can still read it without Touch ID — consider moving it to the Trash (reversible).")
+                    : loc("已用 Touch ID 保护 \(key.name)。原私钥有口令保护，保留它不影响安全。",
+                          "\(key.name) is now protected by Touch ID. The original is passphrase-encrypted, so keeping it is fine.")
+                reload()
+            } catch SSHAgentController.ProtectError.needsPassphrase {
+                status = ""
+                passphraseRequest = key
+            } catch {
+                status = error.localizedDescription
+            }
+        }
+    }
+
+    func moveOriginalToTrash(_ info: ProtectedKeyInfo) {
+        let loc = Localizer.shared
+        Task {
+            do {
+                try await agent.moveOriginalToTrash(info)
+                status = loc("原私钥已移到废纸篓，.pub 保留。之后用这把密钥都需要 Touch ID。",
+                             "Original moved to the Trash; the .pub stays. Every use of this key now needs Touch ID.")
+            } catch {
+                status = error.localizedDescription
+            }
+        }
+    }
+
+    func unprotect(_ key: SSHKey, _ info: ProtectedKeyInfo) {
+        let loc = Localizer.shared
+        Task {
+            do {
+                try await agent.unprotect(info)
+                status = info.movedToTrash
+                    ? loc("已取消保护，私钥已还原到 \(info.originalPath)。", "Protection removed; the key was restored to \(info.originalPath).")
+                    : loc("已取消 \(key.name) 的 Touch ID 保护。", "Touch ID protection removed from \(key.name).")
+                reload()
+            } catch {
+                status = error.localizedDescription
+            }
+        }
+    }
+
+    func copySnippet() {
+        guard let snippet = agent.configSnippet else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(snippet, forType: .string)
+        status = Localizer.shared.t("已复制配置片段", "Snippet copied")
     }
 
     /// `ssh-keygen -l -f` prints e.g. "256 SHA256:abc… comment (ED25519)".
@@ -168,18 +243,23 @@ struct KeyManagerView: View {
     @State private var genName = "id_ed25519"
     @State private var genComment = ""
     @State private var genPass = ""
+    @State private var passphrase = ""
+    @AppStorage(TouchIDGate.graceKey) private var graceSeconds = 300
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 22) {
                 existingKeys
-                Rectangle().fill(WL.border).frame(height: 1)
+                agentSection
                 generateForm
                 if !model.status.isEmpty {
                     Text(model.status).font(WL.small).foregroundStyle(WL.textDim)
+                        .padding(.horizontal, 4)
+                        .transition(.opacity)
                 }
             }
-            .padding(18)
+            .animation(Motion.state, value: model.status)
+            .padding(22)
         }
         .onAppear {
             if genComment.isEmpty {
@@ -187,43 +267,195 @@ struct KeyManagerView: View {
             }
             model.reload()
         }
+        .sheet(item: $model.passphraseRequest) { key in passphraseSheet(key) }
     }
 
     private var existingKeys: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 7) {
             HStack {
-                Text(loc("现有密钥", "Existing keys")).font(WL.body.weight(.semibold)).foregroundStyle(WL.green)
+                Text(loc("现有密钥", "Existing keys")).font(WL.caption.weight(.semibold)).foregroundStyle(WL.textDim)
+                    .textCase(.uppercase).tracking(0.6)
                 Spacer()
-                BracketButton(loc("导入", "Import")) { pickAndImport() }
-                BracketButton(loc("刷新", "Refresh")) { model.reload() }
+                Button(loc("刷新", "Refresh")) { model.reload() }.buttonStyle(.wlSecondary)
+                Button(loc("导入…", "Import…")) { pickAndImport() }.buttonStyle(.wlSecondary)
             }
-            if model.keys.isEmpty {
-                Text(loc("~/.ssh 下没有找到公钥。", "No public keys found in ~/.ssh."))
-                    .font(WL.small).foregroundStyle(WL.textDim)
-            } else {
-                ForEach(model.keys) { key in keyRow(key) }
+            .padding(.leading, 4)
+            VStack(alignment: .leading, spacing: 0) {
+                if model.keys.isEmpty {
+                    Text(loc("~/.ssh 下没有找到公钥。", "No public keys found in ~/.ssh."))
+                        .font(WL.small).foregroundStyle(WL.textDim)
+                        .frame(maxWidth: .infinity, minHeight: 60)
+                } else {
+                    ForEach(Array(model.keys.enumerated()), id: \.element.id) { i, key in
+                        if i > 0 { WLFormDivider() }
+                        keyRow(key)
+                    }
+                }
             }
+            .padding(.horizontal, 14).padding(.vertical, 4)
+            .wlCard()
         }
     }
 
     private func keyRow(_ key: SSHKey) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 8) {
-                Image(systemName: "key.fill").foregroundStyle(WL.amber).font(WL.small)
-                Text(key.name).font(WL.body).foregroundStyle(WL.textPrimary)
-                if !key.type.isEmpty {
-                    Text(key.type).font(WL.caption).foregroundStyle(WL.textDim)
-                        .padding(.horizontal, 6).padding(.vertical, 1)
-                        .background(WL.surface, in: Capsule())
+        let protected = model.agent.info(forFingerprint: key.fingerprint) != nil
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .center, spacing: 10) {
+                Image(systemName: protected ? "touchid" : "key.fill")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(protected ? WL.green : WL.amber)
+                    .frame(width: 28, height: 28)
+                    .background((protected ? WL.green : WL.amber).opacity(0.12),
+                                in: RoundedRectangle(cornerRadius: WL.radius(7)))
+                    .help(protected ? loc("每次使用都需要 Touch ID", "Every use requires Touch ID") : "")
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 6) {
+                        Text(key.name).font(WL.body).foregroundStyle(WL.textPrimary)
+                        if !key.type.isEmpty {
+                            Text(key.type).font(WL.caption).foregroundStyle(WL.textDim)
+                                .padding(.horizontal, 6).padding(.vertical, 1)
+                                .background(WL.bg.opacity(0.5), in: Capsule())
+                        }
+                        if protected {
+                            Text("Touch ID").font(WL.caption.weight(.semibold)).foregroundStyle(WL.green)
+                                .padding(.horizontal, 6).padding(.vertical, 1)
+                                .background(WL.green.opacity(0.12), in: Capsule())
+                                .transition(.wlBadge)
+                        }
+                    }
+                    Text(key.fingerprint).font(WL.caption).foregroundStyle(WL.textDim)
+                        .lineLimit(1).truncationMode(.middle).textSelection(.enabled)
                 }
-                Spacer()
-                BracketButton(loc("复制公钥", "Copy")) { model.copyToPasteboard(key) }
-                deployMenu(key)
+                Spacer(minLength: 8)
+                Button(loc("复制公钥", "Copy")) { model.copyToPasteboard(key) }.buttonStyle(.wlSecondary)
+                if !key.pubPath.isEmpty { deployMenu(key) }
             }
-            Text(key.fingerprint).font(WL.caption).foregroundStyle(WL.textDim).textSelection(.enabled)
+            protectionRow(key)
         }
-        .padding(10)
-        .background(WL.surface.opacity(0.4), in: RoundedRectangle(cornerRadius: WL.radius(6)))
+        .padding(.vertical, 10)
+        .animation(Motion.state, value: protected)
+    }
+
+    /// Protect / unprotect actions, plus the "original still readable" warning.
+    @ViewBuilder
+    private func protectionRow(_ key: SSHKey) -> some View {
+        if let info = model.agent.info(forFingerprint: key.fingerprint) {
+            let exposed = model.agent.originalExposed(info)
+            VStack(alignment: .leading, spacing: 8) {
+                if exposed {
+                    HStack(alignment: .top, spacing: 6) {
+                        Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 10))
+                            .foregroundStyle(WL.amber).padding(.top, 1)
+                        Text(loc("未加密的原私钥仍在 \(info.originalPath)，ssh 可以不经 Touch ID 直接读取它。",
+                                 "The unencrypted original is still at \(info.originalPath); ssh can read it without Touch ID."))
+                            .font(WL.caption).foregroundStyle(WL.textPrimary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(WL.amber.opacity(0.1), in: RoundedRectangle(cornerRadius: WL.radius(6)))
+                } else if info.movedToTrash {
+                    Text(loc("原私钥已在废纸篓；取消保护会把它还原。", "The original is in the Trash; removing protection restores it."))
+                        .font(WL.caption).foregroundStyle(WL.textDim)
+                }
+                HStack(spacing: 8) {
+                    Spacer()
+                    Button(loc("取消保护", "Remove protection")) { model.unprotect(key, info) }
+                        .buttonStyle(.wlSecondary)
+                    if exposed {
+                        Button(loc("把原私钥移到废纸篓", "Move original to Trash")) { model.moveOriginalToTrash(info) }
+                            .buttonStyle(.wlPrimary)
+                    }
+                }
+            }
+            .padding(.leading, 38)
+        } else if !key.privatePath.isEmpty, FileManager.default.fileExists(atPath: key.privatePath) {
+            HStack {
+                Spacer()
+                Button { model.protect(key) } label: {
+                    Label(loc("用 Touch ID 保护", "Protect with Touch ID"), systemImage: "touchid")
+                }
+                .buttonStyle(.wlSecondary)
+            }
+        }
+    }
+
+    private func passphraseSheet(_ key: SSHKey) -> some View {
+        WLSheet(loc("输入 \(key.name) 的口令", "Passphrase for \(key.name)"),
+                subtitle: loc("口令只用来解密一份临时副本，导入后副本立即删除，口令不保存。",
+                              "Only decrypts a temporary copy, deleted right after import. Not stored."),
+                symbol: "touchid", width: 420, scrolls: false,
+                onClose: { passphrase = ""; model.passphraseRequest = nil }) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(loc("口令", "Passphrase")).font(WL.small).foregroundStyle(WL.textDim)
+                SecureField("", text: $passphrase)
+                    .wlField(font: WL.body)
+                    .onSubmit { submitPassphrase(key) }
+            }
+        } footer: {
+            Spacer()
+            Button(loc("取消", "Cancel")) { passphrase = ""; model.passphraseRequest = nil }
+                .buttonStyle(.wlSecondary).keyboardShortcut(.cancelAction)
+            Button(loc("继续", "Continue")) { submitPassphrase(key) }
+                .buttonStyle(.wlPrimary).keyboardShortcut(.defaultAction)
+                .disabled(passphrase.isEmpty)
+        }
+    }
+
+    private func submitPassphrase(_ key: SSHKey) {
+        guard !passphrase.isEmpty else { return }
+        let pass = passphrase
+        passphrase = ""
+        model.passphraseRequest = nil
+        model.protect(key, passphrase: pass)
+    }
+
+    private var agentSection: some View {
+        WLFormSection(loc("Touch ID 密钥代理", "Touch ID Key Agent"),
+                      footer: loc("验证通过后，这段时间内再用受保护的密钥不再弹 Touch ID；锁屏或睡眠后立即失效。",
+                                  "After you approve, protected keys are reused without another prompt for this long. Cleared on screen lock and sleep.")) {
+            WLFormRow(loc("状态", "Status"),
+                      detail: model.agent.isRunning
+                        ? loc("Wireline 打开的 ssh / sftp / scp 通过它使用受保护的密钥，其他密钥照常转发给系统原有的 ssh-agent。",
+                              "ssh / sftp / scp started by Wireline use protected keys through it; other keys go to your existing ssh-agent.")
+                        : loc("保护至少一把密钥后自动启动。", "Starts automatically once a key is protected.")) {
+                HStack(spacing: 6) {
+                    Circle().fill(model.agent.isRunning ? WL.green : WL.textDim.opacity(0.5)).frame(width: 7, height: 7)
+                    Text(model.agent.isRunning ? loc("运行中", "Running") : loc("未启动", "Idle"))
+                        .font(WL.small).foregroundStyle(model.agent.isRunning ? WL.green : WL.textDim)
+                }
+            }
+            if let err = model.agent.lastError {
+                Text(err).font(WL.small).foregroundStyle(WL.red).padding(.bottom, 8)
+            }
+            WLFormDivider()
+            WLFormRow(loc("免重复验证", "Re-use approval")) {
+                WLSegmented(selection: $graceSeconds,
+                            options: TouchIDGate.graceChoices.map { WLOption($0, graceLabel($0)) }, fill: false)
+            }
+            if let snippet = model.agent.configSnippet {
+                WLFormDivider()
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(loc("想让你自己的终端也用 Touch ID？把下面这段加到 ~/.ssh/config 开头（Wireline 不会自动修改该文件，且仅在 Wireline 运行时可用）：",
+                             "Want your own terminal to use Touch ID too? Add this to the top of ~/.ssh/config (Wireline never edits it, and it only works while Wireline is running):"))
+                        .font(WL.caption).foregroundStyle(WL.textDim)
+                        .fixedSize(horizontal: false, vertical: true)
+                    HStack(alignment: .top) {
+                        Text(snippet)
+                            .font(WL.mono(11)).foregroundStyle(WL.textPrimary).textSelection(.enabled)
+                        Spacer()
+                        Button(loc("复制", "Copy")) { model.copySnippet() }.buttonStyle(.wlSecondary)
+                    }
+                    .padding(10)
+                    .background(WL.bg.opacity(0.5), in: RoundedRectangle(cornerRadius: WL.radius(6)))
+                }
+                .padding(.vertical, 12)
+            }
+        }
+    }
+
+    private func graceLabel(_ seconds: Int) -> String {
+        seconds == 0 ? loc("每次", "Every time") : loc("\(seconds / 60) 分钟", "\(seconds / 60) min")
     }
 
     private func deployMenu(_ key: SSHKey) -> some View {
@@ -236,45 +468,42 @@ struct KeyManagerView: View {
                 }
             }
         } label: {
-            Text("[\(loc("部署到…", "Deploy to…"))]").font(WL.small).foregroundStyle(WL.textDim)
+            Text(loc("部署到…", "Deploy to…")).font(WL.small).foregroundStyle(WL.textPrimary)
         }
-        .menuStyle(.borderlessButton).fixedSize()
+        .menuStyle(.borderlessButton).menuIndicator(.visible).fixedSize()
     }
 
     private var generateForm: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(loc("生成新密钥", "Generate a new key")).font(WL.body.weight(.semibold)).foregroundStyle(WL.green)
-            HStack(spacing: 8) {
-                Text(loc("类型", "Type")).font(WL.small).foregroundStyle(WL.textDim).frame(width: 56, alignment: .leading)
-                Picker("", selection: $genType) {
-                    Text("ed25519").tag("ed25519")
-                    Text("rsa (4096)").tag("rsa")
-                    Text("ecdsa").tag("ecdsa")
-                }.labelsHidden().pickerStyle(.menu).fixedSize()
+        WLFormSection(loc("生成新密钥", "Generate a New Key")) {
+            WLFormRow(loc("类型", "Type")) {
+                WLSegmented(selection: $genType, options: [
+                    WLOption("ed25519", "ed25519"), WLOption("rsa", "rsa (4096)"), WLOption("ecdsa", "ecdsa"),
+                ], fill: false)
             }
-            field(loc("文件名", "File"), text: $genName)
-            field(loc("备注", "Comment"), text: $genComment)
-            HStack(spacing: 8) {
-                Text(loc("口令", "Passphrase")).font(WL.small).foregroundStyle(WL.textDim).frame(width: 56, alignment: .leading)
-                SecureField(loc("可留空", "optional"), text: $genPass)
-                    .textFieldStyle(.plain).font(WL.small).foregroundStyle(WL.textPrimary)
-                    .padding(6).background(WL.bg.opacity(0.6), in: RoundedRectangle(cornerRadius: WL.radius(5)))
-                    .overlay(RoundedRectangle(cornerRadius: WL.radius(5)).stroke(WL.border, lineWidth: WL.borderWidth))
+            WLFormDivider()
+            WLFormRow(loc("文件名", "File")) { field(text: $genName) }
+            WLFormDivider()
+            WLFormRow(loc("备注", "Comment")) { field(text: $genComment) }
+            WLFormDivider()
+            WLFormRow(loc("口令", "Passphrase")) {
+                SecureField("", text: $genPass, prompt: Text(loc("可留空", "optional")).foregroundStyle(WL.textDim))
+                    .frame(width: 240).wlField(font: WL.small)
             }
-            BracketButton(model.busy ? loc("生成中…", "Generating…") : loc("生成", "Generate")) {
-                model.generate(type: genType, name: genName, comment: genComment, passphrase: genPass)
+            WLFormDivider()
+            HStack {
+                Spacer()
+                Button(model.busy ? loc("生成中…", "Generating…") : loc("生成", "Generate")) {
+                    model.generate(type: genType, name: genName, comment: genComment, passphrase: genPass)
+                }
+                .buttonStyle(.wlPrimary)
+                .disabled(model.busy || genName.trimmingCharacters(in: .whitespaces).isEmpty)
             }
+            .padding(.vertical, 10)
         }
     }
 
-    private func field(_ label: String, text: Binding<String>) -> some View {
-        HStack(spacing: 8) {
-            Text(label).font(WL.small).foregroundStyle(WL.textDim).frame(width: 56, alignment: .leading)
-            TextField("", text: text)
-                .textFieldStyle(.plain).font(WL.small).foregroundStyle(WL.textPrimary)
-                .padding(6).background(WL.bg.opacity(0.6), in: RoundedRectangle(cornerRadius: WL.radius(5)))
-                .overlay(RoundedRectangle(cornerRadius: WL.radius(5)).stroke(WL.border, lineWidth: WL.borderWidth))
-        }
+    private func field(text: Binding<String>) -> some View {
+        TextField("", text: text).frame(width: 240).wlField(font: WL.small)
     }
 
     /// Pick key files from anywhere and import them into `~/.ssh`.

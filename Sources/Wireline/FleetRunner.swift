@@ -80,6 +80,7 @@ enum FleetRunner {
                 } else {
                     opts = ["-o", "BatchMode=yes"] + opts
                 }
+                SSHAgentEnvironment.apply(to: &env)
                 p.arguments = opts + [source, dest]
                 p.environment = env
                 let pipe = Pipe()
@@ -124,6 +125,7 @@ enum FleetRunner {
                 } else {
                     args = ["-o", "BatchMode=yes"] + args   // key-only: never block on a prompt
                 }
+                SSHAgentEnvironment.apply(to: &env)
                 args.append(alias)
                 args.append(command)
                 p.arguments = args

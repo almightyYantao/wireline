@@ -18,40 +18,38 @@ struct ThemeEditorView: View {
     @State private var advanced = false
 
     var body: some View {
-        ZStack {
-            WL.bg.ignoresSafeArea()
-            VStack(spacing: 0) {
-                header
-                Rectangle().fill(WL.border).frame(height: 1)
-                HStack(spacing: 0) {
-                    library.frame(width: 190)
-                    Rectangle().fill(WL.border).frame(width: 1)
-                    editor
-                }
+        WLSheet(loc("主题", "Themes"),
+                subtitle: loc("修改实时预览到整个应用；保存后成为自定义主题，关闭不保存则还原",
+                              "Edits preview live across the app; save to keep them, close to revert"),
+                symbol: "paintpalette", width: 640, height: 600, scrolls: false,
+                onClose: { dismiss() }) {
+            HStack(alignment: .top, spacing: 16) {
+                library
+                    .frame(width: 190)
+                    .frame(maxHeight: .infinity)
+                    .wlCard()
+                editor
             }
+            .frame(maxHeight: .infinity)
+        } footer: {
+            Button(loc("导入主题包", "Import")) { importPack() }
+                .buttonStyle(.wlSecondary)
+            Button(loc("导出主题包", "Export")) { exportPack() }
+                .buttonStyle(.wlSecondary)
+            Spacer()
+            if draft.isBuiltIn {
+                Text(loc("内置主题——编辑将另存为自定义", "Built-in — saving forks a custom copy"))
+                    .font(WL.caption).foregroundStyle(WL.textDim)
+            }
+            Button(loc("关闭", "Close")) { dismiss() }
+                .buttonStyle(.wlSecondary).keyboardShortcut(.cancelAction)
+            Button(draft.isBuiltIn ? loc("另存为自定义", "Save as custom") : loc("保存", "Save")) { save() }
+                .buttonStyle(.wlPrimary).keyboardShortcut(.defaultAction)
         }
-        .frame(width: 640, height: 600)
-        .preferredColorScheme(.dark)
         .onAppear { draft = store.activeTheme }
         // Live-preview across the whole app as the draft changes.
         .onChange(of: draft) { applyLive() }
         .onDisappear { store.applyActiveTheme() }   // revert any unsaved preview
-    }
-
-    // MARK: header
-
-    private var header: some View {
-        HStack(spacing: 12) {
-            Text("> theme").font(WL.mono(15, .bold)).foregroundStyle(WL.green)
-            Text(loc("自定义主题", "Custom themes")).font(WL.small).foregroundStyle(WL.textDim)
-            Spacer()
-            BracketButton(loc("导入主题包", "Import")) { importPack() }
-            BracketButton(loc("导出主题包", "Export")) { exportPack() }
-            Button { dismiss() } label: {
-                Image(systemName: "xmark").font(.system(size: 11, weight: .bold)).foregroundStyle(WL.textDim)
-            }.buttonStyle(.plain)
-        }
-        .padding(.horizontal, 18).padding(.top, 30).padding(.bottom, 12)
     }
 
     // MARK: library
@@ -67,7 +65,7 @@ struct ThemeEditorView: View {
                 }
                 .padding(10)
             }
-            Rectangle().fill(WL.border).frame(height: 1)
+            WLFormDivider()
             HStack(spacing: 8) {
                 BracketButton(loc("＋ 新建", "＋ New")) { newTheme() }
                 Spacer()
@@ -104,7 +102,7 @@ struct ThemeEditorView: View {
             .padding(.horizontal, 8).padding(.vertical, 6)
             .background(selected ? WL.green.opacity(0.14) : Color.clear,
                         in: RoundedRectangle(cornerRadius: WL.radius(5)))
-        }.buttonStyle(.plain)
+        }.buttonStyle(.wlPlain)
     }
 
     private func swatchDot(_ t: AppTheme) -> some View {
@@ -120,44 +118,42 @@ struct ThemeEditorView: View {
 
     private var editor: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                nameRow
+            VStack(alignment: .leading, spacing: 18) {
+                nameSection
                 colorSection
                 shapeSection
                 typeSection
                 backgroundSection
             }
-            .padding(18)
+            .padding(.trailing, 2)
         }
-        .overlay(alignment: .bottom) { saveBar }
     }
 
-    private var nameRow: some View {
-        HStack(spacing: 10) {
-            Text(loc("名称", "Name")).font(WL.body).foregroundStyle(WL.textPrimary)
-            TextField("", text: Binding(get: { draft.name }, set: { draft.name = $0 }))
-                .textFieldStyle(.plain).font(WL.body).foregroundStyle(WL.textPrimary)
-                .padding(.horizontal, 8).padding(.vertical, 5)
-                .background(WL.surface, in: RoundedRectangle(cornerRadius: WL.radius(5)))
-                .overlay(RoundedRectangle(cornerRadius: WL.radius(5)).stroke(WL.border, lineWidth: WL.borderWidth))
-                .disabled(draft.isBuiltIn)
-            if draft.isBuiltIn {
-                Text(loc("内置只读", "read-only")).font(WL.caption).foregroundStyle(WL.textDim)
+    private var nameSection: some View {
+        WLFormSection("") {
+            WLFormRow(loc("名称", "Name"), detail: draft.isBuiltIn ? loc("内置只读", "read-only") : nil) {
+                TextField("", text: Binding(get: { draft.name }, set: { draft.name = $0 }))
+                    .wlField(font: WL.body)
+                    .frame(width: 200)
+                    .disabled(draft.isBuiltIn)
             }
         }
     }
 
     private var colorSection: some View {
-        sec(loc("颜色", "Colors")) {
+        WLFormSection(loc("颜色", "Colors"),
+                      footer: loc("改这三色即可；16 色 ANSI 会自动推导。",
+                                  "Pick these three — the 16 ANSI colors are derived automatically.")) {
             HStack(spacing: 18) {
                 colorWell(loc("背景", "Background"), bind(\.background))
                 colorWell(loc("前景", "Foreground"), bind(\.foreground))
                 colorWell(loc("强调", "Accent"), bind(\.cursor))
                 Spacer()
             }
-            hint(loc("改这三色即可；16 色 ANSI 会自动推导。",
-                    "Pick these three — the 16 ANSI colors are derived automatically."))
-            ansiStrip
+            .padding(.vertical, 10)
+            WLFormDivider()
+            ansiStrip.padding(.vertical, 10)
+            WLFormDivider()
             DisclosureGroup(isExpanded: $advanced) {
                 ansiGrid.padding(.top, 8)
             } label: {
@@ -165,6 +161,7 @@ struct ThemeEditorView: View {
                     .font(WL.small).foregroundStyle(WL.green)
             }
             .tint(WL.green)
+            .padding(.vertical, 10)
         }
     }
 
@@ -191,72 +188,53 @@ struct ThemeEditorView: View {
     }
 
     private var shapeSection: some View {
-        sec(loc("形状与密度", "Shape & density")) {
+        WLFormSection(loc("形状与密度", "Shape & density")) {
             slider(loc("圆角", "Corner radius"), bindD(\.shape.radiusScale), 0, 2, "\(pct(draft.shape.radiusScale))")
+            WLFormDivider()
             slider(loc("边框粗细", "Border width"), bindD(\.shape.borderWidth), 0, 3, String(format: "%.1f", draft.shape.borderWidth))
-            HStack(spacing: 10) {
-                Text(loc("密度", "Density")).font(WL.body).foregroundStyle(WL.textPrimary)
-                Spacer()
-                Picker("", selection: Binding(get: { draft.shape.density }, set: { draft.shape.density = $0 })) {
-                    ForEach(AppTheme.Shape.Density.allCases) { d in
-                        Text(loc(d.label.0, d.label.1)).tag(d)
-                    }
-                }.labelsHidden().fixedSize()
+            WLFormDivider()
+            WLFormRow(loc("密度", "Density")) {
+                WLSegmented(selection: Binding(get: { draft.shape.density }, set: { draft.shape.density = $0 }),
+                            options: AppTheme.Shape.Density.allCases.map { WLOption($0, loc($0.label.0, $0.label.1)) },
+                            fill: false)
             }
         }
     }
 
     private var typeSection: some View {
-        sec(loc("字体", "Typography")) {
-            HStack(spacing: 10) {
-                Text(loc("字型", "Design")).font(WL.body).foregroundStyle(WL.textPrimary)
-                Spacer()
-                Picker("", selection: Binding(get: { draft.type.design }, set: { draft.type.design = $0 })) {
-                    ForEach(AppTheme.Typography.Design.allCases) { d in
-                        Text(loc(d.label.0, d.label.1)).tag(d)
-                    }
-                }.labelsHidden().fixedSize().disabled(draft.type.fontName != nil)
+        WLFormSection(loc("字体", "Typography")) {
+            WLFormRow(loc("字型", "Design")) {
+                WLMenuPicker(selection: Binding(get: { draft.type.design }, set: { draft.type.design = $0 }),
+                             options: AppTheme.Typography.Design.allCases.map { WLOption($0, loc($0.label.0, $0.label.1)) })
+                    .disabled(draft.type.fontName != nil)
             }
-            HStack(spacing: 10) {
-                Text(loc("字体", "Font")).font(WL.body).foregroundStyle(WL.textPrimary)
-                Spacer()
-                Picker("", selection: Binding(get: { draft.type.fontName }, set: { draft.type.fontName = $0 })) {
-                    Text(loc("跟随字型", "Follow design")).tag(String?.none)
-                    ForEach(Self.families, id: \.self) { Text($0).tag(String?.some($0)) }
-                }.labelsHidden().fixedSize()
+            WLFormDivider()
+            WLFormRow(loc("字体", "Font")) {
+                WLMenuPicker(selection: Binding(get: { draft.type.fontName }, set: { draft.type.fontName = $0 }),
+                             options: [WLOption(String?.none, loc("跟随字型", "Follow design"))]
+                                + FontCatalog.shared.allFamilies().map { WLOption(String?.some($0), $0) },
+                             minWidth: 160)
             }
+            WLFormDivider()
             slider(loc("字号缩放", "Size scale"), bindD(\.type.sizeScale), 0.8, 1.4, "\(pct(draft.type.sizeScale))")
         }
     }
 
     private var backgroundSection: some View {
-        sec(loc("背景", "Background")) {
-            HStack(spacing: 10) {
-                Text(loc("壁纸", "Wallpaper")).font(WL.body).foregroundStyle(WL.textPrimary)
-                Spacer()
-                Text(draft.background.imagePath.map { ($0 as NSString).lastPathComponent } ?? loc("无", "None"))
-                    .font(WL.small).foregroundStyle(WL.textDim).lineLimit(1)
-                BracketButton(loc("选择…", "Choose…")) { pickWallpaper() }
-                if draft.background.imagePath != nil {
-                    BracketButton(loc("清除", "Clear")) { draft.background.imagePath = nil }
+        WLFormSection(loc("背景", "Background")) {
+            WLFormRow(loc("壁纸", "Wallpaper")) {
+                HStack(spacing: 10) {
+                    Text(draft.background.imagePath.map { ($0 as NSString).lastPathComponent } ?? loc("无", "None"))
+                        .font(WL.small).foregroundStyle(WL.textDim).lineLimit(1).truncationMode(.middle)
+                    BracketButton(loc("选择…", "Choose…")) { pickWallpaper() }
+                    if draft.background.imagePath != nil {
+                        BracketButton(loc("清除", "Clear")) { draft.background.imagePath = nil }
+                    }
                 }
             }
+            WLFormDivider()
             slider(loc("面板不透明度", "Panel opacity"), bindD(\.background.chromeOpacity), 0.2, 1.0, "\(pct(draft.background.chromeOpacity))")
         }
-    }
-
-    private var saveBar: some View {
-        HStack(spacing: 10) {
-            Spacer()
-            if draft.isBuiltIn {
-                Text(loc("内置主题——编辑将另存为自定义", "Built-in — saving forks a custom copy"))
-                    .font(WL.caption).foregroundStyle(WL.textDim)
-            }
-            BracketButton(draft.isBuiltIn ? loc("另存为自定义", "Save as custom") : loc("保存", "Save")) { save() }
-        }
-        .padding(12)
-        .background(WL.bg.opacity(0.96))
-        .overlay(alignment: .top) { Rectangle().fill(WL.border).frame(height: 1) }
     }
 
     // MARK: actions
@@ -363,17 +341,6 @@ struct ThemeEditorView: View {
 
     // MARK: small builders
 
-    private func sec<V: View>(_ title: String, @ViewBuilder _ content: () -> V) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(title).font(WL.small.weight(.semibold)).foregroundStyle(WL.green).textCase(.uppercase)
-            content()
-        }
-    }
-
-    private func hint(_ t: String) -> some View {
-        Text(t).font(WL.caption).foregroundStyle(WL.textDim)
-    }
-
     private func colorWell(_ label: String, _ binding: Binding<Color>) -> some View {
         VStack(spacing: 5) {
             ColorPicker("", selection: binding, supportsOpacity: false).labelsHidden()
@@ -382,10 +349,12 @@ struct ThemeEditorView: View {
     }
 
     private func slider(_ label: String, _ value: Binding<Double>, _ lo: Double, _ hi: Double, _ readout: String) -> some View {
-        HStack(spacing: 10) {
-            Text(label).font(WL.body).foregroundStyle(WL.textPrimary).frame(width: 110, alignment: .leading)
-            Slider(value: value, in: lo...hi).tint(WL.green)
-            Text(readout).font(WL.small).foregroundStyle(WL.textDim).frame(width: 44, alignment: .trailing)
+        WLFormRow(label) {
+            HStack(spacing: 10) {
+                WLSlider(value: value, range: lo...hi, width: 150)
+                Text(readout).font(WL.small).monospacedDigit().foregroundStyle(WL.textDim)
+                    .frame(width: 40, alignment: .trailing)
+            }
         }
     }
 
@@ -426,6 +395,4 @@ struct ThemeEditorView: View {
         return [Double(ns.redComponent), Double(ns.greenComponent), Double(ns.blueComponent)]
     }
 
-    /// All installed font families, for the custom-font picker.
-    static let families: [String] = NSFontManager.shared.availableFontFamilies.sorted()
 }

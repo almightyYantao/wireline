@@ -20,31 +20,36 @@ struct FleetView: View {
     @State private var task: Task<Void, Never>?
 
     var body: some View {
-        VStack(spacing: 0) {
-            header
-            Rectangle().fill(WL.border).frame(height: 1)
-            HStack(spacing: 0) {
-                hostPicker.frame(width: 240)
-                Rectangle().fill(WL.border).frame(width: 1)
+        WLSheet(loc("舰队群跑", "Fleet Run"),
+                subtitle: loc("用自然语言描述目标，AI 生成一条命令，在选中的主机上并行执行并汇总",
+                              "Describe a goal, let the AI write one command, run it on many hosts in parallel"),
+                symbol: "square.grid.3x3.fill", width: 840, height: 640, scrolls: false,
+                onClose: onClose) {
+            HStack(alignment: .top, spacing: 16) {
+                hostPicker
+                    .frame(width: 230)
+                    .frame(maxHeight: .infinity)
+                    .wlCard()
                 main
             }
-        }
-        .frame(width: 840, height: 640)
-        .background(WL.bg)
-        .preferredColorScheme(.dark)
-        .onDisappear { task?.cancel() }
-    }
-
-    private var header: some View {
-        HStack {
-            Image(systemName: "square.grid.3x3.fill").foregroundStyle(WL.green)
-            Text(loc("舰队群跑", "Fleet Run")).font(WL.body.weight(.semibold)).foregroundStyle(WL.textPrimary)
+            .frame(maxHeight: .infinity)
+        } footer: {
+            if !results.isEmpty {
+                Button(summarizing ? loc("汇总中…", "Summarizing…") : loc("AI 汇总", "Summarize")) { summarize() }
+                    .buttonStyle(.wlSecondary)
+                    .disabled(summarizing || !ai.isConfigured)
+            }
+            if running { Text(loc("执行中…", "Running…")).font(WL.small).foregroundStyle(WL.amber) }
             Spacer()
-            Button(action: onClose) {
-                Image(systemName: "xmark").font(.system(size: 11, weight: .bold)).foregroundStyle(WL.textDim)
-            }.buttonStyle(.plain)
+            Button(loc("关闭", "Close"), action: onClose)
+                .buttonStyle(.wlSecondary).keyboardShortcut(.cancelAction)
+            // No Return shortcut: Return in the goal field generates, and running
+            // on a whole fleet should always be a deliberate click.
+            Button(loc("在 \(selected.count) 台执行", "Run on \(selected.count)"), action: runFleet)
+                .buttonStyle(.wlPrimary)
+                .disabled(!canRun)
         }
-        .padding(.horizontal, 18).padding(.top, 18).padding(.bottom, 12)
+        .onDisappear { task?.cancel() }
     }
 
     // MARK: hosts
@@ -53,35 +58,35 @@ struct FleetView: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
                 Text(loc("目标主机 (\(selected.count))", "Targets (\(selected.count))"))
-                    .font(WL.small.weight(.semibold)).foregroundStyle(WL.green)
+                    .font(WL.small.weight(.semibold)).foregroundStyle(WL.textPrimary)
                 Spacer()
                 BracketButton(selected.count == store.hosts.count ? loc("清空", "None") : loc("全选", "All")) {
                     if selected.count == store.hosts.count { selected.removeAll() }
                     else { selected = Set(store.hosts.map(\.alias)) }
                 }
             }
-            .padding(.horizontal, 14).padding(.vertical, 10)
-            Rectangle().fill(WL.border).frame(height: 1)
+            .padding(.horizontal, 12).padding(.vertical, 10)
+            WLFormDivider()
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     ForEach(store.hosts) { host in
-                        Button { toggle(host.alias) } label: {
-                            HStack(spacing: 8) {
-                                Image(systemName: selected.contains(host.alias) ? "checkmark.square.fill" : "square")
-                                    .foregroundStyle(selected.contains(host.alias) ? WL.green : WL.textDim)
+                        Toggle(isOn: Binding(get: { selected.contains(host.alias) },
+                                             set: { _ in toggle(host.alias) })) {
+                            HStack {
                                 VStack(alignment: .leading, spacing: 1) {
                                     Text(host.alias).font(WL.small).foregroundStyle(WL.textPrimary)
                                     if let g = host.group {
                                         Text(g).font(WL.caption).foregroundStyle(WL.textDim)
                                     }
                                 }
-                                Spacer()
+                                Spacer(minLength: 0)
                             }
-                            .padding(.horizontal, 14).padding(.vertical, 6)
-                            .contentShape(Rectangle())
-                        }.buttonStyle(.plain)
+                        }
+                        .toggleStyle(.wlCheckbox)
+                        .padding(.horizontal, 12).padding(.vertical, 6)
                     }
                 }
+                .padding(.vertical, 4)
             }
         }
     }
@@ -94,36 +99,22 @@ struct FleetView: View {
 
     private var main: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text(loc("目标（自然语言）", "Goal (natural language)")).font(WL.small).foregroundStyle(WL.textDim)
-            HStack(spacing: 8) {
-                TextField(loc("例如：检查磁盘和内存使用率", "e.g. check disk & memory usage"), text: $goal)
-                    .textFieldStyle(.plain).font(WL.body).foregroundStyle(WL.textPrimary)
-                    .padding(.horizontal, 10).padding(.vertical, 7)
-                    .background(WL.surface, in: RoundedRectangle(cornerRadius: WL.radius(5)))
-                    .overlay(RoundedRectangle(cornerRadius: WL.radius(5)).stroke(WL.border, lineWidth: WL.borderWidth))
-                    .onSubmit { generate() }
-                BracketButton(generating ? loc("生成中", "…") : loc("生成命令", "Generate")) { generate() }
-                    .disabled(generating || !ai.isConfigured)
+            VStack(alignment: .leading, spacing: 6) {
+                Text(loc("目标（自然语言）", "Goal (natural language)")).font(WL.small).foregroundStyle(WL.textDim)
+                HStack(spacing: 8) {
+                    TextField(loc("例如：检查磁盘和内存使用率", "e.g. check disk & memory usage"), text: $goal)
+                        .wlField(font: WL.body)
+                        .onSubmit { generate() }
+                    BracketButton(generating ? loc("生成中", "…") : loc("生成命令", "Generate")) { generate() }
+                        .disabled(generating || !ai.isConfigured)
+                }
             }
 
-            Text(loc("将执行的命令（可编辑）", "Command to run (editable)")).font(WL.small).foregroundStyle(WL.textDim)
-            TextField("df -h; free -h", text: $command)
-                .textFieldStyle(.plain).font(WL.mono(12)).foregroundStyle(WL.green)
-                .padding(.horizontal, 10).padding(.vertical, 7)
-                .background(WL.surface, in: RoundedRectangle(cornerRadius: WL.radius(5)))
-                .overlay(RoundedRectangle(cornerRadius: WL.radius(5)).stroke(WL.border, lineWidth: WL.borderWidth))
-
-            HStack {
-                Button(action: runFleet) {
-                    Text("[\(loc("在 \(selected.count) 台执行", "Run on \(selected.count)"))]")
-                        .font(WL.small).foregroundStyle(canRun ? WL.green : WL.textDim)
-                }.buttonStyle(.plain).disabled(!canRun)
-                if running { Text(loc("执行中…", "Running…")).font(WL.small).foregroundStyle(WL.amber) }
-                Spacer()
-                if !results.isEmpty {
-                    BracketButton(summarizing ? loc("汇总中", "…") : loc("AI 汇总", "Summarize")) { summarize() }
-                        .disabled(summarizing || !ai.isConfigured)
-                }
+            VStack(alignment: .leading, spacing: 6) {
+                Text(loc("将执行的命令（可编辑）", "Command to run (editable)")).font(WL.small).foregroundStyle(WL.textDim)
+                TextField("df -h; free -h", text: $command)
+                    .foregroundStyle(WL.green)
+                    .wlField()
             }
 
             if AICommandSafety.isDangerous(command) {
@@ -134,7 +125,6 @@ struct FleetView: View {
 
             resultsList
         }
-        .padding(18)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
@@ -168,8 +158,7 @@ struct FleetView: View {
                             .textSelection(.enabled)
                     }
                     .padding(9)
-                    .background(WL.surface.opacity(0.4), in: RoundedRectangle(cornerRadius: WL.radius(6)))
-                    .overlay(RoundedRectangle(cornerRadius: WL.radius(6)).stroke(WL.border, lineWidth: WL.borderWidth))
+                    .wlCard(radius: 6)
                 }
             }
         }

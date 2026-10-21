@@ -68,7 +68,13 @@ extension Terminal {
                     out.append(contentsOf: sgr(for: attr))
                     prev = attr
                 }
-                appendUTF8(cell.getCharacter(), to: &out)
+                // A never-written cell holds NUL, which a terminal ignores on
+                // replay — so the gap before a right-aligned prompt (placed by a
+                // cursor move, not spaces) would collapse and the right prompt
+                // would land right after the left one. Write it as a space, like
+                // Terminal.app and iTerm2 do, so every column keeps its place.
+                let ch = cell.getCharacter()
+                if ch == "\u{0}" { out.append(0x20) } else { appendUTF8(ch, to: &out) }
                 col += 1
             }
             out.append(contentsOf: sgrReset)

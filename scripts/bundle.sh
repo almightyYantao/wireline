@@ -85,6 +85,13 @@ if [[ -d "${BINDIR}/Sparkle.framework" ]]; then
         "${OUT}/Contents/MacOS/${APP_NAME}" 2>/dev/null || true
 fi
 
+# SwiftTerm's resources (the Metal shaders for GPU rendering). Its generated
+# `Bundle.module` looks in Contents/Resources; without it, turning on the GPU
+# renderer traps at launch.
+if [[ -d "${BINDIR}/SwiftTerm_SwiftTerm.bundle" ]]; then
+    cp -R "${BINDIR}/SwiftTerm_SwiftTerm.bundle" "${OUT}/Contents/Resources/"
+fi
+
 # Code signing.
 #
 # Keychain items are ACL-bound to the app's *code signing identity*. An ad-hoc

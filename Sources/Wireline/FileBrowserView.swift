@@ -206,7 +206,7 @@ struct FileBrowserView: View {
                         ForEach(crumbs, id: \.1) { crumb in
                             Button { onCrumb(crumb.1) } label: {
                                 Text(crumb.0).font(WL.small).foregroundStyle(WL.textPrimary)
-                            }.buttonStyle(.plain)
+                            }.buttonStyle(.wlPlain)
                             Text("/").font(WL.small).foregroundStyle(WL.textDim)
                         }
                     }
@@ -228,7 +228,7 @@ struct FileBrowserView: View {
                 .onSubmit { model.connect(withPassword: password); password = "" }
             Button { model.connect(withPassword: password); password = "" } label: {
                 Text("[\(loc("连接", "Connect"))]").font(WL.small).foregroundStyle(WL.green)
-            }.buttonStyle(.plain)
+            }.buttonStyle(.wlPlain)
         }
     }
 
@@ -265,6 +265,6 @@ struct EntryRow: View {
         }
         .overlay(alignment: .bottom) { Rectangle().fill(WL.border.opacity(0.4)).frame(height: 1) }
         .contentShape(Rectangle())
-        .onHover { hover = $0 }
+        .wlHover($hover)
     }
 }
