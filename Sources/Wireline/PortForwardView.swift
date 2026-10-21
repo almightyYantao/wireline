@@ -12,13 +12,12 @@ struct PortForwardView: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
                 Button { editing = nil; showEditor = true } label: {
-                    Text(loc("$ 新建隧道", "$ new tunnel")).font(WL.body).foregroundStyle(WL.green)
-                }.buttonStyle(.wlPlain)
+                    Label(loc("新建隧道", "New Tunnel"), systemImage: "plus").font(WL.small.weight(.medium))
+                }.buttonStyle(.wlPill())
                 Spacer()
                 Text(loc("\(forwards.forwards.count) 条", "\(forwards.forwards.count)")).font(WL.small).foregroundStyle(WL.textDim)
             }
-            .padding(.horizontal, 18).padding(.vertical, 10)
-            Rectangle().fill(WL.border).frame(height: 1)
+            .padding(.horizontal, 24).padding(.top, 14).padding(.bottom, 4)
 
             if forwards.forwards.isEmpty {
                 VStack(spacing: 8) {
@@ -30,7 +29,7 @@ struct PortForwardView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView {
-                    VStack(spacing: 0) {
+                    WLListCard {
                         ForEach(forwards.forwards) { forward in
                             ForwardRow(forward: forward) {
                                 forwards.toggle(forward, host: store.hosts.first { $0.alias == forward.hostAlias })
@@ -39,9 +38,9 @@ struct PortForwardView: View {
                             } onDelete: {
                                 forwards.remove(forward)
                             }
-                            Rectangle().fill(WL.border).frame(height: 1)
                         }
                     }
+                    .padding(.horizontal, 20).padding(.vertical, 12)
                 }
             }
         }
@@ -61,6 +60,7 @@ struct ForwardRow: View {
     var onToggle: () -> Void
     var onEdit: () -> Void
     var onDelete: () -> Void
+    @State private var hover = false
 
     private var running: Bool { forwards.isRunning(forward) }
 
@@ -79,15 +79,14 @@ struct ForwardRow: View {
                 }
             }
             Spacer()
-            Button(action: onToggle) {
-                Text(running ? "[\(loc("停止", "Stop"))]" : "[\(loc("启动", "Start"))]").font(WL.small)
-                    .foregroundStyle(running ? WL.red : WL.green)
-            }.buttonStyle(.wlPlain)
             BracketButton(loc("编辑", "Edit"), action: onEdit)
             BracketButton(loc("删除", "Delete"), action: onDelete)
+            Button(running ? loc("停止", "Stop") : loc("启动", "Start"), action: onToggle)
+                .buttonStyle(.wlChip(on: true, tint: running ? WL.red : WL.green))
         }
-        .padding(.horizontal, 18).padding(.vertical, 10)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .wlRowHighlight(hover: hover)
+        .wlHover($hover)
     }
 }
 

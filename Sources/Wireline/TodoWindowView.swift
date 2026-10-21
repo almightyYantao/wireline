@@ -39,6 +39,7 @@ struct TodoWindowView: View {
     @State private var recap: Recap?
     @State private var aiBusy = false
     @FocusState private var inputFocused: Bool
+    @FocusState private var searchFocused: Bool
 
     private var opacity: Double { hosts.terminalOpacity }
 
@@ -62,10 +63,9 @@ struct TodoWindowView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
-            Rectangle().fill(WL.border).frame(height: 1)
             inputRow
-            Rectangle().fill(WL.border).frame(height: 1)
             if !store.todos.isEmpty { filterBar }
+            WLFormDivider()
             list
         }
         .frame(minWidth: 400, minHeight: 440)
@@ -87,16 +87,13 @@ struct TodoWindowView: View {
 
     private var header: some View {
         HStack(spacing: 10) {
-            Text(loc("待办", "TODO")).font(WL.body.weight(.semibold)).foregroundStyle(WL.green)
-            Text("[\(store.activeCount)]").font(WL.small).foregroundStyle(WL.textDim)
+            Text(loc("待办", "TODO")).font(WL.mono(13, .semibold)).foregroundStyle(WL.textPrimary)
+            Text("\(store.activeCount)").font(WL.caption.monospacedDigit()).foregroundStyle(WL.textDim)
+                .contentTransition(.numericText())
+                .animation(Motion.state, value: store.activeCount)
             Spacer()
-            ForEach(TodoFilter.allCases, id: \.self) { f in
-                Button { filter = f } label: {
-                    Text(f.title(loc)).font(WL.small)
-                        .foregroundStyle(filter == f ? WL.greenBright : WL.textDim)
-                }
-                .buttonStyle(.wlPlain)
-            }
+            WLSegmented(selection: $filter,
+                        options: TodoFilter.allCases.map { WLOption($0, $0.title(loc)) }, fill: false)
             if TodoAI.isAvailable { aiMenu }
             if store.canUndo {
                 BracketButton(loc("撤销", "Undo")) { store.undo() }
@@ -115,9 +112,12 @@ struct TodoWindowView: View {
             Divider()
             Toggle(loc("智能添加(AI 解析时间)", "Smart add (AI parses dates)"), isOn: $smartAdd)
         } label: {
-            Text(aiBusy ? loc("AI…", "AI…") : "AI ▾").font(WL.small).foregroundStyle(WL.purple)
+            HStack(spacing: 4) {
+                Text(aiBusy ? loc("AI…", "AI…") : "AI")
+                Image(systemName: "chevron.down").font(.system(size: 7, weight: .bold))
+            }
         }
-        .menuStyle(.borderlessButton)
+        .menuStyle(.button).buttonStyle(.wlChip(on: true, tint: WL.purple)).menuIndicator(.hidden)
         .fixedSize()
         .disabled(aiBusy)
     }
@@ -128,12 +128,15 @@ struct TodoWindowView: View {
                 Image(systemName: "magnifyingglass").font(WL.small).foregroundStyle(WL.textDim)
                 TextField(loc("搜索…", "Search…"), text: $search)
                     .textFieldStyle(.plain).font(WL.small).foregroundStyle(WL.textPrimary)
+                    .focused($searchFocused)
                 if !search.isEmpty {
                     Button { search = "" } label: {
                         Image(systemName: "xmark.circle.fill").font(WL.small).foregroundStyle(WL.textDim)
                     }.buttonStyle(.wlPlain)
                 }
             }
+            .padding(.horizontal, 12).padding(.vertical, 6)
+            .wlSearchCapsule(focused: searchFocused)
             if !store.allTags.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 6) {
@@ -147,34 +150,34 @@ struct TodoWindowView: View {
                 }
             }
         }
-        .padding(.horizontal, 18).padding(.vertical, 8)
-        .background(WL.surface.opacity(0.25))
+        .padding(.horizontal, 18).padding(.bottom, 10)
     }
 
     private func tagChip(_ text: String, active: Bool, _ tap: @escaping () -> Void) -> some View {
-        Button(action: tap) {
-            Text(text).font(WL.caption)
-                .padding(.horizontal, 8).padding(.vertical, 3)
-                .background(active ? WL.green.opacity(0.2) : WL.surface.opacity(0.6), in: Capsule())
-                .foregroundStyle(active ? WL.greenBright : WL.textDim)
-                .overlay(Capsule().stroke(active ? WL.green.opacity(0.5) : WL.border, lineWidth: WL.borderWidth))
-        }
-        .buttonStyle(.wlPlain)
+        Button(action: tap) { Text(text) }
+            .buttonStyle(.wlChip(on: active))
     }
 
     private var inputRow: some View {
         HStack(spacing: 8) {
-            Text(smartAdd ? "✨" : ">").font(WL.body).foregroundStyle(smartAdd ? WL.purple : WL.green)
-            TextField(smartAdd ? loc("如：明天下午3点交周报", "e.g. submit report tomorrow 3pm")
-                               : loc("添加一条待办…", "Add a to-do…"), text: $draft)
-                .textFieldStyle(.plain)
-                .font(WL.body)
-                .foregroundStyle(WL.textPrimary)
-                .focused($inputFocused)
-                .onSubmit(commit)
-            BracketButton(loc("添加", "Add"), action: commit)
+            HStack(spacing: 8) {
+                Image(systemName: smartAdd ? "sparkles" : "plus")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(smartAdd ? WL.purple : WL.green)
+                TextField(smartAdd ? loc("如：明天下午3点交周报", "e.g. submit report tomorrow 3pm")
+                                   : loc("添加一条待办…", "Add a to-do…"), text: $draft)
+                    .textFieldStyle(.plain)
+                    .font(WL.body)
+                    .foregroundStyle(WL.textPrimary)
+                    .focused($inputFocused)
+                    .onSubmit(commit)
+            }
+            .padding(.horizontal, 12).padding(.vertical, 7)
+            .wlSearchCapsule(focused: inputFocused)
+            Button(loc("添加", "Add"), action: commit)
+                .buttonStyle(.wlPill())
         }
-        .padding(.horizontal, 18).padding(.vertical, 12)
+        .padding(.horizontal, 18).padding(.bottom, 10)
     }
 
     private var list: some View {
@@ -196,12 +199,10 @@ struct TodoWindowView: View {
                         if editingID == todo.id {
                             TodoEditor(todo: todo) { editingID = nil }
                         }
-                        Rectangle().fill(WL.border.opacity(0.4)).frame(height: 1)
-                            .padding(.leading, 18)
                     }
                 }
             }
-            .padding(.vertical, 4)
+            .padding(.vertical, 6)
         }
         // Only grab keys for list navigation when no inline editor is open —
         // otherwise space/return/etc. would fight the editor's text fields
@@ -283,8 +284,8 @@ struct TodoWindowView: View {
 
 // MARK: - Row
 
-/// One row: bracketed checkbox, star, title (struck through when done), a due-date
-/// badge, and a delete affordance on hover.
+/// One row: checkbox, star, title (struck through when done), a due-date
+/// badge, and edit / delete affordances on hover.
 private struct TodoRow: View {
     @Environment(TodoStore.self) private var store
     @Environment(Localizer.self) private var loc
@@ -298,17 +299,18 @@ private struct TodoRow: View {
     var body: some View {
         HStack(spacing: 10) {
             Button { store.toggle(todo) } label: {
-                Text(todo.done ? "[✓]" : "[ ]")
-                    .font(WL.body)
+                Image(systemName: todo.done ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 15))
                     .foregroundStyle(todo.done ? WL.green : WL.textDim)
+                    .contentTransition(.symbolEffect(.replace))
             }
             .buttonStyle(.wlPlain)
 
             Button {
                 var t = todo; t.priority.toggle(); store.update(t)
             } label: {
-                Text(todo.priority ? "★" : "☆")
-                    .font(WL.body)
+                Image(systemName: todo.priority ? "star.fill" : "star")
+                    .font(.system(size: 12))
                     .foregroundStyle(todo.priority ? WL.amber : WL.textDim.opacity(0.6))
             }
             .buttonStyle(.wlPlain)
@@ -334,20 +336,23 @@ private struct TodoRow: View {
 
             if hover {
                 Button(action: onEdit) {
-                    Text(loc("编辑", "edit")).font(WL.caption).foregroundStyle(WL.textDim)
+                    Image(systemName: "pencil").font(.system(size: 10, weight: .medium))
                 }
-                .buttonStyle(.wlPlain)
+                .buttonStyle(.wlIcon(size: 22))
+                .help(loc("编辑", "Edit"))
                 Button { store.remove(todo) } label: {
-                    Text("✕").font(WL.small).foregroundStyle(WL.red)
+                    Image(systemName: "trash").font(.system(size: 10, weight: .medium))
                 }
-                .buttonStyle(.wlPlain)
+                .buttonStyle(.wlIcon(tint: WL.red, size: 22))
+                .help(loc("删除", "Delete"))
             }
         }
-        .padding(.horizontal, 18).padding(.vertical, 9)
-        .background(rowBackground)
-        .overlay(alignment: .leading) {
-            if selected { Rectangle().fill(WL.green).frame(width: 2) }
-        }
+        .padding(.horizontal, 12).padding(.vertical, 8)
+        // An inset rounded highlight, like the host drawer's rows.
+        .background(rowBackground, in: RoundedRectangle(cornerRadius: WL.radius(10), style: .continuous))
+        .animation(Motion.hover, value: hover)
+        .animation(Motion.state, value: selected)
+        .padding(.horizontal, 8).padding(.vertical, 1)
         .wlHover($hover)
     }
 
@@ -372,8 +377,7 @@ private struct TodoRow: View {
 
     private var rowBackground: Color {
         if selected { return WL.green.opacity(0.12) }
-        if hover || expanded { return WL.surface.opacity(0.6) }
-        return .clear
+        return WL.textPrimary.opacity(hover || expanded ? 0.055 : 0)
     }
 
     private var dueColor: Color {
@@ -448,8 +452,9 @@ private struct TodoEditor: View {
                 BracketButton(loc("完成", "Done")) { commit(); onClose() }
             }
         }
-        .padding(.horizontal, 18).padding(.top, 4).padding(.bottom, 14)
-        .background(WL.surface.opacity(0.35))
+        .padding(14)
+        .wlCard()
+        .padding(.horizontal, 12).padding(.top, 2).padding(.bottom, 8)
         .onAppear {
             title = todo.title
             note = todo.note
@@ -472,7 +477,7 @@ private struct TodoEditor: View {
             ForEach(todo.subtasks) { sub in
                 HStack(spacing: 8) {
                     Button { store.toggleSubtask(sub.id, in: todo) } label: {
-                        Text(sub.done ? "[✓]" : "[ ]").font(WL.small)
+                        Image(systemName: sub.done ? "checkmark.circle.fill" : "circle").font(.system(size: 12))
                             .foregroundStyle(sub.done ? WL.green : WL.textDim)
                     }.buttonStyle(.wlPlain)
                     Text(sub.title).font(WL.small)
@@ -480,8 +485,8 @@ private struct TodoEditor: View {
                         .strikethrough(sub.done, color: WL.textDim)
                     Spacer()
                     Button { removeSubtask(sub.id) } label: {
-                        Text("✕").font(WL.caption).foregroundStyle(WL.red)
-                    }.buttonStyle(.wlPlain)
+                        Image(systemName: "xmark").font(.system(size: 8, weight: .semibold))
+                    }.buttonStyle(.wlIcon(tint: WL.red, size: 20))
                 }
                 .padding(.leading, 52)
             }
@@ -516,7 +521,7 @@ private struct TodoEditor: View {
                 .frame(width: 44, alignment: .leading)
             TextField(placeholder, text: text, axis: .vertical)
                 .lineLimit(1...4)
-                .wlField(font: WL.small)
+                .wlField(font: WL.small, multiline: true)
         }
     }
 

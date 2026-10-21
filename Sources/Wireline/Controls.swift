@@ -7,6 +7,76 @@ import AppKit
 // docs/design/motion-spec.md; each control keeps a native accessibility
 // representation so VoiceOver / keyboard users get the real thing.
 
+// MARK: - Surfaces
+
+// The card / capsule language (see docs/design/motion-spec.md §4.0): content
+// sits on a slightly deeper canvas (`WL.paneCanvas`) in raised cards; choices
+// sit in a capsule track with one raised pill that slides to the selection.
+// "Raised" always means one step above whatever it sits on: white on light
+// themes, a wash of the text colour on dark ones.
+extension WL {
+    /// The recessed capsule track behind segments (tab bar, segmented controls).
+    static var track: Color { textPrimary.opacity(isLight ? 0.06 : 0.08) }
+    /// The selected segment's raised pill inside a track.
+    static var raised: Color { isLight ? Color.white : textPrimary.opacity(0.12) }
+    /// A card's fill: raised over both the theme background and the canvas.
+    static var cardFill: Color { isLight ? Color.white.opacity(0.9) : textPrimary.opacity(0.045) }
+    /// The 1pt edge of cards, pills and floating surfaces.
+    static var hairline: Color { textPrimary.opacity(isLight ? 0.09 : 0.11) }
+    /// The resting wash of an input field (search, text fields, the AI input).
+    static var fieldFill: Color { textPrimary.opacity(isLight ? 0.05 : 0.055) }
+}
+
+extension View {
+    /// A capsule track holding segments; pair each segment with
+    /// `wlSegmentPill(active:hover:in:)` and animate the selection with
+    /// `Motion.slide`.
+    func wlCapsuleTrack(padding: CGFloat = 3) -> some View {
+        self.padding(padding)
+            .background(Capsule(style: .continuous).fill(WL.track))
+    }
+
+    /// One segment's background in a capsule track: the selected one is a single
+    /// raised pill matched across the track (so it slides); the others get a
+    /// faint wash of the *same* capsule on hover — never a different shape.
+    func wlSegmentPill(active: Bool, hover: Bool, in ns: Namespace.ID, id: String = "pill") -> some View {
+        background {
+            let shape = Capsule(style: .continuous)
+            if active {
+                shape.fill(WL.raised)
+                    .shadow(color: .black.opacity(WL.depth(0.18)), radius: 3, y: 1)
+                    .overlay(shape.strokeBorder(WL.hairline.opacity(WL.isLight ? 0.8 : 0.6), lineWidth: 1))
+                    .matchedGeometryEffect(id: id, in: ns)
+            } else {
+                shape.fill(WL.textPrimary.opacity(hover ? 0.05 : 0))
+            }
+        }
+    }
+
+    /// A floating surface (modal card, banner, find bar, the AI panel): theme
+    /// background, hairline edge, and a shadow on the *shape* only — on the
+    /// content it would shadow every glyph.
+    func wlFloating<S: InsettableShape>(_ shape: S, fill: Color = WL.bg,
+                                        shadow: Double = 0.3, radius: CGFloat = 16, y: CGFloat = 5) -> some View {
+        background {
+            shape.fill(fill)
+                .shadow(color: .black.opacity(WL.depth(shadow)), radius: radius, y: y)
+        }
+        .overlay { shape.strokeBorder(WL.hairline, lineWidth: 1).allowsHitTesting(false) }
+    }
+
+    /// Inline search / filter field chrome: a capsule wash that deepens, and an
+    /// accent edge that fades in, while focused. Put the icon, field and clear
+    /// button inside; the caller supplies the padding.
+    func wlSearchCapsule(focused: Bool) -> some View {
+        background(focused ? WL.textPrimary.opacity(0.08) : WL.fieldFill,
+                   in: Capsule(style: .continuous))
+            .overlay(Capsule(style: .continuous)
+                .strokeBorder(WL.green.opacity(focused ? 0.55 : 0), lineWidth: 1))
+            .animation(Motion.hover, value: focused)
+    }
+}
+
 /// One choice in a segmented control or menu picker.
 struct WLOption<T: Hashable>: Identifiable {
     let value: T
@@ -21,7 +91,8 @@ struct WLOption<T: Hashable>: Identifiable {
 
 // MARK: - Segmented
 
-/// A segmented control whose selected thumb glides between segments.
+/// A segmented control: a capsule track whose raised pill glides between
+/// segments (same look as the tab bar and the drawer's section switcher).
 struct WLSegmented<T: Hashable>: View {
     @Binding var selection: T
     let options: [WLOption<T>]
@@ -35,12 +106,11 @@ struct WLSegmented<T: Hashable>: View {
                 SegmentCell(title: opt.title, symbol: opt.symbol,
                             selected: opt.value == selection, fill: fill, ns: ns) {
                     guard opt.value != selection else { return }
-                    wlAnimate(Motion.state) { selection = opt.value }
+                    wlAnimate(Motion.slide) { selection = opt.value }
                 }
             }
         }
-        .padding(2)
-        .background(WL.bg.opacity(0.5), in: RoundedRectangle(cornerRadius: WL.radius(7)))
+        .wlCapsuleTrack(padding: 2)
         .accessibilityRepresentation {
             Picker("", selection: $selection) {
                 ForEach(options) { Text($0.title).tag($0.value) }
@@ -64,21 +134,11 @@ private struct SegmentCell: View {
                 if let symbol { Image(systemName: symbol).font(.system(size: 10)) }
                 Text(title).font(WL.small.weight(selected ? .semibold : .regular)).lineLimit(1)
             }
-            .foregroundStyle(selected ? WL.greenBright : hover ? WL.textPrimary : WL.textDim)
-            .padding(.horizontal, 11).padding(.vertical, 5)
+            .foregroundStyle(selected || hover ? WL.textPrimary : WL.textDim)
+            .padding(.horizontal, 12).padding(.vertical, 5)
             .frame(maxWidth: fill ? .infinity : nil)
-            .background {
-                if selected {
-                    RoundedRectangle(cornerRadius: WL.radius(5))
-                        .fill(WL.surface)
-                        .overlay(RoundedRectangle(cornerRadius: WL.radius(5)).fill(WL.green.opacity(0.1)))
-                        .shadow(color: .black.opacity(0.25), radius: 1.5, y: 1)
-                        .matchedGeometryEffect(id: "thumb", in: ns)
-                } else if hover {
-                    RoundedRectangle(cornerRadius: WL.radius(5)).fill(WL.textPrimary.opacity(0.05))
-                }
-            }
-            .contentShape(Rectangle())
+            .wlSegmentPill(active: selected, hover: hover, in: ns, id: "thumb")
+            .contentShape(Capsule())
         }
         .buttonStyle(.wlPlain)
         .wlHover($hover)
@@ -138,11 +198,11 @@ struct WLCheckboxToggleStyle: ToggleStyle {
         var body: some View {
             let on = configuration.isOn
             HStack(spacing: 8) {
-                RoundedRectangle(cornerRadius: WL.radius(3.5))
-                    .fill(on ? WL.green : WL.bg.opacity(0.4))
+                RoundedRectangle(cornerRadius: WL.radius(4), style: .continuous)
+                    .fill(on ? WL.green : WL.fieldFill)
                     .frame(width: 14, height: 14)
-                    .overlay(RoundedRectangle(cornerRadius: WL.radius(3.5))
-                        .stroke(on ? Color.clear : (hover ? WL.green.opacity(0.7) : WL.border), lineWidth: 1))
+                    .overlay(RoundedRectangle(cornerRadius: WL.radius(4), style: .continuous)
+                        .stroke((hover ? WL.green.opacity(0.7) : WL.border).opacity(on ? 0 : 1), lineWidth: 1))
                     .overlay {
                         if on {
                             Image(systemName: "checkmark")
@@ -198,8 +258,7 @@ struct WLStepper: View {
                 value = min(range.upperBound, value + step)
             }
         }
-        .padding(2)
-        .background(WL.bg.opacity(0.5), in: Capsule())
+        .wlCapsuleTrack(padding: 2)
         .fixedSize()
         .accessibilityRepresentation {
             Stepper(value: $value, in: range, step: step) { Text(format(value)) }
@@ -255,8 +314,10 @@ struct WLSlider: View {
         return ZStack(alignment: .leading) {
             Capsule().fill(WL.textDim.opacity(0.22)).frame(height: 4)
             Capsule().fill(WL.green).frame(width: max(4, knob / 2 + f * travel), height: 4)
+            // White on light themes (a dark knob reads as a hole), like the pills.
             Circle()
-                .fill(WL.textPrimary)
+                .fill(WL.isLight ? Color.white : WL.textPrimary)
+                .overlay(Circle().strokeBorder(WL.hairline, lineWidth: WL.isLight ? 1 : 0))
                 .frame(width: knob, height: knob)
                 .shadow(color: .black.opacity(0.35), radius: dragging ? 3 : 1.5, y: 1)
                 .scaleEffect(dragging && !Motion.reduce ? 1.12 : hover ? 1.05 : 1)
@@ -302,11 +363,12 @@ struct WLMenuPicker<T: Hashable>: View {
             }
             .font(WL.small)
             .foregroundStyle(WL.textPrimary)
-            .padding(.horizontal, 10).padding(.vertical, 5)
+            .padding(.leading, 12).padding(.trailing, 10).padding(.vertical, 5)
             .frame(minWidth: minWidth)
-            .background(WL.bg.opacity(hover && enabled ? 0.7 : 0.5), in: RoundedRectangle(cornerRadius: WL.radius(6)))
-            .overlay(RoundedRectangle(cornerRadius: WL.radius(6))
-                .stroke(WL.green.opacity(hover && enabled ? 0.35 : 0), lineWidth: 1))
+            .background(hover && enabled ? WL.textPrimary.opacity(0.09) : WL.fieldFill,
+                        in: Capsule(style: .continuous))
+            .overlay(Capsule(style: .continuous)
+                .strokeBorder(WL.green.opacity(hover && enabled ? 0.35 : 0), lineWidth: 1))
             .background(MenuAnchorView(anchor: anchor))
         }
         .buttonStyle(.wlPlain)
@@ -373,35 +435,108 @@ private struct MenuAnchorView: NSViewRepresentable {
 // MARK: - Text field
 
 extension View {
-    /// Themed text-field chrome with an accent focus ring that fades in.
-    func wlField(font: Font = WL.mono(12)) -> some View { modifier(WLFieldModifier(font: font, external: nil)) }
+    /// Themed text-field chrome: a capsule wash with an accent edge that fades
+    /// in on focus. Pass `multiline: true` for a text editor or a field that
+    /// grows (`axis: .vertical`) — it keeps the capsule's ends while one line
+    /// tall and settles into a rounded rectangle as it grows.
+    func wlField(font: Font = WL.mono(12), multiline: Bool = false) -> some View {
+        modifier(WLFieldModifier(font: font, multiline: multiline, external: nil))
+    }
 
     /// Same, for a field whose focus the caller also drives (auto-focus on
     /// appear, etc.). Pass the caller's binding instead of adding `.focused`
     /// separately, so the field has exactly one focus source.
-    func wlField(font: Font = WL.mono(12), focus: FocusState<Bool>.Binding) -> some View {
-        modifier(WLFieldModifier(font: font, external: focus))
+    func wlField(font: Font = WL.mono(12), multiline: Bool = false, focus: FocusState<Bool>.Binding) -> some View {
+        modifier(WLFieldModifier(font: font, multiline: multiline, external: focus))
+    }
+}
+
+/// A capsule that stops rounding at `maxRadius`: a pill while short, a rounded
+/// rectangle once taller — one shape, so a growing field never swaps outlines.
+struct WLFieldShape: InsettableShape {
+    var maxRadius: CGFloat = .infinity
+    var inset: CGFloat = 0
+
+    func path(in rect: CGRect) -> Path {
+        let r = rect.insetBy(dx: inset, dy: inset)
+        return RoundedRectangle(cornerRadius: min(r.height / 2, maxRadius), style: .continuous).path(in: r)
+    }
+
+    func inset(by amount: CGFloat) -> WLFieldShape {
+        WLFieldShape(maxRadius: maxRadius, inset: inset + amount)
     }
 }
 
 private struct WLFieldModifier: ViewModifier {
     let font: Font
+    let multiline: Bool
     let external: FocusState<Bool>.Binding?
     @FocusState private var internalFocus: Bool
 
     func body(content: Content) -> some View {
         let focused = external?.wrappedValue ?? internalFocus
+        let shape = WLFieldShape(maxRadius: multiline ? WL.radius(10) : .infinity)
         content
             .textFieldStyle(.plain)
             .font(font)
             .foregroundStyle(WL.textPrimary)
             .focused(external ?? $internalFocus)
-            .padding(.horizontal, 10).padding(.vertical, 7)
-            .background(WL.bg.opacity(0.5), in: RoundedRectangle(cornerRadius: WL.radius(6)))
-            .overlay(RoundedRectangle(cornerRadius: WL.radius(6))
-                .stroke(focused ? WL.green.opacity(0.85) : WL.border.opacity(0.6), lineWidth: focused ? 1.2 : 1))
-            .shadow(color: WL.green.opacity(focused ? 0.22 : 0), radius: 3)
+            .padding(.horizontal, multiline ? 10 : 12).padding(.vertical, 7)
+            .background(focused ? WL.textPrimary.opacity(0.075) : WL.fieldFill, in: shape)
+            .overlay(shape.strokeBorder(WL.green.opacity(focused ? 0.6 : 0), lineWidth: 1))
             .animation(Motion.hover, value: focused)
+    }
+}
+
+// MARK: - Composer
+
+/// The chat composer (AI panel, pet chat): one capsule field that grows into a
+/// rounded rectangle for multi-line input, with a round send / stop button
+/// inside its trailing end. Return sends (via `onSend`).
+struct WLComposer: View {
+    let prompt: String
+    @Binding var text: String
+    let focus: FocusState<Bool>.Binding
+    var busy = false
+    var canSend = true
+    var onSend: () -> Void
+    var onStop: () -> Void = {}
+
+    var body: some View {
+        let focused = focus.wrappedValue
+        let shape = WLFieldShape(maxRadius: WL.radius(16))
+        HStack(alignment: .bottom, spacing: 8) {
+            TextField(prompt, text: $text, axis: .vertical)
+                .textFieldStyle(.plain).font(WL.body).foregroundStyle(WL.textPrimary)
+                .lineLimit(1...4)
+                .focused(focus)
+                .onSubmit(onSend)
+                .padding(.vertical, 4)
+            if busy {
+                Button(action: onStop) {
+                    Image(systemName: "stop.fill").font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(WL.red)
+                        .frame(width: 26, height: 26)
+                        .background(WL.red.opacity(0.15), in: Circle())
+                }
+                .buttonStyle(.wlPlain)
+                .help(Localizer.shared.t("停止", "Stop"))
+            } else {
+                Button(action: onSend) {
+                    Image(systemName: "arrow.up").font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(canSend ? WL.bg : WL.textDim)
+                        .frame(width: 26, height: 26)
+                        .background(Circle().fill(canSend ? WL.green : WL.textDim.opacity(0.2)))
+                }
+                .buttonStyle(.wlPlain)
+                .disabled(!canSend)
+            }
+        }
+        .padding(.leading, 14).padding(.trailing, 4).padding(.vertical, 4)
+        .background(focused ? WL.textPrimary.opacity(0.075) : WL.fieldFill, in: shape)
+        .overlay(shape.strokeBorder(WL.green.opacity(focused ? 0.5 : 0), lineWidth: 1).allowsHitTesting(false))
+        .animation(Motion.hover, value: focused)
+        .animation(Motion.state, value: canSend)
     }
 }
 
@@ -426,16 +561,16 @@ struct WLFormSection<Content: View>: View {
             if !title.isEmpty {
                 Text(title).font(WL.caption.weight(.semibold)).foregroundStyle(WL.textDim)
                     .textCase(.uppercase).tracking(0.6)
-                    .padding(.leading, 4)
+                    .padding(.leading, 6)
             }
             VStack(alignment: .leading, spacing: 0) { content }
-                .padding(.horizontal, 14).padding(.vertical, 4)
+                .padding(.horizontal, 16).padding(.vertical, 4)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .wlCard()
             if let footer {
                 Text(footer).font(WL.caption).foregroundStyle(WL.textDim)
                     .fixedSize(horizontal: false, vertical: true)
-                    .padding(.horizontal, 4).padding(.top, 1)
+                    .padding(.horizontal, 6).padding(.top, 1)
             }
         }
     }
@@ -476,10 +611,10 @@ extension View {
     func wlRowHighlight(hover: Bool, selected: Bool = false) -> some View {
         padding(.horizontal, 10).padding(.vertical, 8)
             .background(
-                RoundedRectangle(cornerRadius: WL.radius(7))
+                RoundedRectangle(cornerRadius: WL.radius(8), style: .continuous)
                     .fill(selected ? WL.green.opacity(0.13) : WL.textPrimary.opacity(hover ? 0.055 : 0))
             )
-            .contentShape(RoundedRectangle(cornerRadius: WL.radius(7)))
+            .contentShape(RoundedRectangle(cornerRadius: WL.radius(8), style: .continuous))
             .animation(Motion.hover, value: hover)
             .animation(Motion.state, value: selected)
     }
@@ -492,10 +627,10 @@ extension View {
     func wlResultHighlight(_ selected: Bool) -> some View {
         padding(.horizontal, 12).padding(.vertical, 8)
             .background(
-                RoundedRectangle(cornerRadius: WL.radius(8))
-                    .fill(selected ? WL.green.opacity(WL.isLight ? 0.12 : 0.16) : .clear)
+                RoundedRectangle(cornerRadius: WL.radius(10), style: .continuous)
+                    .fill(WL.green.opacity(selected ? (WL.isLight ? 0.12 : 0.16) : 0))
             )
-            .contentShape(RoundedRectangle(cornerRadius: WL.radius(8)))
+            .contentShape(RoundedRectangle(cornerRadius: WL.radius(10), style: .continuous))
     }
 }
 
@@ -512,15 +647,20 @@ struct WLListCard<Content: View>: View {
 
 /// Hairline between rows of a form card.
 struct WLFormDivider: View {
-    var body: some View { Rectangle().fill(WL.border.opacity(0.5)).frame(height: 1) }
+    var body: some View { Rectangle().fill(WL.hairline.opacity(0.8)).frame(height: 1) }
 }
 
 extension View {
-    /// The shared card surface: quiet fill + hairline, used by forms and sheets.
-    func wlCard(radius: CGFloat = 10) -> some View {
-        background(WL.surface.opacity(0.4), in: RoundedRectangle(cornerRadius: WL.radius(radius)))
-            .overlay(RoundedRectangle(cornerRadius: WL.radius(radius))
-                .stroke(WL.border.opacity(0.55), lineWidth: 1))
+    /// The shared card surface (forms, lists, overview tiles): a raised fill,
+    /// hairline edge, and a soft shadow on the shape only — the small sibling
+    /// of the pane cards. Reads best on `WL.paneCanvas`.
+    func wlCard(radius: CGFloat = 12) -> some View {
+        let shape = RoundedRectangle(cornerRadius: WL.radius(radius), style: .continuous)
+        return background {
+            shape.fill(WL.cardFill)
+                .shadow(color: .black.opacity(WL.depth(0.1)), radius: 3, y: 1)
+        }
+        .overlay(shape.strokeBorder(WL.hairline, lineWidth: 1).allowsHitTesting(false))
     }
 }
 
@@ -553,6 +693,8 @@ struct WLSheet<Content: View, Footer: View>: View {
         VStack(spacing: 0) {
             header
             WLFormDivider()
+            // The body is the canvas its cards sit on; header and footer stay
+            // on the plain background, like a window's chrome.
             Group {
                 if scrolls {
                     ScrollView { body_.frame(maxWidth: .infinity, alignment: .leading) }
@@ -561,10 +703,10 @@ struct WLSheet<Content: View, Footer: View>: View {
                 }
             }
             .frame(maxHeight: .infinity, alignment: .top)
+            .background(WL.paneCanvas)
             WLFormDivider()
             HStack(spacing: 10) { footer }
                 .padding(.horizontal, 20).padding(.vertical, 12)
-                .background(WL.surface.opacity(0.3))
         }
         // `height` is the *ideal* height, never a hard one: a sheet can't be
         // taller than its parent window, and a fixed frame would get centred and
@@ -584,8 +726,8 @@ struct WLSheet<Content: View, Footer: View>: View {
             if let symbol {
                 Image(systemName: symbol).font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(WL.green)
-                    .frame(width: 28, height: 28)
-                    .background(WL.green.opacity(0.12), in: RoundedRectangle(cornerRadius: WL.radius(7)))
+                    .frame(width: 30, height: 30)
+                    .background(WL.green.opacity(0.12), in: RoundedRectangle(cornerRadius: WL.radius(9), style: .continuous))
             }
             VStack(alignment: .leading, spacing: 2) {
                 Text(title).font(WL.mono(14, .semibold)).foregroundStyle(WL.textPrimary)
@@ -626,12 +768,12 @@ struct WLDialogButtonStyle: ButtonStyle {
             configuration.label
                 .font(WL.small.weight(kind == .secondary ? .regular : .semibold))
                 .foregroundStyle(foreground)
-                .padding(.horizontal, 14).padding(.vertical, 6)
+                .padding(.horizontal, 15).padding(.vertical, 6)
                 .frame(minWidth: 72)
-                .background(fill(pressed: pressed), in: RoundedRectangle(cornerRadius: WL.radius(7)))
-                .overlay(RoundedRectangle(cornerRadius: WL.radius(7))
-                    .stroke(kind == .secondary ? WL.border.opacity(0.8) : .clear, lineWidth: 1))
-                .contentShape(Rectangle())
+                .background(fill(pressed: pressed), in: Capsule(style: .continuous))
+                .overlay(Capsule(style: .continuous)
+                    .strokeBorder(WL.hairline.opacity(kind == .secondary ? 1 : 0), lineWidth: 1))
+                .contentShape(Capsule())
                 .scaleEffect(pressed && !Motion.reduce ? 0.97 : 1)
                 .opacity(enabled ? 1 : 0.4)
                 .animation(pressed ? Motion.press : Motion.release, value: pressed)
@@ -650,7 +792,7 @@ struct WLDialogButtonStyle: ButtonStyle {
             let lift = enabled && hover
             switch kind {
             case .primary: return WL.green.opacity(pressed ? 0.78 : lift ? 1 : 0.9)
-            case .secondary: return WL.textPrimary.opacity(pressed ? 0.12 : lift ? 0.08 : 0.04)
+            case .secondary: return WL.textPrimary.opacity(pressed ? 0.13 : lift ? 0.09 : 0.05)
             case .destructive: return WL.red.opacity(pressed ? 0.8 : lift ? 0.9 : 0.14)
             }
         }

@@ -71,7 +71,7 @@ struct HostItem: View {
         .draggable(host.alias) {
             Text(host.alias).font(WL.body).foregroundStyle(WL.green)
                 .padding(.horizontal, 10).padding(.vertical, 6)
-                .background(WL.surface, in: RoundedRectangle(cornerRadius: WL.radius(6)))
+                .background(WL.surface, in: Capsule(style: .continuous))
         }
         .wlContextMenu(menuItems)
     }

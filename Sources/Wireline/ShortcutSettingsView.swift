@@ -14,72 +14,66 @@ struct ShortcutSettingsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
-                Text(loc("键盘快捷键", "Keyboard Shortcuts"))
-                    .font(WL.small.weight(.semibold)).foregroundStyle(WL.green).textCase(.uppercase)
-
-                VStack(spacing: 0) {
+                WLFormSection(loc("键盘快捷键", "Keyboard Shortcuts"),
+                              footer: loc("点击右侧快捷键，然后按下新的组合键（需含 ⌘ / ⌃ / ⌥）。按 Esc 取消。",
+                                          "Click a shortcut, then press the new combination (must include ⌘ / ⌃ / ⌥). Press Esc to cancel.")) {
                     ForEach(ShortcutAction.allCases) { action in
                         row(action)
-                        if action != ShortcutAction.allCases.last {
-                            Rectangle().fill(WL.border).frame(height: 1)
-                        }
+                        if action != ShortcutAction.allCases.last { WLFormDivider() }
                     }
-                }
-                .background(WL.surface.opacity(0.4), in: RoundedRectangle(cornerRadius: WL.radius(8)))
-                .overlay(RoundedRectangle(cornerRadius: WL.radius(8)).stroke(WL.border, lineWidth: WL.borderWidth))
-
-                if let warning {
-                    Text(warning).font(WL.caption).foregroundStyle(WL.red)
                 }
 
                 HStack {
+                    if let warning {
+                        Text(warning).font(WL.caption).foregroundStyle(WL.red)
+                    }
                     Spacer()
-                    BracketButton(loc("全部恢复默认", "Reset All")) {
+                    Button(loc("全部恢复默认", "Reset All")) {
                         keys.resetAll(); warning = nil; stopRecording()
                     }
+                    .buttonStyle(.wlSecondary)
                 }
-
-                Text(loc("点击右侧快捷键，然后按下新的组合键（需含 ⌘ / ⌃ / ⌥）。按 Esc 取消。",
-                        "Click a shortcut, then press the new combination (must include ⌘ / ⌃ / ⌥). Press Esc to cancel."))
-                    .font(WL.caption).foregroundStyle(WL.textDim)
             }
             .padding(22)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(WL.bg)
         .onDisappear { stopRecording() }
     }
 
     private func row(_ action: ShortcutAction) -> some View {
-        HStack {
+        let isRecording = recording == action
+        return HStack(spacing: 10) {
             Text(action.name(loc)).font(WL.body).foregroundStyle(WL.textPrimary)
             Spacer()
-            Button {
-                if recording == action { stopRecording() } else { startRecording(action) }
-            } label: {
-                Text(recording == action ? loc("按下按键…", "Press keys…")
-                                         : keys.shortcut(for: action).display)
-                    .font(WL.mono(12, .medium))
-                    .foregroundStyle(recording == action ? WL.green : WL.textPrimary)
-                    .frame(minWidth: 74)
-                    .padding(.horizontal, 10).padding(.vertical, 5)
-                    .background(recording == action ? WL.green.opacity(0.14) : WL.bg,
-                                in: RoundedRectangle(cornerRadius: WL.radius(5)))
-                    .overlay(RoundedRectangle(cornerRadius: WL.radius(5))
-                        .stroke(recording == action ? WL.green : WL.border, lineWidth: WL.borderWidth))
-            }
-            .buttonStyle(.wlPlain)
-            .disabled(keys.isFromConfig(action))
             if keys.isFromConfig(action) {
                 ConfigLockTag(key: "keybind")
             } else if keys.shortcut(for: action) != action.defaultShortcut {
-                BracketButton(loc("默认", "Default")) {
+                Button(loc("默认", "Default")) {
                     keys.reset(action); warning = nil
-                    if recording == action { stopRecording() }
+                    if isRecording { stopRecording() }
                 }
+                .buttonStyle(.wlChip())
             }
+            // The key cap: a capsule like the fields; recording lights it up.
+            Button {
+                if isRecording { stopRecording() } else { startRecording(action) }
+            } label: {
+                Text(isRecording ? loc("按下按键…", "Press keys…")
+                                 : keys.shortcut(for: action).display)
+                    .font(WL.mono(12, .medium))
+                    .foregroundStyle(isRecording ? WL.green : WL.textPrimary)
+                    .frame(minWidth: 74)
+                    .padding(.horizontal, 12).padding(.vertical, 5)
+                    .background(isRecording ? WL.green.opacity(0.14) : WL.fieldFill, in: Capsule(style: .continuous))
+                    .overlay(Capsule(style: .continuous)
+                        .strokeBorder(WL.green.opacity(isRecording ? 0.7 : 0), lineWidth: 1))
+                    .animation(Motion.state, value: isRecording)
+            }
+            .buttonStyle(.wlPlain)
+            .disabled(keys.isFromConfig(action))
         }
-        .padding(.horizontal, 14).padding(.vertical, 9)
+        .frame(minHeight: 38)
+        .padding(.vertical, 2)
     }
 
     private func startRecording(_ action: ShortcutAction) {

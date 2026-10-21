@@ -173,18 +173,20 @@ struct ActionCardView: View {
             Text(action.summary(loc)).font(WL.small).foregroundStyle(WL.textPrimary)
                 .fixedSize(horizontal: false, vertical: true)
             if status == 0 {
-                HStack {
+                HStack(spacing: 6) {
                     Spacer()
                     BracketButton(loc.t("取消", "Cancel")) { status = 2 }
-                    BracketButton(loc.t("确认执行", "Confirm")) { onConfirm(action); status = 1 }
+                    Button(loc.t("确认执行", "Confirm")) { onConfirm(action); status = 1 }
+                        .buttonStyle(.wlChip(on: true, tint: WL.purple))
                 }
             } else {
                 Text(status == 1 ? loc.t("✓ 已执行", "✓ Done") : loc.t("已取消", "Cancelled"))
                     .font(WL.caption).foregroundStyle(status == 1 ? WL.green : WL.textDim)
             }
         }
-        .padding(10)
-        .background(WL.purple.opacity(0.08), in: RoundedRectangle(cornerRadius: WL.radius(8)))
-        .overlay(RoundedRectangle(cornerRadius: WL.radius(8)).stroke(WL.purple.opacity(0.5), lineWidth: 1))
+        .padding(12)
+        .background(WL.purple.opacity(0.08), in: RoundedRectangle(cornerRadius: WL.radius(12), style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: WL.radius(12), style: .continuous)
+            .strokeBorder(WL.purple.opacity(0.35), lineWidth: 1))
     }
 }

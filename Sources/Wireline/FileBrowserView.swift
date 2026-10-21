@@ -23,16 +23,17 @@ struct FileBrowserView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 0) {
-                remotePane.frame(maxWidth: .infinity)
-                Rectangle().fill(WL.border).frame(width: 1)
-                localPane.frame(maxWidth: .infinity)
+            // The two sides are cards side by side, like split panes.
+            HStack(spacing: wlPaneGap) {
+                remotePane.frame(maxWidth: .infinity).fileCard()
+                localPane.frame(maxWidth: .infinity).fileCard()
             }
+            .padding([.horizontal, .top], 12)
+            .padding(.bottom, model?.status == nil ? 12 : 0)
             if let s = model?.status {
-                Rectangle().fill(WL.border).frame(height: 1)
                 Text(s).font(WL.small).foregroundStyle(WL.textDim)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 16).padding(.vertical, 6)
+                    .padding(.horizontal, 18).padding(.vertical, 7)
             }
         }
         .background {
@@ -73,13 +74,13 @@ struct FileBrowserView: View {
 
     private var remotePane: some View {
         VStack(spacing: 0) {
-            paneHeader(title: loc("远程 · \(host.alias)", "Remote · \(host.alias)"), crumbs: model?.breadcrumbs.map { ($0.name, $0.path) } ?? [],
+            paneHeader(title: loc("远程 · \(host.alias)", "Remote · \(host.alias)"), symbol: "server.rack", crumbs: model?.breadcrumbs.map { ($0.name, $0.path) } ?? [],
                        onCrumb: { model?.go(to: $0) }, onUp: { model?.goUp() }) {
                 BracketButton(loc("新建文件夹", "New Folder")) { newName = ""; showMkdir = true }
                 BracketButton(loc("刷新", "Refresh")) { model?.refresh() }
                 BracketButton(loc("断开", "Disconnect")) { model?.disconnect(); onClose() }
             }
-            Rectangle().fill(WL.border).frame(height: 1)
+            WLFormDivider()
             remoteBody
         }
         .dropDestination(for: String.self) { items, _ in
@@ -102,9 +103,10 @@ struct FileBrowserView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView {
-                    LazyVStack(spacing: 0) {
+                    LazyVStack(spacing: 1) {
                         ForEach(model.entries) { entry in remoteRow(entry, model: model) }
                     }
+                    .padding(6)
                 }
             }
         }
@@ -141,15 +143,16 @@ struct FileBrowserView: View {
 
     private var localPane: some View {
         VStack(spacing: 0) {
-            paneHeader(title: loc("本地", "Local"), crumbs: local.breadcrumbs.map { ($0.name, $0.url.path) },
+            paneHeader(title: loc("本地", "Local"), symbol: "desktopcomputer", crumbs: local.breadcrumbs.map { ($0.name, $0.url.path) },
                        onCrumb: { local.go(to: URL(fileURLWithPath: $0)) }, onUp: { local.goUp() }) {
                 BracketButton(loc("刷新", "Refresh")) { local.reload() }
             }
-            Rectangle().fill(WL.border).frame(height: 1)
+            WLFormDivider()
             ScrollView {
-                LazyVStack(spacing: 0) {
+                LazyVStack(spacing: 1) {
                     ForEach(local.entries) { entry in localRow(entry) }
                 }
+                .padding(6)
             }
         }
         .dropDestination(for: String.self) { items, _ in
@@ -189,18 +192,23 @@ struct FileBrowserView: View {
 
     // MARK: Shared pieces
 
-    private func paneHeader<Trailing: View>(title: String, crumbs: [(String, String)],
+    private func paneHeader<Trailing: View>(title: String, symbol: String, crumbs: [(String, String)],
                                             onCrumb: @escaping (String) -> Void,
                                             onUp: @escaping () -> Void,
                                             @ViewBuilder trailing: () -> Trailing) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text(title).font(WL.small.weight(.semibold)).foregroundStyle(WL.green)
+            HStack(spacing: 6) {
+                Image(systemName: symbol).font(.system(size: 11, weight: .medium)).foregroundStyle(WL.textDim)
+                Text(title).font(WL.small.weight(.semibold)).foregroundStyle(WL.textPrimary).lineLimit(1)
                 Spacer()
                 trailing()
             }
-            HStack(spacing: 8) {
-                BracketButton("↑") { onUp() }
+            HStack(spacing: 6) {
+                Button(action: onUp) {
+                    Image(systemName: "arrow.up").font(.system(size: 10, weight: .semibold))
+                }
+                .buttonStyle(.wlIcon(size: 22))
+                .help(Localizer.shared.t("上一级", "Up one level"))
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 3) {
                         ForEach(crumbs, id: \.1) { crumb in
@@ -221,14 +229,11 @@ struct FileBrowserView: View {
             Text(loc("需要密码", "Password required")).font(WL.mono(16, .bold)).foregroundStyle(WL.green)
             Text("\(host.user ?? "")@\(host.connectHostname)").font(WL.small).foregroundStyle(WL.textDim)
             SecureField(loc("密码", "Password"), text: $password)
-                .textFieldStyle(.plain).font(WL.body).foregroundStyle(WL.textPrimary)
-                .padding(.horizontal, 10).padding(.vertical, 8).frame(width: 220)
-                .background(WL.surface, in: RoundedRectangle(cornerRadius: WL.radius(5)))
-                .overlay(RoundedRectangle(cornerRadius: WL.radius(5)).stroke(WL.border, lineWidth: WL.borderWidth))
+                .frame(width: 196)
+                .wlField(font: WL.body)
                 .onSubmit { model.connect(withPassword: password); password = "" }
-            Button { model.connect(withPassword: password); password = "" } label: {
-                Text("[\(loc("连接", "Connect"))]").font(WL.small).foregroundStyle(WL.green)
-            }.buttonStyle(.wlPlain)
+            Button(loc("连接", "Connect")) { model.connect(withPassword: password); password = "" }
+                .buttonStyle(.wlPrimary)
         }
     }
 
@@ -257,14 +262,23 @@ struct EntryRow: View {
             Spacer()
             if !detail.isEmpty { Text(detail).font(WL.caption).foregroundStyle(WL.textDim) }
         }
-        .padding(.horizontal, 14).padding(.vertical, 6)
+        .padding(.horizontal, 10).padding(.vertical, 6)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(selected ? WL.green.opacity(0.16) : WL.surface.opacity(hover ? 1 : 0))
-        .overlay(alignment: .leading) {
-            Rectangle().fill(WL.green).frame(width: 2).opacity(selected ? 1 : 0)
-        }
-        .overlay(alignment: .bottom) { Rectangle().fill(WL.border.opacity(0.4)).frame(height: 1) }
+        // An inset rounded highlight, like the host drawer's rows.
+        .background(
+            RoundedRectangle(cornerRadius: WL.radius(8), style: .continuous)
+                .fill(selected ? WL.green.opacity(0.14) : WL.textPrimary.opacity(hover ? 0.055 : 0))
+        )
         .contentShape(Rectangle())
+        .animation(Motion.hover, value: hover)
         .wlHover($hover)
+    }
+}
+
+private extension View {
+    /// One side of the file browser: a raised card, its list clipped to it.
+    func fileCard() -> some View {
+        let shape = RoundedRectangle(cornerRadius: WL.radius(12), style: .continuous)
+        return clipShape(shape).wlCard()
     }
 }

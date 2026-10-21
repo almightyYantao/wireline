@@ -111,20 +111,27 @@ struct AIPanelView: View {
     /// (0 when pinned to the bottom, grows as you scroll up).
     private var distanceFromBottom: CGFloat { contentH + contentTopY - viewportH }
 
+    private var cardShape: RoundedRectangle {
+        RoundedRectangle(cornerRadius: WL.radius(14), style: .continuous)
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             header
-            Rectangle().fill(WL.border).frame(height: 1)
+            WLFormDivider()
             quickActions
-            Rectangle().fill(WL.border).frame(height: 1)
             conversation
-            Rectangle().fill(WL.border).frame(height: 1)
             inputBar
         }
         .frame(width: 380)
         .frame(maxHeight: .infinity)
-        .background(WL.bg.opacity(store.terminalOpacity * WL.chromeOpacity))
-        .overlay(Rectangle().stroke(WL.border, lineWidth: WL.borderWidth))
+        // A card like the panes and the host drawer, docked or floating. The
+        // content is clipped to it; the shadow sits on the shape only. Floating
+        // it's opaque (no terminal text showing through) and lifts higher.
+        .clipShape(cardShape)
+        .wlFloating(cardShape,
+                    fill: WL.bg.opacity(docked ? store.terminalOpacity * WL.chromeOpacity : 1),
+                    shadow: docked ? 0.16 : 0.32, radius: docked ? 6 : 22, y: docked ? 2 : 6)
         .sheet(isPresented: $showFleet) {
             FleetView(onClose: { showFleet = false })
                 .environment(store).environment(loc)
@@ -222,11 +229,12 @@ struct AIPanelView: View {
     // MARK: header
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 10) {
-                Image(systemName: "sparkles").font(.system(size: 13)).foregroundStyle(WL.green)
-                Text(loc("AI 助手", "AI Assistant")).font(WL.body.weight(.semibold)).foregroundStyle(WL.textPrimary)
-                Spacer()
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 6) {
+                Image(systemName: "sparkles").font(.system(size: 12, weight: .medium)).foregroundStyle(WL.green)
+                Text(loc("AI 助手", "AI Assistant")).font(WL.mono(13, .semibold)).foregroundStyle(WL.textPrimary)
+                    .lineLimit(1)
+                Spacer(minLength: 6)
                 if ai.hasFastModel {
                     chip(loc("快速", "Fast"), on: useFast) { useFast.toggle() }
                         .help(loc("用便宜/快速模型跑这条", "Use the fast/cheap model"))
@@ -253,27 +261,27 @@ struct AIPanelView: View {
                         .buttonStyle(.wlIcon).help(loc("关闭 (⌘I)", "Close (⌘I)"))
                 }
             }
+            // Like the host drawer's header: the card is inset by the pane
+            // gap, and the title row sits in the title-bar band.
+            .frame(height: TitleBand.shared.height - wlPaneGap + 6)
             if sessionTokens > 0 {
                 Text(usageText).font(WL.caption).foregroundStyle(WL.textDim)
+                    .padding(.leading, 18).padding(.bottom, 8)
             }
         }
-        .padding(.horizontal, 14).padding(.top, 32).padding(.bottom, 10)
+        .padding(.leading, 14).padding(.trailing, 8)
         .blocksWindowDrag()   // title-bar band: see WLPageHeader
     }
 
-    /// A small on/off pill for the header toggles.
+    /// A small on/off capsule for the header toggles; the dot echoes the state.
     private func chip(_ title: String, on: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 4) {
-                Circle().fill(on ? WL.green : WL.textDim.opacity(0.5)).frame(width: 5, height: 5)
-                Text(title).font(WL.caption)
+                Circle().fill(.foreground).frame(width: 5, height: 5).opacity(on ? 1 : 0.5)
+                Text(title)
             }
-            .foregroundStyle(on ? WL.green : WL.textDim)
-            .padding(.horizontal, 8).padding(.vertical, 3)
-            .background((on ? WL.green.opacity(0.12) : WL.textPrimary.opacity(0.05)), in: Capsule())
-            .animation(Motion.state, value: on)
         }
-        .buttonStyle(.wlPlain)
+        .buttonStyle(.wlChip(on: on))
     }
 
     private var usageText: String {
@@ -302,7 +310,7 @@ struct AIPanelView: View {
                 chip(loc("复盘", "Runbook"), "doc.text.magnifyingglass") { makeRunbook() }
                 chip(loc("群跑", "Fleet"), "square.grid.3x3.fill") { showFleet = true }
             }
-            .padding(.horizontal, 12).padding(.vertical, 8)
+            .padding(.horizontal, 12).padding(.top, 10).padding(.bottom, 4)
         }
     }
 
@@ -310,14 +318,10 @@ struct AIPanelView: View {
         Button(action: action) {
             HStack(spacing: 4) {
                 Image(systemName: symbol).font(.system(size: 9))
-                Text(title).font(WL.caption)
+                Text(title)
             }
-            .foregroundStyle(WL.textPrimary)
-            .padding(.horizontal, 8).padding(.vertical, 5)
-            .background(WL.surface.opacity(0.6), in: RoundedRectangle(cornerRadius: WL.radius(5)))
-            .overlay(RoundedRectangle(cornerRadius: WL.radius(5)).stroke(WL.border, lineWidth: WL.borderWidth))
         }
-        .buttonStyle(.wlPlain)
+        .buttonStyle(.wlChip())
         .disabled(isStreaming)
     }
 
@@ -343,8 +347,9 @@ struct AIPanelView: View {
                     }
                     if let errorText {
                         Text(errorText).font(WL.caption).foregroundStyle(WL.red)
-                            .padding(10)
-                            .background(WL.red.opacity(0.1), in: RoundedRectangle(cornerRadius: WL.radius(6)))
+                            .padding(.horizontal, 12).padding(.vertical, 9)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(WL.red.opacity(0.1), in: RoundedRectangle(cornerRadius: WL.radius(12), style: .continuous))
                     }
                     // Invisible bottom anchor: scrolling to it always sticks the
                     // view to the very bottom as content streams in / grows.
@@ -463,28 +468,14 @@ struct AIPanelView: View {
     // MARK: input
 
     private var inputBar: some View {
-        HStack(spacing: 8) {
-            TextField(loc("输入问题…", "Ask…"),
-                      text: Binding(get: { input }, set: { input = $0 }),
-                      axis: .vertical)
-                .textFieldStyle(.plain).font(WL.body).foregroundStyle(WL.textPrimary)
-                .lineLimit(1...4)
-                .focused($inputFocused)
-                .onSubmit { sendFreeform() }
-            if isStreaming {
-                Button { task?.cancel(); isStreaming = false; agentSteps = 0 } label: {
-                    Image(systemName: "stop.fill").font(.system(size: 12)).foregroundStyle(WL.red)
-                }.buttonStyle(.wlPlain)
-            } else {
-                Button(action: sendFreeform) {
-                    Image(systemName: "arrow.up.circle.fill").font(.system(size: 16))
-                        .foregroundStyle(input.trimmingCharacters(in: .whitespaces).isEmpty ? WL.textDim : WL.green)
-                }
-                .buttonStyle(.wlPlain)
-                .disabled(input.trimmingCharacters(in: .whitespaces).isEmpty)
-            }
-        }
-        .padding(.horizontal, 12).padding(.vertical, 10)
+        WLComposer(prompt: loc("输入问题…", "Ask…"),
+                   text: Binding(get: { input }, set: { input = $0 }),
+                   focus: $inputFocused,
+                   busy: isStreaming,
+                   canSend: !input.trimmingCharacters(in: .whitespaces).isEmpty,
+                   onSend: { sendFreeform() },
+                   onStop: { task?.cancel(); isStreaming = false; agentSteps = 0 })
+            .padding(.horizontal, 10).padding(.top, 4).padding(.bottom, 10)
     }
 
     // MARK: actions
@@ -1122,13 +1113,18 @@ private struct MessageBubble: View {
         VStack(alignment: .leading, spacing: 6) {
             switch message.role {
             case .user:
-                Text(message.content)
-                    .font(WL.mono(fontSize)).foregroundStyle(WL.textPrimary)
-                    .textSelection(.enabled)
-                    .padding(8)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(WL.green.opacity(0.12), in: RoundedRectangle(cornerRadius: WL.radius(6)))
-                HStack(spacing: 10) {
+                // Your turn: a tinted bubble on the right.
+                HStack(spacing: 0) {
+                    Spacer(minLength: 36)
+                    Text(message.content)
+                        .font(WL.mono(fontSize)).foregroundStyle(WL.textPrimary)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.horizontal, 12).padding(.vertical, 8)
+                        .background(WL.green.opacity(WL.isLight ? 0.12 : 0.14),
+                                    in: RoundedRectangle(cornerRadius: WL.radius(14), style: .continuous))
+                }
+                HStack(spacing: 6) {
                     Spacer()
                     BracketButton(loc.t("复制", "Copy")) { onCopy(message.content) }
                     BracketButton(loc.t("重试", "Retry")) { onRetry(message.content) }
@@ -1138,10 +1134,13 @@ private struct MessageBubble: View {
                 Text(message.content)
                     .font(WL.mono(fontSize - 1)).foregroundStyle(WL.textDim)
                     .textSelection(.enabled)
-                    .padding(8)
+                    .padding(.leading, 14).padding(.trailing, 10).padding(.vertical, 8)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(WL.surface.opacity(0.4), in: RoundedRectangle(cornerRadius: WL.radius(6)))
-                    .overlay(alignment: .leading) { Rectangle().fill(WL.green.opacity(0.5)).frame(width: 2) }
+                    .background(WL.textPrimary.opacity(WL.isLight ? 0.035 : 0.045),
+                                in: RoundedRectangle(cornerRadius: WL.radius(10), style: .continuous))
+                    .overlay(alignment: .leading) {
+                        Capsule().fill(WL.green.opacity(0.5)).frame(width: 3).padding(.vertical, 8).padding(.leading, 5)
+                    }
             case .assistant:
                 ForEach(Array(segments(message.content).enumerated()), id: \.offset) { _, seg in
                     if seg.isCode {
@@ -1181,7 +1180,7 @@ private struct MessageBubble: View {
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
             if runnable {
-                HStack(spacing: 12) {
+                HStack(spacing: 6) {
                     Spacer()
                     BracketButton(loc.t("存片段", "Save")) { onSave(cmd) }
                     if let session {
@@ -1193,9 +1192,12 @@ private struct MessageBubble: View {
                                     Button(t.title) { t.runInTerminal(cmd) }
                                 }
                             } label: {
-                                Text("[\(loc.t("运行", "Run")) ▾]").font(WL.small).foregroundStyle(WL.textDim)
+                                HStack(spacing: 4) {
+                                    Text(loc.t("运行", "Run"))
+                                    Image(systemName: "chevron.down").font(.system(size: 7, weight: .bold))
+                                }
                             }
-                            .menuStyle(.button).buttonStyle(.wlPlain).menuIndicator(.hidden).fixedSize()
+                            .menuStyle(.button).buttonStyle(.wlChip()).menuIndicator(.hidden).fixedSize()
                             .help(loc.t("选择要运行的主机", "Choose a host to run on"))
                         } else {
                             BracketButton(loc.t("运行", "Run")) { session.runInTerminal(cmd) }
@@ -1204,9 +1206,11 @@ private struct MessageBubble: View {
                 }
             }
         }
-        .padding(9)
-        .background(WL.surface.opacity(0.6), in: RoundedRectangle(cornerRadius: WL.radius(6)))
-        .overlay(RoundedRectangle(cornerRadius: WL.radius(6)).stroke(WL.border, lineWidth: WL.borderWidth))
+        .padding(10)
+        .background(WL.textPrimary.opacity(WL.isLight ? 0.04 : 0.06),
+                    in: RoundedRectangle(cornerRadius: WL.radius(10), style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: WL.radius(10), style: .continuous)
+            .strokeBorder(WL.hairline, lineWidth: 1))
     }
 
     /// Whether a code segment is a wl-action JSON payload (rendered as a card).

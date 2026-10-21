@@ -117,23 +117,31 @@ struct RightPanel: View {
         // The AI panel floats over the terminal by default (opening it resizes
         // nothing); pinned, it becomes a column beside it, sliding in while the
         // terminal grid is frozen (see TerminalResizeGate) so it reflows once.
+        // Either way the panel is a card (it draws its own chrome) inset by
+        // the pane gap, like the panes and the host drawer.
         HStack(spacing: 0) {
             terminalColumn
             if showAI && aiDocked {
-                Rectangle().fill(WL.border).frame(width: 1)
+                // The panes already leave a gap on their right; the column adds
+                // the window-edge gaps.
                 aiPanel
+                    .padding([.top, .bottom, .trailing], wlPaneGap)
                     .transition(.move(edge: .trailing).combined(with: .opacity))
             }
         }
+        // Pane cards — and the overview's / host details' cards, and the
+        // docked AI card — sit on a slightly deeper canvas. It's under the
+        // whole row so the docked column sliding in never uncovers a seam.
+        .background(WL.paneCanvas)
         // Unpinned, the panel floats over the terminal: opening it resizes
         // nothing. Pinned, it's a real column (the terminal makes room once).
         .overlay(alignment: .trailing) {
             if showAI && !aiDocked {
                 aiPanel
-                    .background(WL.bg)
+                    // Occlusion covers the card itself, not the gap around it,
+                    // so the terminal still gets clicks in that sliver.
                     .wlOccludesTerminal()
-                    .overlay(alignment: .leading) { Rectangle().fill(WL.border).frame(width: 1) }
-                    .shadow(color: .black.opacity(WL.depth(0.28)), radius: 18, x: -4)
+                    .padding(wlPaneGap)
                     .transition(.move(edge: .trailing).combined(with: .opacity))
             }
         }
@@ -235,8 +243,6 @@ struct RightPanel: View {
             }
         }
         .frame(maxWidth: .infinity)
-        // Pane cards sit on a slightly deeper canvas.
-        .background(sessions.sessions.isEmpty ? Color.clear : WL.paneCanvas)
     }
 
     /// The host backing the active session, for AI context.
@@ -253,19 +259,17 @@ struct RightPanel: View {
             if showBroadcast { DispatchQueue.main.async { broadcastFocused = true } }
         } label: {
             HStack(spacing: 4) {
-                Image(systemName: "dot.radiowaves.left.and.right").font(WL.small)
-                Text(loc("广播", "Broadcast")).font(WL.small)
+                Image(systemName: "dot.radiowaves.left.and.right")
+                Text(loc("广播", "Broadcast"))
             }
-            .foregroundStyle(showBroadcast ? WL.bg : WL.textDim)
-            .padding(.horizontal, 8).padding(.vertical, 4)
-            .background(showBroadcast ? WL.amber : WL.surface.opacity(0.6), in: Capsule())
-            .animation(Motion.state, value: showBroadcast)
+            .font(WL.small)
         }
-        .buttonStyle(.wlPlain)
+        .buttonStyle(.wlChip(on: showBroadcast, tint: WL.amber))
         .blocksWindowDrag()
         .help(loc("广播输入到所有会话", "Broadcast input to all sessions"))
     }
 
+    /// An amber-tinted card above the panes: a capsule field, send, close.
     private var broadcastBar: some View {
         HStack(spacing: 8) {
             Image(systemName: "dot.radiowaves.left.and.right").foregroundStyle(WL.amber).font(WL.small)
@@ -275,13 +279,22 @@ struct RightPanel: View {
                 .textFieldStyle(.plain).font(WL.body).foregroundStyle(WL.textPrimary)
                 .focused($broadcastFocused)
                 .onSubmit(sendBroadcast)
-            BracketButton(loc("发送", "Send"), action: sendBroadcast)
-            BracketButton(loc("关闭", "Close")) {
+                .padding(.horizontal, 12).padding(.vertical, 5)
+                .wlSearchCapsule(focused: broadcastFocused)
+            Button(loc("发送", "Send"), action: sendBroadcast)
+                .buttonStyle(.wlChip(on: true, tint: WL.amber))
+            Button {
                 wlAnimateTerminalLayout(Motion.disclose, duration: 0.3) { showBroadcast = false }
+            } label: {
+                Image(systemName: "xmark").font(.system(size: 9, weight: .semibold))
             }
+            .buttonStyle(.wlIcon(size: 22))
+            .help(loc("关闭", "Close"))
         }
-        .padding(.horizontal, 18).padding(.vertical, 8)
+        .padding(.leading, 14).padding(.trailing, 8).padding(.vertical, 7)
         .background(WL.amber.opacity(0.12))
+        .overlay(RoundedRectangle(cornerRadius: WL.radius(10), style: .continuous)
+            .strokeBorder(WL.amber.opacity(0.28), lineWidth: 1))
     }
 
     private func sendBroadcast() {
@@ -323,33 +336,36 @@ struct RightPanel: View {
                 }
             }
             .frame(minWidth: 34, alignment: .trailing)
-            searchOptionToggle("Aa", isOn: $searchCaseSensitive,
-                               help: loc("区分大小写", "Case sensitive"), session: session)
-            searchOptionToggle(".*", isOn: $searchRegex,
-                               help: loc("正则表达式", "Regular expression"), session: session)
-            Divider().frame(height: 14)
-            Button { runFind(session, forward: false) } label: {
-                Image(systemName: "chevron.up").font(WL.small)
-            }.buttonStyle(.wlPlain).disabled(matchTotal == 0)
-                .help(loc("上一个 (⇧⏎)", "Previous (⇧⏎)"))
-            Button { runFind(session, forward: true) } label: {
-                Image(systemName: "chevron.down").font(WL.small)
-            }.buttonStyle(.wlPlain).disabled(matchTotal == 0)
-                .help(loc("下一个 (⏎)", "Next (⏎)"))
-            Button(action: closeSearch) { Image(systemName: "xmark").font(WL.small) }
-                .buttonStyle(.wlPlain).help(loc("关闭 (Esc)", "Close (Esc)"))
+            HStack(spacing: 3) {
+                searchOptionToggle("Aa", isOn: $searchCaseSensitive,
+                                   help: loc("区分大小写", "Case sensitive"), session: session)
+                searchOptionToggle(".*", isOn: $searchRegex,
+                                   help: loc("正则表达式", "Regular expression"), session: session)
+            }
+            Rectangle().fill(WL.hairline).frame(width: 1, height: 14)
+            HStack(spacing: 0) {
+                Button { runFind(session, forward: false) } label: {
+                    Image(systemName: "chevron.up").font(.system(size: 10, weight: .semibold))
+                }.buttonStyle(.wlIcon(size: 22)).disabled(matchTotal == 0)
+                    .help(loc("上一个 (⇧⏎)", "Previous (⇧⏎)"))
+                Button { runFind(session, forward: true) } label: {
+                    Image(systemName: "chevron.down").font(.system(size: 10, weight: .semibold))
+                }.buttonStyle(.wlIcon(size: 22)).disabled(matchTotal == 0)
+                    .help(loc("下一个 (⏎)", "Next (⏎)"))
+                Button(action: closeSearch) { Image(systemName: "xmark").font(.system(size: 9, weight: .semibold)) }
+                    .buttonStyle(.wlIcon(size: 22)).help(loc("关闭 (Esc)", "Close (Esc)"))
+            }
         }
         .foregroundStyle(WL.textDim)
-        .padding(.horizontal, 10).padding(.vertical, 6)
-        .background(WL.surface, in: RoundedRectangle(cornerRadius: WL.radius(8)))
-        .overlay(RoundedRectangle(cornerRadius: WL.radius(8)).stroke(WL.border, lineWidth: WL.borderWidth))
-        .shadow(color: .black.opacity(0.25), radius: 10, y: 4)
-        .padding(8)
+        // A floating capsule, shadow on the shape only.
+        .padding(.leading, 14).padding(.trailing, 5).padding(.vertical, 4)
+        .wlFloating(Capsule(style: .continuous), shadow: 0.25, radius: 12, y: 4)
+        .padding(10)
         .transition(.wlSlide(.top))
         .onExitCommand(perform: closeSearch)
     }
 
-    /// A small "Aa" / ".*" chip that lights up green when its search option is on.
+    /// A small "Aa" / ".*" capsule chip that lights up when its search option is on.
     private func searchOptionToggle(_ label: String, isOn: Binding<Bool>,
                                     help: String, session: TerminalSession) -> some View {
         Button {
@@ -358,14 +374,9 @@ struct RightPanel: View {
         } label: {
             Text(label)
                 .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                .foregroundStyle(isOn.wrappedValue ? WL.bg : WL.textDim)
-                .frame(width: 22, height: 17)
-                .background(isOn.wrappedValue ? WL.green : Color.clear,
-                            in: RoundedRectangle(cornerRadius: 4))
-                .overlay(RoundedRectangle(cornerRadius: 4)
-                    .stroke(isOn.wrappedValue ? Color.clear : WL.border, lineWidth: WL.borderWidth))
+                .frame(minWidth: 14)
         }
-        .buttonStyle(.wlPlain)
+        .buttonStyle(.wlChip(on: isOn.wrappedValue))
         .help(help)
     }
 
@@ -426,9 +437,8 @@ struct SessionTabBar: View {
                                    pill: pill, showSeparator: index > 0 && !active && !prevActive)
                     }
                 }
-                .padding(3)
-                .background(Capsule(style: .continuous).fill(WL.textPrimary.opacity(WL.isLight ? 0.06 : 0.08)))
-                .animation(.spring(duration: 0.32, bounce: 0.12), value: sessions.activeTabID)
+                .wlCapsuleTrack()
+                .animation(Motion.resolved(Motion.slide), value: sessions.activeTabID)
                 Button {
                     openLocalShell(sessions: sessions, openWindow: openWindow)
                 } label: {
@@ -712,10 +722,8 @@ struct DisconnectedBanner: View {
             }
             .buttonStyle(.wlPill(WL.green))
         }
-        .padding(.horizontal, 12).padding(.vertical, 8)
-        .background(.ultraThinMaterial, in: Capsule())
-        .overlay(Capsule().stroke(WL.border, lineWidth: WL.borderWidth))
-        .shadow(color: .black.opacity(0.25), radius: 10, y: 4)
+        .padding(.leading, 14).padding(.trailing, 6).padding(.vertical, 6)
+        .wlFloating(Capsule(style: .continuous), fill: WL.bg.opacity(0.96), shadow: 0.25, radius: 12, y: 4)
         .padding(.top, 10)
         .transition(.wlSlide(.top))
     }
@@ -834,6 +842,8 @@ struct StatusBar: View {
                     Circle().fill(barColor).frame(width: 6, height: 6)
                     Text(connLabel).foregroundStyle(WL.textPrimary)
                 }
+                .padding(.horizontal, 8).padding(.vertical, 2)
+                .background(barColor.opacity(0.12), in: Capsule(style: .continuous))
                 if isSSH {
                     metric("CPU", stats.cpuPercent.map { String(format: "%.0f%%", $0) })
                     metric("MEM", stats.memPercent.map { p in
@@ -897,31 +907,38 @@ struct FilesPicker: View {
         VStack(alignment: .leading, spacing: 0) {
             Text(loc("双击主机打开文件浏览器：", "Double-click a host to open its file browser:"))
                 .font(WL.body).foregroundStyle(WL.textDim)
-                .padding(.horizontal, 18).padding(.vertical, 12)
+                .padding(.horizontal, 26).padding(.top, 14).padding(.bottom, 10)
             ScrollView {
-                VStack(spacing: 0) {
+                WLListCard {
                     ForEach(store.hosts) { host in
-                        HStack(spacing: 10) {
-                            Image(systemName: "folder").foregroundStyle(WL.purple)
-                            Text(host.alias).font(WL.body)
-                                .foregroundStyle(selected == host.alias ? WL.greenBright : WL.textPrimary)
-                            Text(host.connectionSummary).font(WL.caption).foregroundStyle(WL.textDim)
-                            Spacer()
-                        }
-                        .padding(.horizontal, 18).padding(.vertical, 8)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(WL.green.opacity(selected == host.alias ? 0.16 : 0))
-                        .overlay(alignment: .leading) {
-                            Rectangle().fill(WL.green).frame(width: 2)
-                                .opacity(selected == host.alias ? 1 : 0)
-                        }
-                        .contentShape(Rectangle())
-                        .simultaneousGesture(TapGesture(count: 2).onEnded { onPick(host) })
-                        .simultaneousGesture(TapGesture(count: 1).onEnded { selected = host.alias })
+                        FilesPickerRow(host: host, selected: selected == host.alias)
+                            .simultaneousGesture(TapGesture(count: 2).onEnded { onPick(host) })
+                            .simultaneousGesture(TapGesture(count: 1).onEnded { selected = host.alias })
                     }
                 }
+                .padding(.horizontal, 20).padding(.bottom, 20)
             }
         }
+    }
+}
+
+/// One host in the files picker: an inset rounded row in a list card.
+private struct FilesPickerRow: View {
+    let host: Host
+    let selected: Bool
+    @State private var hover = false
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "folder").foregroundStyle(WL.purple)
+            Text(host.alias).font(WL.body)
+                .foregroundStyle(selected ? WL.greenBright : WL.textPrimary)
+            Text(host.connectionSummary).font(WL.caption).foregroundStyle(WL.textDim)
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .wlRowHighlight(hover: hover, selected: selected)
+        .wlHover($hover)
     }
 }
 
@@ -946,9 +963,12 @@ struct ToolContainer<Content: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             WLPageHeader(title)
-            Rectangle().fill(WL.border.opacity(0.6)).frame(height: 1)
+            WLFormDivider()
             content
         }
+        // Tool pages sit on the same deeper canvas as the panes; their cards
+        // are raised on it.
+        .background(WL.paneCanvas)
     }
 }
 

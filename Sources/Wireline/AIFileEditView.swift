@@ -83,7 +83,7 @@ struct AIFileEditView: View {
                     .textEditorStyle(.plain)
                     .scrollContentBackground(.hidden)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .wlField()
+                    .wlField(multiline: true)
             }
 
             if reviewing || !reviewText.isEmpty {
@@ -97,8 +97,9 @@ struct AIFileEditView: View {
                     }
                     .frame(maxHeight: 120)
                     .padding(8)
-                    .background(WL.amber.opacity(0.08), in: RoundedRectangle(cornerRadius: WL.radius(6)))
-                    .overlay(RoundedRectangle(cornerRadius: WL.radius(6)).stroke(WL.amber.opacity(0.4), lineWidth: 1))
+                    .background(WL.amber.opacity(0.08), in: RoundedRectangle(cornerRadius: WL.radius(10), style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: WL.radius(10), style: .continuous)
+                        .strokeBorder(WL.amber.opacity(0.35), lineWidth: 1))
                 }
             }
         }

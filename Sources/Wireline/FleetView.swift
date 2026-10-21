@@ -140,7 +140,7 @@ struct FleetView: View {
                         .font(WL.small).foregroundStyle(WL.textPrimary)
                         .padding(10)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(WL.green.opacity(0.1), in: RoundedRectangle(cornerRadius: WL.radius(6)))
+                        .background(WL.green.opacity(0.1), in: RoundedRectangle(cornerRadius: WL.radius(10), style: .continuous))
                         .textSelection(.enabled)
                 }
                 ForEach(results) { r in
@@ -158,7 +158,7 @@ struct FleetView: View {
                             .textSelection(.enabled)
                     }
                     .padding(9)
-                    .wlCard(radius: 6)
+                    .wlCard(radius: 10)
                 }
             }
         }

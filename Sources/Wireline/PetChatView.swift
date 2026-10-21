@@ -34,16 +34,18 @@ struct PetChatView: View {
     private let convoKey = "__pet__"
 
     var body: some View {
+        let card = RoundedRectangle(cornerRadius: WL.radius(14), style: .continuous)
         VStack(spacing: 0) {
             header
-            Rectangle().fill(WL.border).frame(height: 1)
+            WLFormDivider()
             conversation
-            Rectangle().fill(WL.border).frame(height: 1)
             inputBar
         }
         .frame(width: 420, height: 560)
-        .background(WL.bg.opacity(0.98))
-        .overlay(RoundedRectangle(cornerRadius: WL.radius(10)).stroke(WL.border, lineWidth: WL.borderWidth))
+        // A floating card like the AI panel. The shadow stays small: the pet
+        // window is only 12pt larger than its content.
+        .clipShape(card)
+        .wlFloating(card, fill: WL.bg.opacity(0.98), shadow: 0.25, radius: 8, y: 3)
         .onAppear { loadConvo(); focusSoon() }
         .onDisappear { task?.cancel(); persist() }
         .alert(loc("确认在多台机器执行高危命令？", "Run this risky command on your hosts?"),
@@ -95,8 +97,8 @@ struct PetChatView: View {
 
     private var header: some View {
         HStack(spacing: 10) {
-            Image(systemName: "sparkles").font(.system(size: 13)).foregroundStyle(WL.green)
-            Text(loc("宠物助手", "Pet Assistant")).font(WL.body.weight(.semibold)).foregroundStyle(WL.textPrimary)
+            Image(systemName: "sparkles").font(.system(size: 12, weight: .medium)).foregroundStyle(WL.green)
+            Text(loc("宠物助手", "Pet Assistant")).font(WL.mono(13, .semibold)).foregroundStyle(WL.textPrimary)
             Spacer()
             if !items.isEmpty {
                 BracketButton(loc("清空", "Clear")) {
@@ -104,10 +106,10 @@ struct PetChatView: View {
                 }
             }
             Button(action: onClose) {
-                Image(systemName: "chevron.down").font(.system(size: 11, weight: .bold)).foregroundStyle(WL.textDim)
-            }.buttonStyle(.wlPlain)
+                Image(systemName: "chevron.down").font(.system(size: 11, weight: .bold))
+            }.buttonStyle(.wlIcon)
         }
-        .padding(.horizontal, 14).padding(.top, 12).padding(.bottom, 10)
+        .padding(.leading, 14).padding(.trailing, 8).padding(.top, 10).padding(.bottom, 8)
     }
 
     // MARK: conversation
@@ -124,7 +126,9 @@ struct PetChatView: View {
                     }
                     if let errorText {
                         Text(errorText).font(WL.caption).foregroundStyle(WL.red)
-                            .padding(10).background(WL.red.opacity(0.1), in: RoundedRectangle(cornerRadius: WL.radius(6)))
+                            .padding(.horizontal, 12).padding(.vertical, 9)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(WL.red.opacity(0.1), in: RoundedRectangle(cornerRadius: WL.radius(12), style: .continuous))
                     }
                     Color.clear.frame(height: 1).id("bottom")
                 }
@@ -161,31 +165,19 @@ struct PetChatView: View {
     private func exampleChip(_ zh: String, _ en: String) -> some View {
         let text = loc(zh, en)
         return Button { input = text; focused = true } label: {
-            Text("↳ " + text).font(WL.caption).foregroundStyle(WL.green)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }.buttonStyle(.wlPlain)
+            Text(text).multilineTextAlignment(.leading)
+        }
+        .buttonStyle(.wlChip(on: true))
     }
 
     // MARK: input
 
     private var inputBar: some View {
-        HStack(spacing: 8) {
-            TextField(loc("要在哪台/哪组机器做什么…", "What to run, and where…"), text: $input, axis: .vertical)
-                .textFieldStyle(.plain).font(WL.body).foregroundStyle(WL.textPrimary)
-                .lineLimit(1...4).focused($focused)
-                .onSubmit { send() }
-            if isBusy {
-                Button { task?.cancel(); isBusy = false; steps = 0 } label: {
-                    Image(systemName: "stop.fill").font(.system(size: 12)).foregroundStyle(WL.red)
-                }.buttonStyle(.wlPlain)
-            } else {
-                Button(action: send) {
-                    Image(systemName: "arrow.up.circle.fill").font(.system(size: 16))
-                        .foregroundStyle(canSend ? WL.green : WL.textDim)
-                }.buttonStyle(.wlPlain).disabled(!canSend)
-            }
-        }
-        .padding(.horizontal, 12).padding(.vertical, 10)
+        WLComposer(prompt: loc("要在哪台/哪组机器做什么…", "What to run, and where…"),
+                   text: $input, focus: $focused, busy: isBusy, canSend: canSend,
+                   onSend: { send() },
+                   onStop: { task?.cancel(); isBusy = false; steps = 0 })
+            .padding(.horizontal, 10).padding(.top, 4).padding(.bottom, 10)
     }
 
     private var canSend: Bool { !input.trimmingCharacters(in: .whitespaces).isEmpty && !isBusy && ai.isConfigured }
@@ -583,11 +575,16 @@ private struct PetItemView: View {
         switch item.kind {
         case .user:
             VStack(alignment: .leading, spacing: 4) {
-                Text(item.text)
-                    .font(WL.mono(13)).foregroundStyle(WL.textPrimary).textSelection(.enabled)
-                    .padding(8).frame(maxWidth: .infinity, alignment: .leading)
-                    .background(WL.green.opacity(0.12), in: RoundedRectangle(cornerRadius: WL.radius(6)))
-                HStack(spacing: 10) {
+                HStack(spacing: 0) {
+                    Spacer(minLength: 36)
+                    Text(item.text)
+                        .font(WL.mono(13)).foregroundStyle(WL.textPrimary).textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.horizontal, 12).padding(.vertical, 8)
+                        .background(WL.green.opacity(WL.isLight ? 0.12 : 0.14),
+                                    in: RoundedRectangle(cornerRadius: WL.radius(14), style: .continuous))
+                }
+                HStack(spacing: 6) {
                     Spacer()
                     BracketButton(loc.t("复制", "Copy")) { onCopy(item.text) }
                     BracketButton(loc.t("重试", "Retry")) { onRetry(item.text) }
@@ -655,9 +652,10 @@ private struct PetItemView: View {
                 }
             }
         }
-        .padding(9)
-        .background(WL.surface.opacity(0.6), in: RoundedRectangle(cornerRadius: WL.radius(6)))
-        .overlay(RoundedRectangle(cornerRadius: WL.radius(6)).stroke(WL.border, lineWidth: WL.borderWidth))
+        .padding(10)
+        .background(WL.textPrimary.opacity(WL.isLight ? 0.04 : 0.06),
+                    in: RoundedRectangle(cornerRadius: WL.radius(10), style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: WL.radius(10), style: .continuous).strokeBorder(WL.hairline, lineWidth: 1))
     }
 
     /// Split content on ``` fences into prose/code segments (code strips an
@@ -699,9 +697,10 @@ private struct PetItemView: View {
                 .font(WL.mono(12)).foregroundStyle(WL.green).textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(9)
-        .background(WL.surface.opacity(0.5), in: RoundedRectangle(cornerRadius: WL.radius(6)))
-        .overlay(RoundedRectangle(cornerRadius: WL.radius(6)).stroke(WL.border, lineWidth: WL.borderWidth))
+        .padding(10)
+        .background(WL.textPrimary.opacity(WL.isLight ? 0.04 : 0.06),
+                    in: RoundedRectangle(cornerRadius: WL.radius(10), style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: WL.radius(10), style: .continuous).strokeBorder(WL.hairline, lineWidth: 1))
     }
 
     private var resultsCard: some View {
@@ -724,8 +723,9 @@ private struct PetItemView: View {
                 .font(WL.small).tint(WL.green)
             }
         }
-        .padding(9)
-        .background(WL.surface.opacity(0.35), in: RoundedRectangle(cornerRadius: WL.radius(6)))
-        .overlay(RoundedRectangle(cornerRadius: WL.radius(6)).stroke(WL.border, lineWidth: WL.borderWidth))
+        .padding(10)
+        .background(WL.textPrimary.opacity(WL.isLight ? 0.03 : 0.04),
+                    in: RoundedRectangle(cornerRadius: WL.radius(10), style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: WL.radius(10), style: .continuous).strokeBorder(WL.hairline, lineWidth: 1))
     }
 }

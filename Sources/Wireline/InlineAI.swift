@@ -274,9 +274,9 @@ struct InlineAICommandView: View {
             // The proposed command + actions.
             if !c.command.isEmpty {
                 commandBox
-                HStack(spacing: 12) {
+                HStack(spacing: 6) {
                     Spacer()
-                    actionButton(loc("执行", "Run"), "⌘↩") { c.execute() }
+                    actionButton(loc("执行", "Run"), "⌘↩", primary: true) { c.execute() }
                         .keyboardShortcut(.return, modifiers: .command)
                     actionButton(loc("修改", "Edit"), "⌘E") { c.edit() }
                         .keyboardShortcut("e", modifiers: .command)
@@ -285,11 +285,18 @@ struct InlineAICommandView: View {
                 }
             }
         }
-        .padding(12)
-        .background(WL.bg.opacity(0.96), in: RoundedRectangle(cornerRadius: WL.radius(8)))
-        .overlay(RoundedRectangle(cornerRadius: WL.radius(8))
-            .stroke(WL.teal.opacity(0.5), lineWidth: WL.borderWidth))
-        .shadow(color: .black.opacity(0.35), radius: 12, y: 4)
+        .padding(14)
+        // A floating card (shadow on the shape only) with a faint teal edge
+        // marking it as the AI's.
+        .background {
+            cardShape.fill(WL.bg.opacity(0.97))
+                .shadow(color: .black.opacity(WL.depth(0.32)), radius: 16, y: 5)
+        }
+        .overlay(cardShape.strokeBorder(WL.teal.opacity(0.4), lineWidth: 1).allowsHitTesting(false))
+    }
+
+    private var cardShape: RoundedRectangle {
+        RoundedRectangle(cornerRadius: WL.radius(14), style: .continuous)
     }
 
     @ViewBuilder
@@ -300,31 +307,32 @@ struct InlineAICommandView: View {
                 .focused($editFocused)
                 .onSubmit { c.execute() }
                 .onExitCommand { c.editing = false }
-                .padding(9)
+                .padding(10)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(WL.surface.opacity(0.7), in: RoundedRectangle(cornerRadius: WL.radius(6)))
-                .overlay(RoundedRectangle(cornerRadius: WL.radius(6)).stroke(WL.green.opacity(0.6), lineWidth: WL.borderWidth))
+                .background(WL.textPrimary.opacity(0.075), in: RoundedRectangle(cornerRadius: WL.radius(10), style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: WL.radius(10), style: .continuous)
+                    .strokeBorder(WL.green.opacity(0.6), lineWidth: 1))
         } else {
             Text(c.command)
                 .font(WL.mono(13)).foregroundStyle(WL.green)
                 .textSelection(.enabled)
-                .padding(9)
+                .padding(10)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(WL.surface.opacity(0.6), in: RoundedRectangle(cornerRadius: WL.radius(6)))
-                .overlay(RoundedRectangle(cornerRadius: WL.radius(6)).stroke(WL.border, lineWidth: WL.borderWidth))
+                .background(WL.textPrimary.opacity(WL.isLight ? 0.04 : 0.06),
+                            in: RoundedRectangle(cornerRadius: WL.radius(10), style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: WL.radius(10), style: .continuous)
+                    .strokeBorder(WL.hairline, lineWidth: 1))
         }
     }
 
-    private func actionButton(_ label: String, _ key: String, action: @escaping () -> Void) -> some View {
+    private func actionButton(_ label: String, _ key: String, primary: Bool = false,
+                              action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 4) {
                 Text(label).font(WL.small.weight(.semibold))
                 Text(key).font(WL.caption).foregroundStyle(WL.textDim)
             }
-            .padding(.horizontal, 9).padding(.vertical, 4)
-            .background(WL.surface.opacity(0.8), in: RoundedRectangle(cornerRadius: WL.radius(5)))
-            .overlay(RoundedRectangle(cornerRadius: WL.radius(5)).stroke(WL.border, lineWidth: WL.borderWidth))
         }
-        .buttonStyle(.wlPlain)
+        .buttonStyle(.wlChip(on: primary ? true : nil))
     }
 }

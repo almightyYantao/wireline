@@ -119,11 +119,11 @@ private struct QuickTerminalView: View {
         TerminalHostView(session: session)
             .wlTerminalPadding(store)
             .background(WL.bg.opacity(max(0.88, store.terminalOpacity)))
-            .clipShape(UnevenRoundedRectangle(bottomLeadingRadius: WL.radius(12),
-                                              bottomTrailingRadius: WL.radius(12)))
-            .overlay(UnevenRoundedRectangle(bottomLeadingRadius: WL.radius(12),
-                                            bottomTrailingRadius: WL.radius(12))
-                .stroke(WL.border.opacity(0.6), lineWidth: 1))
+            .clipShape(UnevenRoundedRectangle(bottomLeadingRadius: WL.radius(14),
+                                              bottomTrailingRadius: WL.radius(14), style: .continuous))
+            .overlay(UnevenRoundedRectangle(bottomLeadingRadius: WL.radius(14),
+                                            bottomTrailingRadius: WL.radius(14), style: .continuous)
+                .strokeBorder(WL.hairline, lineWidth: 1))
             .preferredColorScheme(WL.colorScheme)
     }
 }

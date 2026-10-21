@@ -21,6 +21,9 @@ enum Motion {
     static let release: Animation = .spring(duration: 0.26, bounce: 0.18)
     /// A value changes in place: selection by mouse, toggle, status colour.
     static let state: Animation = .smooth(duration: 0.2)
+    /// The raised selection pill gliding along a capsule track (tab bar,
+    /// segmented controls, the drawer's section switcher).
+    static let slide: Animation = .spring(duration: 0.32, bounce: 0.12)
     /// Disclosure: group expand / collapse, chevron, an inline row revealing actions.
     static let disclose: Animation = .spring(duration: 0.3, bounce: 0)
     /// A menu / popover / small card appearing from its anchor.
@@ -203,12 +206,11 @@ struct WLIconButtonStyle: ButtonStyle {
                 .foregroundStyle(tint ?? (hover ? WL.textPrimary : WL.textDim))
                 .frame(width: size, height: size)
                 .background(
-                    RoundedRectangle(cornerRadius: WL.radius(6))
+                    RoundedRectangle(cornerRadius: WL.radius(7), style: .continuous)
                         .fill(WL.textPrimary.opacity(pressed ? 0.14 : hover ? 0.08 : 0))
                 )
                 .contentShape(Rectangle())
-                .scaleEffect(pressed && !Motion.reduce ? 0.94 : 1)
-                .opacity(enabled ? 1 : 0.4)
+                .scaleEffect(pressed && !Motion.reduce ? 0.94 : 1)                .opacity(enabled ? 1 : 0.4)
                 .animation(pressed ? Motion.press : Motion.release, value: pressed)
                 .wlHover($hover)
         }
@@ -246,6 +248,55 @@ struct WLPillButtonStyle: ButtonStyle {
                 .animation(pressed ? Motion.press : Motion.release, value: pressed)
                 .wlHover($hover)
         }
+    }
+}
+
+/// A small capsule chip: quick actions, suggestions, inline row actions, and —
+/// with `on` — option toggles (search "Aa", AI "Agent"). Off it's a faint wash
+/// of the text colour; on it takes the tint. Hover and press change only the
+/// opacity of the one capsule, so nothing swaps shape.
+struct WLChipButtonStyle: ButtonStyle {
+    var on: Bool? = nil
+    var tint: Color = WL.green
+
+    func makeBody(configuration: Configuration) -> some View {
+        ChipBody(configuration: configuration, on: on, tint: tint)
+    }
+
+    private struct ChipBody: View {
+        let configuration: ButtonStyleConfiguration
+        let on: Bool?
+        let tint: Color
+        @Environment(\.isEnabled) private var enabled
+        @State private var hover = false
+
+        var body: some View {
+            let pressed = configuration.isPressed
+            let lit = on == true
+            let lift = enabled && hover
+            configuration.label
+                .font(WL.caption)
+                .foregroundStyle(lit ? tint : (lift ? WL.textPrimary : WL.textPrimary.opacity(on == nil ? 0.85 : 0.6)))
+                .padding(.horizontal, 9).padding(.vertical, 4)
+                .background {
+                    let shape = Capsule(style: .continuous)
+                    shape.fill(WL.textPrimary.opacity(lit ? 0 : pressed ? 0.13 : lift ? 0.09 : 0.055))
+                        .overlay(shape.fill(tint.opacity(lit ? (pressed ? 0.24 : lift ? 0.19 : 0.14) : 0)))
+                }
+                .contentShape(Capsule())
+                .scaleEffect(pressed && !Motion.reduce ? 0.97 : 1)
+                .opacity(enabled ? 1 : 0.4)
+                .animation(pressed ? Motion.press : Motion.release, value: pressed)
+                .animation(Motion.state, value: lit)
+                .wlHover($hover)
+        }
+    }
+}
+
+extension ButtonStyle where Self == WLChipButtonStyle {
+    /// A quiet capsule chip. Pass `on:` for a toggle chip that lights up in `tint`.
+    static func wlChip(on: Bool? = nil, tint: Color = WL.green) -> WLChipButtonStyle {
+        WLChipButtonStyle(on: on, tint: tint)
     }
 }
 
