@@ -40,70 +40,20 @@ struct TerminalHostView: NSViewRepresentable {
         }
     }
 
-    /// The cursor setting last pushed into each terminal view.
-    @MainActor private static var appliedCursor: [ObjectIdentifier: (CursorShape, Bool)] = [:]
-
     private func apply(to container: NSView) {
-        let opacity = max(0.2, min(1.0, store.terminalOpacity))
         let theme = store.terminalTheme ?? .wireline
-        let term = session.terminalView
+        let font = store.terminalFontName.flatMap { NSFont(name: $0, size: store.terminalFontSize) }
+            ?? TerminalFont.preferred(size: store.terminalFontSize)
+            ?? .monospacedSystemFont(ofSize: store.terminalFontSize, weight: .regular)
+        session.terminalView.applyAppearance(TerminalAppearance(
+            theme: theme, font: font, gpu: store.terminalGPU,
+            cursorShape: store.terminalCursorShape, cursorBlink: store.terminalCursorBlink))
 
-        // Color scheme (ANSI palette + fg/cursor).
-        term.installColors(theme.ansiTermColors)
-        term.nativeForegroundColor = theme.foregroundNS
-        term.setCaretColor(theme.cursorNS)
-        // The IME composition overlay can't use the (clear) native background, so
-        // give it the theme's real, opaque background to sit on. See
-        // WirelineTerminalView.restyleMarkedTextOverlay.
-        term.markedTextBackground = theme.backgroundNS
-
-        // Font.
-        if let name = store.terminalFontName, let f = NSFont(name: name, size: store.terminalFontSize) {
-            term.font = f
-        } else if let f = TerminalFont.preferred(size: store.terminalFontSize) {
-            term.font = f
-        }
-
-        // Renderer: Metal (GPU) or CoreGraphics.
-        term.applyRenderer(gpu: store.terminalGPU)
-
-        // Cursor: only when the setting itself changed, so a redraw never undoes a
-        // shape the running program chose (vim's insert-mode bar).
-        let cursor = (store.terminalCursorShape, store.terminalCursorBlink)
-        let key = ObjectIdentifier(term)
-        if Self.appliedCursor[key].map({ $0 != cursor }) ?? true {
-            Self.appliedCursor[key] = cursor
-            let style: CursorStyle = switch cursor {
-            case (.block, true): .blinkBlock
-            case (.block, false): .steadyBlock
-            case (.bar, true): .blinkBar
-            case (.bar, false): .steadyBar
-            case (.underline, true): .blinkUnderline
-            case (.underline, false): .steadyUnderline
-            }
-            term.getTerminal().setCursorStyle(style)
-        }
-
-        // The app-wide wallpaper sits behind everything. The terminal itself adds
-        // NO background tint — it stays fully clear so the single translucent
-        // `WL.bg.opacity(opacity)` layer painted by the enclosing RightPanel shows
-        // through, exactly matching the sidebar's shade (no double-tinting).
-        _ = opacity
+        // The app-wide wallpaper sits behind everything; the container stays
+        // clear so the enclosing panel's translucent layer shows through.
         container.layer?.contents = nil
         container.layer?.backgroundColor = NSColor.clear.cgColor
         container.layer?.isOpaque = false
-        term.wantsLayer = true
-        term.layer?.isOpaque = false
-        // Keep the theme's RGB but paint it fully transparent (SwiftTerm's
-        // `backgroundOpacity`): the wallpaper shows through, faint (SGR 2)
-        // text still blends towards the real theme background, and SwiftTerm
-        // composites the default background without a glyph halo.
-        term.nativeBackgroundColor = theme.backgroundNS
-        term.backgroundOpacity = 0
-        // The view paints clear so the wallpaper shows through; tell programs
-        // that ask (OSC 10/11) the theme's real colours instead.
-        term.reportedColors = (theme.foreground, theme.background)
-        term.layer?.backgroundColor = NSColor.clear.cgColor
     }
 }
 
@@ -247,7 +197,7 @@ final class TerminalContainerView: NSView {
         // Under the cover: blank the prompt, reflow once, and tell the shell
         // right away (no throttle wait — the size has settled).
         layoutTerminal()
-        let wterm = term as? WirelineTerminalView
+        let wterm = term as? any TerminalEngine
         let signalled = wterm?.flushPendingResize() ?? false
 
         guard let cover, animated else {
@@ -257,7 +207,7 @@ final class TerminalContainerView: NSView {
         }
         let reveal = RevealOnce { [weak self, weak cover] in
             guard let self else { return }
-            (self.term as? WirelineTerminalView)?.outputObserver = nil
+            (self.term as? any TerminalEngine)?.outputObserver = nil
             // The new frame goes fully opaque at once and only the cover fades.
             // Fading both would dip mid-way (two translucent layers over a clear
             // background) — a visible blink. This way unchanged text stays
@@ -287,7 +237,7 @@ final class TerminalContainerView: NSView {
 
     private func snapshotImage() -> NSImage? {
         // Works under the Metal renderer too (see WirelineTerminalView).
-        (term as? WirelineTerminalView)?.snapshotImage()
+        (term as? any TerminalEngine)?.snapshotImage()
     }
 }
 
@@ -454,7 +404,7 @@ final class TerminalOcclusion {
             guard let root = w.contentView else { continue }
             var stack: [NSView] = [root]
             while let v = stack.popLast() {
-                if let t = v as? WirelineTerminalView { t.allowMouseReporting = !paused }
+                if let t = v as? any TerminalEngine { t.allowMouseReporting = !paused }
                 stack.append(contentsOf: v.subviews)
             }
         }

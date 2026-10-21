@@ -387,7 +387,7 @@ final class WirelineTerminalView: TerminalView, TerminalEngine {
         // the active pane does.
         if event.type == .keyDown,
            KeyBindingStore.shared.shortcut(for: .closeShell).matches(event) {
-            let focusedTerminal = window?.firstResponder as? WirelineTerminalView
+            let focusedTerminal = window?.firstResponder as? any TerminalEngine
             let mine = focusedTerminal.map { $0 === self } ?? (isActivePane?() ?? true)
             guard mine else { return super.performKeyEquivalent(with: event) }
             onCloseRequested?()
@@ -462,6 +462,51 @@ final class WirelineTerminalView: TerminalView, TerminalEngine {
         // Moving windows rebuilds SwiftTerm's Metal view — re-clear it.
         makeMetalLayerTransparent()
         observeFocus()
+    }
+
+    // MARK: Appearance
+
+    /// The cursor setting last pushed in — re-applied only when the setting
+    /// itself changes, so a redraw never undoes a shape the running program
+    /// chose (vim's insert-mode bar).
+    private var appliedCursor: (CursorShape, Bool)?
+
+    func applyAppearance(_ a: TerminalAppearance) {
+        // Colour scheme (ANSI palette + fg/cursor).
+        installColors(a.theme.ansiTermColors)
+        nativeForegroundColor = a.theme.foregroundNS
+        setCaretColor(a.theme.cursorNS)
+        // The IME composition overlay can't use the (transparent) native
+        // background, so give it the theme's real, opaque background.
+        markedTextBackground = a.theme.backgroundNS
+        if font != a.font { font = a.font }
+        // Renderer: Metal (GPU) or CoreGraphics.
+        applyRenderer(gpu: a.gpu)
+
+        if appliedCursor.map({ $0 != (a.cursorShape, a.cursorBlink) }) ?? true {
+            appliedCursor = (a.cursorShape, a.cursorBlink)
+            let style: CursorStyle = switch (a.cursorShape, a.cursorBlink) {
+            case (.block, true): .blinkBlock
+            case (.block, false): .steadyBlock
+            case (.bar, true): .blinkBar
+            case (.bar, false): .steadyBar
+            case (.underline, true): .blinkUnderline
+            case (.underline, false): .steadyUnderline
+            }
+            getTerminal().setCursorStyle(style)
+        }
+
+        // The app-wide wallpaper sits behind everything; the terminal adds no
+        // tint of its own. Keep the theme's RGB but paint it fully transparent
+        // (`backgroundOpacity`): faint (SGR 2) text still blends towards the
+        // real theme background, and there's no glyph halo.
+        wantsLayer = true
+        layer?.isOpaque = false
+        nativeBackgroundColor = a.theme.backgroundNS
+        backgroundOpacity = 0
+        layer?.backgroundColor = NSColor.clear.cgColor
+        // Programs that ask (OSC 10/11) get the theme's real colours.
+        reportedColors = (a.theme.foreground, a.theme.background)
     }
 
     // MARK: GPU rendering

@@ -159,7 +159,8 @@ final class TerminalSession: Identifiable {
     let alias: String
     let startedAt = Date()
     private(set) var isRunning = true
-    let terminalView: WirelineTerminalView
+    /// The renderer (SwiftTerm today; see `TerminalEngine`).
+    let terminalView: any TerminalEngine
     /// The PTY and the byte-stream logic around it (engine-independent).
     let io: TerminalIO
     /// Live remote vitals (SSH sessions only), polled over the ControlMaster socket.
@@ -435,7 +436,7 @@ final class TerminalSession: Identifiable {
             // The snapshot is a self-contained stream of SGR + text + CRLF (see
             // Terminal.serializeColored), so feed the raw bytes — colors and styles
             // come back intact and there are no cursor moves to disturb the session.
-            terminalView.feed(byteArray: ArraySlice([UInt8](sb)))
+            terminalView.feed(ArraySlice([UInt8](sb)))
             terminalView.feed(text: "\r\n\u{1b}[2m──────── 已恢复上次会话 / restored ────────\u{1b}[0m\r\n")
             pendingScrollback = nil
         }

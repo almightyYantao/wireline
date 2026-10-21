@@ -1,14 +1,96 @@
 import AppKit
+import struct SwiftTerm.SearchOptions
 
 /// A terminal renderer: parses the child's output and draws it, and turns the
 /// user's typing into bytes for the child. It never owns the process — that's
 /// `TerminalIO` — so SwiftTerm and libghostty can sit behind the same session.
+/// Everything the app does with a terminal view goes through here.
 @MainActor
-protocol TerminalEngine: AnyObject {
+protocol TerminalEngine: NSView {
+    // MARK: Byte plumbing (with TerminalIO)
+
+    /// The session's PTY side (resize flushing, output observation).
+    var io: TerminalIO? { get set }
+    /// Bytes for the child: keystrokes, pastes, query replies.
+    var onInput: ((ArraySlice<UInt8>) -> Void)? { get set }
+    /// The grid changed size (`TerminalIO` tells the PTY, throttled).
+    var onGridResize: (() -> Void)? { get set }
     /// Output from the child, to parse and draw.
     func feed(_ bytes: ArraySlice<UInt8>)
     /// The grid size (and its pixel size) to report to the PTY.
     var gridSize: winsize { get }
     /// The throttled grid size has just reached the PTY.
     func didDeliverResize()
+
+    /// Type `txt` as if the user had (goes to the child via `onInput`).
+    func send(txt: String)
+    /// Draw `text` locally — notices, separators — without the child seeing it.
+    func feed(text: String)
+
+    // MARK: Events
+
+    /// ⌘W while this terminal is focused: close just this session.
+    var onCloseRequested: (() -> Void)? { get set }
+    /// OSC 7 working directory (raw payload).
+    var onDirectoryChange: ((String?) -> Void)? { get set }
+    /// A program-set window title (OSC 0/2).
+    var onTitleReport: ((String) -> Void)? { get set }
+    /// A path was ⌘-clicked.
+    var onOpenPath: ((String) -> Void)? { get set }
+    /// A click landed in this pane.
+    var onClickFocus: (() -> Void)? { get set }
+    /// Whether this view's session is the active pane.
+    var isActivePane: (() -> Bool)? { get set }
+
+    // MARK: Presentation
+
+    func applyAppearance(_ appearance: TerminalAppearance)
+    /// Off while an overlay covers the terminal, so TUIs don't see the pointer.
+    var allowMouseReporting: Bool { get set }
+    /// An image of the current screen, for the frozen frame during layout animation.
+    func snapshotImage() -> NSImage?
+    /// Called after every chunk of output is rendered, while set.
+    var outputObserver: (() -> Void)? { get set }
+    /// Send a pending throttled size to the PTY now. True if one was pending.
+    @discardableResult func flushPendingResize() -> Bool
+
+    // MARK: Content
+
+    /// Scroll to the previous (−1) / next (+1) prompt.
+    @discardableResult func jumpToPrompt(_ delta: Int) -> Bool
+    /// Text of the most recent finished command's output.
+    func lastCommandOutput() -> String?
+    /// Scrollback + screen with colours, for restore on next launch (empty while
+    /// a full-screen app owns the alternate screen).
+    var renderedBuffer: Data { get }
+
+    // MARK: Search
+
+    func findNext(_ term: String, options: SearchOptions, scrollToResult: Bool) -> Bool
+    func findPrevious(_ term: String, options: SearchOptions, scrollToResult: Bool) -> Bool
+    func searchMatchSummary(_ term: String, options: SearchOptions, limit: Int) -> (index: Int, total: Int)
+    func clearSearch()
+}
+
+extension TerminalEngine {
+    @discardableResult
+    func findNext(_ term: String, options: SearchOptions) -> Bool {
+        findNext(term, options: options, scrollToResult: true)
+    }
+    @discardableResult
+    func findPrevious(_ term: String, options: SearchOptions) -> Bool {
+        findPrevious(term, options: options, scrollToResult: true)
+    }
+    func searchMatchSummary(_ term: String, options: SearchOptions) -> (index: Int, total: Int) {
+        searchMatchSummary(term, options: options, limit: 1000)
+    }
+}
+
+/// How a terminal should look, from the app's settings and theme.
+struct TerminalAppearance: Equatable {
+    var theme: TerminalTheme
+    var font: NSFont
+    var gpu: Bool
+    var cursorShape: CursorShape
+    var cursorBlink: Bool
 }
