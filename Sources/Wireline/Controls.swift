@@ -488,6 +488,58 @@ private struct WLFieldModifier: ViewModifier {
     }
 }
 
+// MARK: - Composer
+
+/// The chat composer (AI panel, pet chat): one capsule field that grows into a
+/// rounded rectangle for multi-line input, with a round send / stop button
+/// inside its trailing end. Return sends (via `onSend`).
+struct WLComposer: View {
+    let prompt: String
+    @Binding var text: String
+    let focus: FocusState<Bool>.Binding
+    var busy = false
+    var canSend = true
+    var onSend: () -> Void
+    var onStop: () -> Void = {}
+
+    var body: some View {
+        let focused = focus.wrappedValue
+        let shape = WLFieldShape(maxRadius: WL.radius(16))
+        HStack(alignment: .bottom, spacing: 8) {
+            TextField(prompt, text: $text, axis: .vertical)
+                .textFieldStyle(.plain).font(WL.body).foregroundStyle(WL.textPrimary)
+                .lineLimit(1...4)
+                .focused(focus)
+                .onSubmit(onSend)
+                .padding(.vertical, 4)
+            if busy {
+                Button(action: onStop) {
+                    Image(systemName: "stop.fill").font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(WL.red)
+                        .frame(width: 26, height: 26)
+                        .background(WL.red.opacity(0.15), in: Circle())
+                }
+                .buttonStyle(.wlPlain)
+                .help(Localizer.shared.t("停止", "Stop"))
+            } else {
+                Button(action: onSend) {
+                    Image(systemName: "arrow.up").font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(canSend ? WL.bg : WL.textDim)
+                        .frame(width: 26, height: 26)
+                        .background(Circle().fill(canSend ? WL.green : WL.textDim.opacity(0.2)))
+                }
+                .buttonStyle(.wlPlain)
+                .disabled(!canSend)
+            }
+        }
+        .padding(.leading, 14).padding(.trailing, 4).padding(.vertical, 4)
+        .background(focused ? WL.textPrimary.opacity(0.075) : WL.fieldFill, in: shape)
+        .overlay(shape.strokeBorder(WL.green.opacity(focused ? 0.5 : 0), lineWidth: 1).allowsHitTesting(false))
+        .animation(Motion.hover, value: focused)
+        .animation(Motion.state, value: canSend)
+    }
+}
+
 // MARK: - Form card
 
 /// A titled group of settings drawn as a quiet card (System Settings style):

@@ -117,11 +117,16 @@ struct RightPanel: View {
         // The AI panel floats over the terminal by default (opening it resizes
         // nothing); pinned, it becomes a column beside it, sliding in while the
         // terminal grid is frozen (see TerminalResizeGate) so it reflows once.
+        // Either way the panel is a card (it draws its own chrome) inset by
+        // the pane gap, like the panes and the host drawer.
         HStack(spacing: 0) {
             terminalColumn
             if showAI && aiDocked {
-                Rectangle().fill(WL.border).frame(width: 1)
+                // The panes already leave a gap on their right; the column adds
+                // the window-edge gaps and continues the panes' canvas.
                 aiPanel
+                    .padding([.top, .bottom, .trailing], wlPaneGap)
+                    .background(sessions.sessions.isEmpty ? Color.clear : WL.paneCanvas)
                     .transition(.move(edge: .trailing).combined(with: .opacity))
             }
         }
@@ -130,10 +135,10 @@ struct RightPanel: View {
         .overlay(alignment: .trailing) {
             if showAI && !aiDocked {
                 aiPanel
-                    .background(WL.bg)
+                    // Occlusion covers the card itself, not the gap around it,
+                    // so the terminal still gets clicks in that sliver.
                     .wlOccludesTerminal()
-                    .overlay(alignment: .leading) { Rectangle().fill(WL.border).frame(width: 1) }
-                    .shadow(color: .black.opacity(WL.depth(0.28)), radius: 18, x: -4)
+                    .padding(wlPaneGap)
                     .transition(.move(edge: .trailing).combined(with: .opacity))
             }
         }

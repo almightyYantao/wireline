@@ -24,7 +24,6 @@ struct PetView: View {
                 PetChatView {
                     wlAnimate(Motion.expand) { expanded = false }
                 }
-                .clipShape(RoundedRectangle(cornerRadius: WL.radius(10)))
                 .transition(Motion.reduce ? .opacity
                             : .scale(scale: 0.94, anchor: .bottomTrailing).combined(with: .opacity))
             }
@@ -70,9 +69,8 @@ struct PetView: View {
         Text(loc("有事找我～", "Need me?"))
             .font(WL.small)
             .foregroundStyle(WL.textPrimary)
-            .padding(.horizontal, 10).padding(.vertical, 6)
-            .background(WL.surface.opacity(0.95), in: RoundedRectangle(cornerRadius: WL.radius(8)))
-            .overlay(RoundedRectangle(cornerRadius: WL.radius(8)).stroke(WL.border, lineWidth: WL.borderWidth))
+            .padding(.horizontal, 12).padding(.vertical, 6)
+            .wlFloating(Capsule(style: .continuous), shadow: 0.2, radius: 6, y: 2)
     }
 }
 
