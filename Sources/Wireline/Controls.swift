@@ -9,7 +9,7 @@ import AppKit
 
 // MARK: - Surfaces
 
-// The card / capsule language (see docs/design/motion-spec.md §4.11): content
+// The card / capsule language (see docs/design/motion-spec.md §4.0): content
 // sits on a slightly deeper canvas (`WL.paneCanvas`) in raised cards; choices
 // sit in a capsule track with one raised pill that slides to the selection.
 // "Raised" always means one step above whatever it sits on: white on light

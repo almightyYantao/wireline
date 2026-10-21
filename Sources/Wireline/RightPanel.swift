@@ -123,13 +123,16 @@ struct RightPanel: View {
             terminalColumn
             if showAI && aiDocked {
                 // The panes already leave a gap on their right; the column adds
-                // the window-edge gaps and continues the panes' canvas.
+                // the window-edge gaps.
                 aiPanel
                     .padding([.top, .bottom, .trailing], wlPaneGap)
-                    .background(WL.paneCanvas)
                     .transition(.move(edge: .trailing).combined(with: .opacity))
             }
         }
+        // Pane cards — and the overview's / host details' cards, and the
+        // docked AI card — sit on a slightly deeper canvas. It's under the
+        // whole row so the docked column sliding in never uncovers a seam.
+        .background(WL.paneCanvas)
         // Unpinned, the panel floats over the terminal: opening it resizes
         // nothing. Pinned, it's a real column (the terminal makes room once).
         .overlay(alignment: .trailing) {
@@ -240,9 +243,6 @@ struct RightPanel: View {
             }
         }
         .frame(maxWidth: .infinity)
-        // Pane cards — and the overview's / host details' cards — sit on a
-        // slightly deeper canvas.
-        .background(WL.paneCanvas)
     }
 
     /// The host backing the active session, for AI context.
