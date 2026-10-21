@@ -56,6 +56,12 @@ let package = Package(
         .testTarget(
             name: "WirelineCoreTests",
             dependencies: ["WirelineCore"]
+        ),
+        // libghostty engine end-to-end (opens a window + shell; skipped unless
+        // WIRELINE_GHOSTTY_HARNESS=1).
+        .testTarget(
+            name: "WirelineGhosttyHarness",
+            dependencies: ["Wireline", "GhosttyKit"]
         )
     ]
 )
