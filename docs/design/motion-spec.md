@@ -1,10 +1,10 @@
 # Wireline 界面、动效与交互规范
 
 > 适用范围：`Sources/Wireline` 下所有 SwiftUI / AppKit 界面。
-> 代码落点：[`Sources/Wireline/Motion.swift`](../../Sources/Wireline/Motion.swift)（token、转场、按钮样式、hover、脉冲）。
+> 代码落点：[`Sources/Wireline/Motion.swift`](../../Sources/Wireline/Motion.swift)（token、转场、按钮样式、hover、脉冲）；[`Sources/Wireline/Controls.swift`](../../Sources/Wireline/Controls.swift)（卡片 / 胶囊的表面 token 与共享控件）。
 > 参照：Apple HIG · Motion / Accessibility，以及 macOS 自带应用（Finder、系统设置、Spotlight、菜单）的实际表现。
 
-改界面前先读一遍第 1、2 节；新增组件时对照第 4 节；提交前过一遍第 7 节的检查清单。
+改界面前先读一遍第 1、2 节和 4.0（卡片 / 胶囊设计语言）；新增组件时对照第 4 节；提交前过一遍第 7 节的检查清单。
 
 ---
 
@@ -16,7 +16,7 @@
 4. **弹簧为主，不要弹跳。** 工具型应用的 bounce 不超过 0.2。会"Q 弹"的只有桌宠这种有意为之的角色元素。
 5. **不要让终端逐帧重排，也不要让它硬切。** 会改变终端尺寸的布局变化一律走"冻结 → 动画 → 一次提交"。见第 3 节。
 6. **尊重"减弱动态效果"。** 系统设置 → 辅助功能 → 显示 → 减弱动态效果打开时：位移和缩放改成短交叉淡化，循环动画全部停掉。
-7. **和原生保持一致。** macOS 的按钮按下是变暗而不是缩小；菜单高亮是瞬时的；选中态不滑动；光标保持箭头（只有真正的超链接用手型）。
+7. **和原生保持一致。** macOS 的按钮按下是变暗而不是缩小；菜单高亮是瞬时的；光标保持箭头（只有真正的超链接用手型）。唯一会滑动的选中态是胶囊轨道里的凸起药丸（标签栏、分段控件），和系统分段控件一样；列表行的选中只做淡入淡出。
 
 ---
 
@@ -30,6 +30,7 @@
 | `Motion.press` | easeOut 0.08s | 鼠标按下 |
 | `Motion.release` | spring 0.26s, bounce 0.18 | 鼠标抬起回弹 |
 | `Motion.state` | smooth 0.2s | 原地状态变化：鼠标选中、开关、连接状态变色 |
+| `Motion.slide` | spring 0.32s, bounce 0.12 | 胶囊轨道里的凸起药丸滑到新选中项（标签栏、分段控件、抽屉分区切换）。用 `.animation(Motion.resolved(Motion.slide), value:)` 或 `wlAnimate(Motion.slide)` |
 | `Motion.disclose` | spring 0.3s, bounce 0 | 展开 / 折叠：分组、箭头旋转、行内展开操作 |
 | `Motion.popIn` | spring 0.22s, bounce 0 | 菜单、气泡、小卡片出现 |
 | `Motion.popOut` | easeIn 0.12s | 上面这些消失 |
@@ -72,7 +73,7 @@ wlAnimateTerminalLayout { showAI = true }           // 会改终端尺寸的布�
 | 变化 | 处理 |
 |---|---|
 | 侧栏（主机列表） | **悬浮抽屉，盖在终端上方**，终端尺寸永不改变，因此无需冻结。从左侧滑入（`Motion.expand`），带浅遮罩；左边缘悬停 0.18s、⌘S 或角落按钮打开，点外面、连接或（悬停打开时）指针离开则收起 |
-| AI 面板开 / 关 | 默认**浮在终端上方**（从右侧滑入，不改终端尺寸）；用户点图钉固定后才成为一栏，开关和固定 / 取消固定都走 `wlAnimateTerminalLayout` |
+| AI 面板开 / 关 | 默认**浮在终端上方**（从右侧滑入，不改终端尺寸）；用户点图钉固定后才成为一栏，开关和固定 / 取消固定都走 `wlAnimateTerminalLayout`。两种模式下面板都是圆角卡片（自己画边与阴影），距窗口边缘 `wlPaneGap`；浮动时 `wlOccludesTerminal()` 只盖卡片本身，不含四周的间隙 |
 | 全宽页面标题（工具页、主机详情、总览） | 统一用 `WLPageHeader`：顶部让出 28pt 标题栏，标题行与标签栏同高，从侧栏按钮右侧开始 |
 | 广播条出现 | `wlAnimateTerminalLayout`，从顶部滑入 |
 | 终端 ↔ 端口转发 / 文件 / 密钥 | 交叉淡化，两边都按最终尺寸挂载，终端不会中途改尺寸 |
@@ -104,6 +105,43 @@ wlAnimateTerminalLayout { showAI = true }           // 会改终端尺寸的布�
 
 ## 4. 组件规范
 
+### 4.0 卡片 / 胶囊设计语言
+
+界面由两种形状组成：**卡片**（连续圆角矩形）承载内容，**胶囊**承载选择与输入。参照实现：`PaneTree.swift` 的 `wlPaneCard`、`RightPanel.swift` 的 `SessionTabBar`、`ContentView.swift` 的主机抽屉。
+
+**画布与凸起。** 内容放在比主题背景略深的画布 `WL.paneCanvas` 上，卡片"凸起"其上。"凸起"永远指比它所在的面高一级：浅色主题是白色，深色主题是一层文字色的薄雾。设置窗口、工具页（端口 / 文件 / 密钥）、Sheet 的正文区、终端区都铺这层画布。
+
+| Token（`Controls.swift`） | 值 | 用在哪 |
+|---|---|---|
+| `WL.paneCanvas` | 黑色 4.5%（浅）/ 26%（深） | 卡片下面的画布 |
+| `WL.cardFill` | 白 90%（浅）/ 文字色 4.5%（深） | 表单卡片、列表卡片、总览主机卡 |
+| `WL.raised` | 白（浅）/ 文字色 12%（深） | 胶囊轨道里选中的凸起药丸 |
+| `WL.track` | 文字色 6% / 8% | 胶囊轨道底色（标签栏、分段控件、步进器） |
+| `WL.fieldFill` | 文字色 5% / 5.5% | 输入框、搜索框、下拉菜单的静止底色 |
+| `WL.hairline` | 文字色 9% / 11% | 卡片、药丸、浮层的 1pt 边 |
+
+**共享修饰符 / 组件。** 新代码优先用这些，不要自己拼：
+
+| 名称 | 作用 |
+|---|---|
+| `.wlCard(radius:)` | 凸起卡片：`cardFill` + 发丝边 + 只落在形状上的浅阴影，默认 12pt 连续圆角 |
+| `.wlPaneCard(focused:opacity:)` | 终端分屏卡片（主题背景、聚焦时阴影加深） |
+| `.wlFloating(shape, fill:shadow:radius:y:)` | 浮在内容上的表面：模态卡片、AI 面板、搜索条、断线横幅、提示 toast、Vim 速查表 |
+| `.wlCapsuleTrack()` + `.wlSegmentPill(active:hover:in:)` | 胶囊轨道 + 可滑动的凸起药丸；`WLSegmented`、抽屉分区、标签栏都用这一套 |
+| `.wlSearchCapsule(focused:)` | 内联搜索 / 过滤框：胶囊底色聚焦时加深，强调色边淡入 |
+| `.wlField(multiline:)` | 表单输入框：单行是胶囊；多行（`TextEditor`、`axis: .vertical`）传 `multiline: true`，一行高时仍是胶囊，长高后变成 10pt 圆角矩形（同一个 `WLFieldShape`，不换形状） |
+| `WLComposer` | 聊天输入：胶囊输入框，尾部内嵌圆形发送 / 停止按钮（AI 面板、桌宠聊天） |
+| `.wlChip(on:tint:)` | 小胶囊：快捷动作、建议、行内操作；传 `on:` 变成开关（选中时染 tint） |
+| `.wlRowHighlight(hover:selected:)` / `.wlResultHighlight(_:)` | 列表行的内缩圆角高亮（鼠标 / 键盘结果列表） |
+
+**形状规则。**
+
+- 所有圆角用 `style: .continuous`，半径走 `WL.radius(_)`（主题可整体缩放）。层级：分屏卡片 / AI 面板 / 抽屉 10–14，表单卡片 12，内嵌块（代码块、提示块）10，行高亮 8–10，图标块 7–9。
+- **阴影只落在形状上。** 写成 `.background { shape.fill(...).shadow(...) }`，不要对内容整体 `.shadow`——那会给每个字形打阴影，透明终端尤其明显。
+- **hover / 选中只改同一个形状的不透明度**，不要从一个形状换到另一个，也不要从 `.clear` 过渡（中间帧发黑）。唯一的形状移动是 `matchedGeometryEffect` 的药丸滑动。
+- 分隔线用 `WLFormDivider()`（发丝色），不要再画 `WL.border` 的实线；卡片里的控件不画自己的描边。
+- `.wlChip` / 胶囊按钮至少 22pt 高的点击区；纯图标按钮仍用 `.wlIcon`（圆角方形 hover 底，不是胶囊）。
+
 ### 4.1 按钮
 
 | 样式 | 什么时候用 | hover | 按下 | 禁用 |
@@ -111,6 +149,10 @@ wlAnimateTerminalLayout { showAI = true }           // 会改终端尺寸的布�
 | `.wlPlain` | 默认。文字按钮、`[方括号]` 按钮、自绘行 | 由 label 自己决定（变色） | 不透明度 0.6 | 不透明度 0.4 |
 | `.wlIcon` | 工具栏、面板标题栏的纯图标按钮 | 6pt 圆角浅底 8% | 浅底 14% + 缩到 0.94 | 0.4 |
 | `.wlPill(tint, prominent:)` | 主要操作：重新连接、发送、确认 | 底色加深 | 底色再加深 + 缩到 0.97 | 0.4 |
+| `.wlChip(on:tint:)` | 小胶囊：行内操作（复制、重试、编辑）、快捷动作、开关型选项（"Aa"、自动执行） | 底色加深 | 再加深 + 缩到 0.97 | 0.4 |
+| `.wlPrimary` / `.wlSecondary` / `.wlDestructive` | Sheet / 表单里的确认、取消、危险操作；都是胶囊 | 底色加深 | 再加深 + 缩到 0.97 | 0.4 |
+
+`BracketButton` 保留名字只为少改调用点，外观已经是 `.wlChip()`，不再画 `[方括号]`。
 
 - 禁止再用 `.buttonStyle(.plain)`：它没有按下反馈。
 - 图标按钮的可点区域不小于 24×24pt，即使图标只有 10pt。
@@ -118,8 +160,9 @@ wlAnimateTerminalLayout { showAI = true }           // 会改终端尺寸的布�
 
 ### 4.2 列表行（主机行、片段行、待办行）
 
-- hover：底色 `surface` 30% 透明度，`Motion.hover` 淡入。
-- 选中：底色 `surface` 55% + 左侧 2pt 强调色竖条，**选中切换不做滑动**，只做 `Motion.state` 淡入淡出。
+- 行是**内缩的圆角块**（距容器边 6–8pt，连续圆角 8–10pt），不是铺满整行的直角色带，也不画左侧竖条。
+- hover：文字色 4.5–5.5% 的同形状底色，`Motion.hover` 淡入。
+- 选中：强调色 12–14% 的同形状底色，**选中切换不做滑动**，只做 `Motion.state` 淡入淡出。分组颜色标识用行内左侧的短胶囊（3×16pt）。
 - 激活主机下方的行内操作（端口转发、文件）用 `Motion.disclose` 展开，内容 `.wlDisclose`。
 - 双击连接、单击选中；拖拽时的预览要和行本身同款字体颜色。
 
@@ -143,21 +186,24 @@ wlAnimateTerminalLayout { showAI = true }           // 会改终端尺寸的布�
 ### 4.5 模态浮层（⌘K 快速连接、⌘P 命令面板）
 
 - 遮罩：黑色 40%，`wlScrim` 淡入 0.2s / 淡出 0.14s，点击遮罩关闭。
-- 卡片：`wlModal`，从上方 6pt、缩放 0.97 落位；关闭时缩到 0.98 并淡出。
+- 卡片：16pt 连续圆角的 `wlFloating`；`wlModal`，从上方 6pt、缩放 0.97 落位；关闭时缩到 0.98 并淡出。
+- 查询框是卡片里内缩 10pt 的胶囊（`wlSearchCapsule`），结果行用 `wlResultHighlight` 的内缩圆角块。
 - 打开的同一帧输入框获得焦点，不等动画结束。
 - 高亮行随键盘**瞬移**；鼠标 hover 某行会把高亮移过去（与键盘共用一个高亮，避免出现两个高亮）。
 - 列表为空时的提示文字用 `Motion.state` 淡入，不要闪烁。
 
 ### 4.6 横幅与浮动条
 
-- 断线横幅、终端搜索条：`wlSlide(.top)`。
+- 断线横幅、终端搜索条、配置 toast：都是 `wlFloating(Capsule())` 浮动胶囊；断线横幅和搜索条 `wlSlide(.top)`，toast `wlSlide(.bottom)`。
+- 广播条：分屏卡片上方一张琥珀色的圆角卡片，里面是胶囊输入框。
 - 行内 AI 卡片（⌘;）：`wlSlide(.bottom)`。卡片内部"思考中 → 出命令"的切换用 `Motion.state`。
 - 回到底部按钮：`wlPop(anchor: .bottom)`；滚动本身用 `Motion.scroll`。
 
 ### 4.7 标签栏
 
-- 选中标签：底色与 2pt 下划线用 `Motion.state` 过渡；切换本身瞬时。
-- 关闭按钮 `[x]`：平时 70% 弱化，hover 整个标签时提亮，hover 按钮本身变红。
+- 所有标签在一条长胶囊轨道里（`wlCapsuleTrack`），选中标签是凸起药丸（主题背景、浅阴影、发丝边），用 `matchedGeometryEffect` + `Motion.slide` 滑到新标签；内容切换本身瞬时。
+- 两个未选中标签之间画发丝分隔；hover 是同形状胶囊的薄底色。
+- 关闭按钮：只在 hover 或选中时出现。
 - 运行中徽标、未读点：`wlBadge` 出现；运行中的点用 `.wlPulse`。
 
 ### 4.8 状态指示（连接点、状态栏）
@@ -174,7 +220,7 @@ wlAnimateTerminalLayout { showAI = true }           // 会改终端尺寸的布�
 
 ### 4.10 弹窗（Sheet）
 
-所有 Sheet 一律用 `WLSheet`（`Controls.swift`），弹出和收起的动画交给 AppKit 系统 Sheet，不要自己再加。
+所有 Sheet 一律用 `WLSheet`（`Controls.swift`），弹出和收起的动画交给 AppKit 系统 Sheet，不要自己再加。正文区铺 `WL.paneCanvas`，表单卡片凸起其上；头部和底栏留在主题背景上。
 
 ```
 ┌──────────────────────────────────────────┐
@@ -191,17 +237,17 @@ wlAnimateTerminalLayout { showAI = true }           // 会改终端尺寸的布�
 │  卡片下方的说明文字（footer）            │
 │                                          │
 ├──────────────────────────────────────────┤
-│ [次要操作]            [取消] [ 主操作 ]  │  底栏：surface 30% 底色
+│ [次要操作]            (取消) ( 主操作 )  │  底栏：胶囊按钮
 └──────────────────────────────────────────┘
 ```
 
 - **底栏按钮**：次要或工具类操作靠左；取消（`.wlSecondary` + `.keyboardShortcut(.cancelAction)`）和主操作（`.wlPrimary` + `.keyboardShortcut(.defaultAction)`）靠右。主操作在条件不满足时禁用。危险操作用 `.wlDestructive`。
 - 回车触发主操作，Esc 取消，右上角 × 与取消等价。
-- `[方括号]` 按钮只用在内容区里的小型行内操作（如"[选择…]"），不放在底栏。
+- 小胶囊（`.wlChip` / `BracketButton`）只用在内容区里的小型行内操作（如"选择…"），不放在底栏。
 
 ### 4.11 卡片与表单
 
-- **不套框。** 卡片是低对比底色（`surface` 40%）加一圈 55% 透明度的细描边。卡片里的控件**不再画自己的描边**：分段控件只留凹槽底色，下拉菜单只在 hover 时出现强调色描边，输入框只在获得焦点时出现强调色描边。
+- **不套框。** 卡片是 `.wlCard()`：凸起底色 + 发丝边 + 只落在形状上的浅阴影，放在 `WL.paneCanvas` 上。卡片里的控件**不再画自己的描边**：分段控件是胶囊轨道 + 凸起药丸，下拉菜单是胶囊、只在 hover 时出现强调色描边，输入框是胶囊、只在获得焦点时出现强调色描边，步进器是胶囊轨道。
 - 行高 38pt：左边标签（可带一行灰色说明），右边控件。行与行之间用 `WLFormDivider`。
 - 分区标题用灰色小号大写字（不用强调色），说明文字放在卡片**下方**作为注脚，不塞进卡片里。
 - 开关行用 `.toggleStyle(.wlSwitch)`，整行都可以点；列表里的勾选用 `.wlCheckbox`。
@@ -243,6 +289,9 @@ wlAnimateTerminalLayout { showAI = true }           // 会改终端尺寸的布�
 - ❌ 把可点的控件放进窗口顶部 52pt 的标题栏带却不加 `.blocksWindowDrag()` —— 隐藏标题栏后这一带仍是窗口拖动区，按下鼠标会被当成拖窗口，按钮收不到点击（`WLPageHeader` 已自带）。
 - ❌ 动画从 `.clear` / `Color.clear` 过渡到某个颜色 —— `clear` 是"透明的黑"，中间帧会混出发黑的颜色，浅色主题下像闪一下黑底。写成同一颜色改透明度：`WL.surface.opacity(hover ? 0.3 : 0)`。
 - ❌ `NSCursor.pointingHand` 用在普通按钮上 —— macOS 只在链接上用手型。
+- ❌ 对整块内容 `.shadow(...)` —— 阴影会落到每个字形上。阴影画在 `.background { shape.fill().shadow() }` 里，或用 `wlFloating` / `wlCard`。
+- ❌ hover 时把一个形状换成另一个（圆角矩形 ↔ 胶囊、有 ↔ 无背景视图）—— 会闪。保持同一个形状，只改不透明度。
+- ❌ 新写 `RoundedRectangle(cornerRadius:)` 不带 `style: .continuous`，或用 `WL.border` 画实线描边 / 分隔 —— 用 `WL.hairline` / `WLFormDivider()`。
 - ❌ 离场比进场还慢。
 
 ---
@@ -258,3 +307,4 @@ wlAnimateTerminalLayout { showAI = true }           // 会改终端尺寸的布�
 - [ ] 窗口缩到最小尺寸，右键菜单贴近右下角时不会溢出窗口
 - [ ] 切到一个浅色主题（如 GitHub Light）走一遍：没有看不见的文字、发灰的卡片、过重的阴影
 - [ ] 新增的 Sheet 用了 `WLSheet`，回车 / Esc 都能用
+- [ ] 新表面用了 4.0 的共享修饰符（`wlCard` / `wlFloating` / `wlCapsuleTrack` / `wlSearchCapsule` / `wlField` / `wlChip`），阴影只落在形状上
