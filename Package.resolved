@@ -1,5 +1,5 @@
 {
-  "originHash" : "7f6b61403d1b5bf5ef8937a534b4cb1db7250f13e78ad8bb3aa4b6aebafca310",
+  "originHash" : "e98a20836159b0af6be4ac1be55db72f443539be6e83825550d027296f195e5a",
   "pins" : [
     {
       "identity" : "bigint",
@@ -123,7 +123,6 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/almightyYantao/SwiftTerm.git",
       "state" : {
-        "branch" : "6d4db53",
         "revision" : "6d4db53cc5ec89b482e23aee6820f1c954adc378"
       }
     }

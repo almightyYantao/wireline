@@ -19,3 +19,7 @@ xcuserdata/
 .vscode/
 .idea/
 *.swp
+
+# libghostty (scripts/fetch-ghosttykit.sh) — ~150 MB, never commit
+Vendor/GhosttyKit.xcframework
+Vendor/ghostty-share/

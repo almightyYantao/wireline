@@ -1,6 +1,18 @@
 // swift-tools-version: 6.0
 import PackageDescription
 
+/// What static libghostty needs from the system.
+let ghosttyLinkerSettings: [LinkerSetting] = [
+    .linkedLibrary("c++"),
+    .linkedFramework("Carbon"),
+    .linkedFramework("CoreText"),
+    .linkedFramework("CoreVideo"),
+    .linkedFramework("Metal"),
+    .linkedFramework("QuartzCore"),
+    .linkedFramework("IOSurface"),
+    .linkedFramework("UniformTypeIdentifiers")
+]
+
 let package = Package(
     name: "Wireline",
     platforms: [
@@ -21,6 +33,9 @@ let package = Package(
         .target(
             name: "WirelineCore"
         ),
+        // libghostty (static lib + ghostty.h). ~150 MB, never committed: run
+        // scripts/fetch-ghosttykit.sh once to put it in Vendor/.
+        .binaryTarget(name: "GhosttyKit", path: "Vendor/GhosttyKit.xcframework"),
         .executableTarget(
             name: "Wireline",
             dependencies: [
@@ -28,11 +43,13 @@ let package = Package(
                 .product(name: "SwiftTerm", package: "SwiftTerm"),
                 .product(name: "Inject", package: "Inject"),
                 .product(name: "Citadel", package: "Citadel"),
-                .product(name: "Sparkle", package: "Sparkle")
+                .product(name: "Sparkle", package: "Sparkle"),
+                "GhosttyKit"
             ],
+            exclude: ["Ghostty/LICENSE-ghostty"],
             // `-interposable` lets InjectionIII hot-swap functions at runtime.
             // Debug-only, so release bundles are unaffected.
-            linkerSettings: [
+            linkerSettings: ghosttyLinkerSettings + [
                 .unsafeFlags(["-Xlinker", "-interposable"], .when(configuration: .debug))
             ]
         ),
