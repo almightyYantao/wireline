@@ -139,7 +139,7 @@ enum ShortcutAction: String, CaseIterable, Identifiable {
         case .focusPrevPane:    return loc.t("上一个分屏", "Focus Previous Pane")
         case .commandPalette:   return loc.t("命令面板", "Command Palette")
         case .showPet:          return loc.t("宠物对话窗口", "Desktop Pet Chat")
-        case .splitRight:       return loc.t("向右分屏", "Split Right")
+        case .splitRight:       return loc.t("分屏（每行两个，满了换行）", "Split (two per row, then a new row)")
         case .splitDown:        return loc.t("向下分屏", "Split Down")
         case .focusPaneLeft:    return loc.t("聚焦左侧分屏", "Focus Pane Left")
         case .focusPaneRight:   return loc.t("聚焦右侧分屏", "Focus Pane Right")

@@ -94,7 +94,12 @@ struct TerminalHostView: NSViewRepresentable {
         container.layer?.isOpaque = false
         term.wantsLayer = true
         term.layer?.isOpaque = false
-        term.nativeBackgroundColor = .clear
+        // Keep the theme's RGB but paint it fully transparent (SwiftTerm's
+        // `backgroundOpacity`): the wallpaper shows through, faint (SGR 2)
+        // text still blends towards the real theme background, and SwiftTerm
+        // composites the default background without a glyph halo.
+        term.nativeBackgroundColor = theme.backgroundNS
+        term.backgroundOpacity = 0
         // The view paints clear so the wallpaper shows through; tell programs
         // that ask (OSC 10/11) the theme's real colours instead.
         term.reportedColors = (theme.foreground, theme.background)
@@ -165,8 +170,19 @@ final class TerminalContainerView: NSView {
     /// is also true on first attach and at the very moment of a commit.
     private var settledSize: NSSize = .zero
 
+    /// Squeezed to (nearly) nothing — a pane hidden behind a zoomed one. Its
+    /// grid stays as it was: reflowing to a sliver would rewrap everything (and
+    /// make the shell redraw) only to undo it when the zoom is released.
+    private var isCollapsed: Bool { bounds.width < 80 || bounds.height < 48 }
+
     private func layoutTerminal() {
         guard term.superview === self else { return }
+        if frozenSize == nil, isCollapsed, settledSize != .zero {
+            let origin = NSPoint(x: 0, y: bounds.height - settledSize.height)
+            if term.frame.size != settledSize { term.setFrameSize(settledSize) }
+            if term.frame.origin != origin { term.setFrameOrigin(origin) }
+            return
+        }
         // Programmatic size bursts the user isn't dragging — entering / leaving
         // fullscreen, zoom, window tiling — arrive as dozens of frames. Treat
         // them like our own layout animations: hold the grid, reflow once when
@@ -214,6 +230,14 @@ final class TerminalContainerView: NSView {
     func commit(animated: Bool) {
         burstCommit?.cancel(); burstCommit = nil
         guard frozenSize != nil else { return }
+        if isCollapsed, settledSize != .zero {
+            // Ended up hidden: drop the cover, keep the old grid (see isCollapsed).
+            frozenSize = nil
+            cover?.removeFromSuperview(); cover = nil
+            term.alphaValue = 1
+            layoutTerminal()
+            return
+        }
         frozenSize = nil
         // Record the target first, so the layout pass below fills the bounds
         // instead of seeing a "new burst" and freezing again.
@@ -407,5 +431,50 @@ extension View {
     /// area, so it reads as margin, not as a border.
     func wlTerminalPadding(_ store: HostStore) -> some View {
         padding(.horizontal, store.terminalPaddingX).padding(.vertical, store.terminalPaddingY)
+    }
+}
+
+/// Overlays currently covering terminals (host drawer, floating AI panel).
+/// SwiftTerm watches mouse movement window-wide, so a terminal *under* an
+/// overlay would keep reporting the pointer to htop / vim / tmux as it moves
+/// over the overlay. While any overlay is up, mouse reporting is paused.
+@MainActor
+final class TerminalOcclusion {
+    static let shared = TerminalOcclusion()
+    private var active: Set<UUID> = []
+
+    func set(_ id: UUID, _ r: CGRect?) {
+        let was = !active.isEmpty
+        if r != nil { active.insert(id) } else { active.remove(id) }
+        if was != !active.isEmpty { apply(paused: !active.isEmpty) }
+    }
+
+    private func apply(paused: Bool) {
+        for w in NSApp.windows {
+            guard let root = w.contentView else { continue }
+            var stack: [NSView] = [root]
+            while let v = stack.popLast() {
+                if let t = v as? WirelineTerminalView { t.allowMouseReporting = !paused }
+                stack.append(contentsOf: v.subviews)
+            }
+        }
+    }
+}
+
+extension View {
+    /// Register this view's frame as covering the terminals beneath it.
+    func wlOccludesTerminal() -> some View { modifier(OccluderModifier()) }
+}
+
+private struct OccluderModifier: ViewModifier {
+    @State private var id = UUID()
+    func body(content: Content) -> some View {
+        content
+            .background(GeometryReader { g in
+                Color.clear
+                    .onAppear { TerminalOcclusion.shared.set(id, g.frame(in: .global)) }
+                    .onChange(of: g.frame(in: .global)) { _, f in TerminalOcclusion.shared.set(id, f) }
+            })
+            .onDisappear { TerminalOcclusion.shared.set(id, nil) }
     }
 }

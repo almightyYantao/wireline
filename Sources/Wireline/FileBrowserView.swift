@@ -259,7 +259,7 @@ struct EntryRow: View {
         }
         .padding(.horizontal, 14).padding(.vertical, 6)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(selected ? WL.green.opacity(0.16) : (hover ? WL.surface : .clear))
+        .background(selected ? WL.green.opacity(0.16) : WL.surface.opacity(hover ? 1 : 0))
         .overlay(alignment: .leading) {
             Rectangle().fill(WL.green).frame(width: 2).opacity(selected ? 1 : 0)
         }

@@ -28,16 +28,15 @@ struct HostItem: View {
     }
     private var authSymbol: String { host.resolvedAuthMethod == .key ? "key.fill" : "lock.fill" }
     private var rowBackground: Color {
-        // Keep the selected/active highlight translucent so the app wallpaper
-        // shows through it, matching the rest of the chrome.
-        (isActive || isSelected) ? WL.surface.opacity(0.55)
-                                  : (hover ? WL.surface.opacity(0.3) : Color.clear)
+        if isActive { return WL.green.opacity(WL.isLight ? 0.12 : 0.14) }
+        if isSelected { return WL.textPrimary.opacity(WL.isLight ? 0.07 : 0.09) }
+        return WL.textPrimary.opacity(hover ? 0.045 : 0)
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             rowContent
-                .padding(.horizontal, 16).padding(.top, 7)
+                .padding(.horizontal, 12).padding(.top, 7)
                 .padding(.bottom, isActive ? 3 : 7)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
@@ -52,20 +51,22 @@ struct HostItem: View {
                     InlineAction(symbol: "folder", label: "文件", tint: WL.purple, action: onFiles)
                     Spacer()
                 }
-                .padding(.leading, 16).padding(.bottom, 8)
+                .padding(.leading, 12).padding(.bottom, 8)
                 .transition(.wlDisclose)
             }
         }
         .animation(Motion.disclose, value: isActive)
-        .background(rowBackground)
-        .animation(Motion.state, value: isSelected)
+        // An inset rounded highlight (like the tabs' pills), not a full-bleed band.
+        .background(rowBackground, in: RoundedRectangle(cornerRadius: WL.radius(10), style: .continuous))
         .overlay(alignment: .leading) {
-            // The group's colour label stays visible; otherwise the accent bar
-            // marks the selected row.
-            let label = store.groupColor(forAlias: host.alias)?.color
-            Rectangle().fill(label ?? WL.green).frame(width: label == nil ? 2 : 3)
-                .opacity(label != nil || isActive || isSelected ? 1 : 0)
+            // The group's colour label: a short capsule inside the row.
+            if let label = store.groupColor(forAlias: host.alias)?.color {
+                Capsule().fill(label).frame(width: 3, height: 16).padding(.leading, 5)
+            }
         }
+        .animation(Motion.state, value: isSelected)
+        .animation(Motion.hover, value: hover)
+        .padding(.horizontal, 8).padding(.vertical, 1)
         .wlHover($hover)
         .draggable(host.alias) {
             Text(host.alias).font(WL.body).foregroundStyle(WL.green)

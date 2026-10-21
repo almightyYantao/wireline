@@ -112,6 +112,46 @@ indirect enum PaneNode: Identifiable, Equatable {
         }
     }
 
+    /// The branches from the root down to the leaf `id` (root first; the leaf
+    /// itself excluded). Empty if the leaf isn't in this tree.
+    func ancestors(ofLeaf id: UUID) -> [PaneNode] {
+        switch self {
+        case .leaf: return []
+        case .branch(_, _, let a, let b):
+            if a.contains(leaf: id) { return [self] + a.ancestors(ofLeaf: id) }
+            if b.contains(leaf: id) { return [self] + b.ancestors(ofLeaf: id) }
+            return []
+        }
+    }
+
+    var axis: SplitAxis? {
+        if case .branch(_, let axis, _, _) = self { return axis }
+        return nil
+    }
+
+    /// How many rows this node stacks: a side-by-side split or a single pane is
+    /// one row; a top/bottom split adds its halves.
+    var rowCount: Int {
+        switch self {
+        case .leaf: return 1
+        case .branch(_, let axis, let a, let b):
+            return axis == .vertical ? a.rowCount + b.rowCount : 1
+        }
+    }
+
+    /// Replace the node `targetID` (leaf or branch) with a top/bottom split:
+    /// the node on top, `node` below, under a branch with id `branchID`.
+    func stacking(_ node: PaneNode, below targetID: UUID, branchID: UUID) -> PaneNode {
+        if id == targetID { return .branch(id: branchID, axis: .vertical, first: self, second: node) }
+        switch self {
+        case .leaf: return self
+        case .branch(let id, let axis, let first, let second):
+            return .branch(id: id, axis: axis,
+                           first: first.stacking(node, below: targetID, branchID: branchID),
+                           second: second.stacking(node, below: targetID, branchID: branchID))
+        }
+    }
+
     /// Change which session a leaf shows.
     func replacing(leaf targetID: UUID, session: UUID) -> PaneNode {
         switch self {
@@ -137,6 +177,88 @@ func paneEdge(for point: CGPoint, in size: CGSize) -> PaneEdge {
     return .center
 }
 
+// MARK: - Cards
+
+/// Gap between pane cards, and between the cards and the window edge.
+let wlPaneGap: CGFloat = 8
+
+extension WL {
+    /// The canvas the pane cards sit on: a touch deeper than the theme
+    /// background, so the cards (which carry the terminal's own background)
+    /// read as raised.
+    static var paneCanvas: Color { Color.black.opacity(isLight ? 0.045 : 0.26) }
+}
+
+extension View {
+    /// A terminal pane as a raised card: theme background, hairline edge and a
+    /// soft shadow. The shadow sits on the card *shape* only — on the content it
+    /// would shadow the (transparent) terminal's glyphs.
+    func wlPaneCard(focused: Bool = true, opacity: Double = 1) -> some View {
+        let shape = RoundedRectangle(cornerRadius: WL.radius(10), style: .continuous)
+        return self
+            .background {
+                shape.fill(WL.bg.opacity(opacity))
+                    .shadow(color: .black.opacity(WL.depth(focused ? 0.22 : 0.1)),
+                            radius: focused ? 10 : 5, y: focused ? 3 : 1)
+            }
+            .overlay {
+                shape.strokeBorder(WL.textPrimary.opacity(focused ? (WL.isLight ? 0.12 : 0.14) : 0.06),
+                                   lineWidth: 1)
+                    .allowsHitTesting(false)
+            }
+            .animation(Motion.state, value: focused)
+    }
+}
+
+// MARK: - Session glyph
+
+/// The icon for what a session is showing: the foreground program of a local
+/// shell (claude, node, vim …), else the session kind (SSH host, SFTP, shell).
+struct SessionGlyph: View {
+    @Environment(HostStore.self) private var store
+    let session: TerminalSession
+    var size: CGFloat = 11
+
+    var body: some View {
+        let (symbol, tint) = Self.look(session, store: store)
+        Image(systemName: symbol)
+            .font(.system(size: size, weight: .medium))
+            .foregroundStyle(tint)
+            .frame(width: size + 5)
+            .contentTransition(.symbolEffect(.replace))
+            .animation(Motion.state, value: symbol)
+    }
+
+    @MainActor
+    static func look(_ s: TerminalSession, store: HostStore) -> (String, Color) {
+        let prog = (s.activeEditor ?? s.foregroundName)?.lowercased()
+        if let prog {
+            switch prog {
+            case "claude":                                  return ("sparkles", WL.amber)
+            case "codex", "gemini", "aider", "cursor-agent": return ("sparkles", WL.purple)
+            case "vim", "nvim", "vi", "hx", "nano", "emacs", "micro": return ("pencil.line", WL.green)
+            case "node", "bun", "deno", "npm", "pnpm", "yarn", "npx": return ("hexagon", WL.green)
+            case "python", "python3", "ipython", "uv":      return ("chevron.left.forwardslash.chevron.right", WL.teal)
+            case "git", "lazygit", "tig", "gitui":          return ("arrow.triangle.branch", WL.amber)
+            case "htop", "btop", "top", "glances":          return ("chart.bar.xaxis", WL.teal)
+            case "docker", "kubectl", "k9s", "lazydocker":  return ("shippingbox", WL.teal)
+            case "ssh", "mosh":                             return ("network", WL.teal)
+            case "make", "cargo", "go", "swift", "xcodebuild", "gradle": return ("hammer", WL.amber)
+            case "less", "more", "man", "bat":              return ("doc.text", WL.textDim)
+            default:                                         return ("gearshape.2", WL.textDim)
+            }
+        }
+        switch s.kind {
+        case .ssh(let alias, _, _, _, _):
+            return ("server.rack", store.groupColor(forAlias: alias)?.color ?? WL.teal)
+        case .sftp(let alias, _, _):
+            return ("folder", store.groupColor(forAlias: alias)?.color ?? WL.teal)
+        case .localShell:
+            return ("terminal", WL.textDim)
+        }
+    }
+}
+
 // MARK: - Recursive rendering
 
 /// Renders a `PaneNode` recursively: branches lay their two children out with
@@ -148,13 +270,18 @@ struct PaneTreeView: View {
     /// When the AI panel is open, panes don't auto-grab first responder so focus
     /// can stay in the AI input across pane switches.
     var aiOpen: Bool = false
+    /// The zoomed pane's session, if any. Zoom happens *in* this layout — every
+    /// split on its path gives it the whole space — so it animates as the card
+    /// growing, not as a swap to another view.
+    var zoomed: UUID? = nil
 
     var body: some View {
         switch node {
         case .leaf(let paneID, let session):
-            PaneLeafView(paneID: paneID, sessionID: session, aiOpen: aiOpen)
+            PaneLeafView(paneID: paneID, sessionID: session, aiOpen: aiOpen,
+                         zoomed: zoomed == session, hiddenByZoom: zoomed != nil && zoomed != session)
         case .branch(let id, let axis, let first, let second):
-            SplitBranchView(branchID: id, axis: axis, first: first, second: second, aiOpen: aiOpen)
+            SplitBranchView(branchID: id, axis: axis, first: first, second: second, aiOpen: aiOpen, zoomed: zoomed)
         }
     }
 }
@@ -167,19 +294,30 @@ private struct SplitBranchView: View {
     let first: PaneNode
     let second: PaneNode
     let aiOpen: Bool
+    let zoomed: UUID?
     /// The branch's size, read from a background reader (never in the layout
     /// path) so a drag can turn points into a ratio.
     @State private var size: CGSize = .zero
 
+    /// Zoom on this path: the side holding the zoomed pane takes everything.
+    private var layoutRatio: CGFloat {
+        guard let z = zoomed else { return sessions.ratio(for: branchID) }
+        if first.sessionIDs.contains(z) { return 1 }
+        if second.sessionIDs.contains(z) { return 0 }
+        return sessions.ratio(for: branchID)
+    }
+
     var body: some View {
-        SplitLayout(axis: axis, ratio: sessions.ratio(for: branchID)) {
-            PaneTreeView(node: first, aiOpen: aiOpen)
+        let zoomedHere = zoomed.map { (first.sessionIDs + second.sessionIDs).contains($0) } ?? false
+        SplitLayout(axis: axis, ratio: layoutRatio, gap: zoomedHere ? 0 : wlPaneGap) {
+            PaneTreeView(node: first, aiOpen: aiOpen, zoomed: zoomed)
             SplitDivider(axis: axis,
                          length: axis == .horizontal ? size.width : size.height,
                          ratio: sessions.ratio(for: branchID),
                          onDrag: { sessions.setRatio($0, for: branchID) },
                          onReset: { wlAnimateTerminalLayout { sessions.setRatio(0.5, for: branchID) } })
-            PaneTreeView(node: second, aiOpen: aiOpen)
+                .allowsHitTesting(!zoomedHere)
+            PaneTreeView(node: second, aiOpen: aiOpen, zoomed: zoomed)
         }
         .background(GeometryReader { geo in
             Color.clear
@@ -195,10 +333,11 @@ private struct SplitBranchView: View {
 struct SplitLayout: Layout {
     var axis: SplitAxis
     var ratio: CGFloat
+    var gap: CGFloat = wlPaneGap
 
-    var animatableData: CGFloat {
-        get { ratio }
-        set { ratio = newValue }
+    var animatableData: AnimatablePair<CGFloat, CGFloat> {
+        get { AnimatablePair(ratio, gap) }
+        set { ratio = newValue.first; gap = newValue.second }
     }
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
@@ -207,7 +346,7 @@ struct SplitLayout: Layout {
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
         guard subviews.count == 3 else { return }
-        let divider: CGFloat = 1
+        let divider = max(0, gap)
         if axis == .horizontal {
             let avail = max(0, bounds.width - divider)
             let w1 = (avail * ratio).rounded()
@@ -228,8 +367,8 @@ struct SplitLayout: Layout {
     }
 }
 
-/// The 1pt line between panes, with a 7pt grab zone: drag to resize, double-
-/// click to even out. Shows the resize cursor and brightens on hover.
+/// The gap between two pane cards. The whole gap is the grab zone: drag to
+/// resize, double-click to even out. A short handle appears on hover.
 private struct SplitDivider: View {
     let axis: SplitAxis
     let length: CGFloat
@@ -240,11 +379,16 @@ private struct SplitDivider: View {
     @State private var dragStart: CGFloat?
 
     var body: some View {
-        Rectangle()
-            .fill(hover || dragStart != nil ? WL.green.opacity(0.6) : WL.border)
+        Color.clear
+            .overlay {
+                Capsule()
+                    .fill(dragStart != nil ? WL.green.opacity(0.8) : WL.textDim.opacity(0.45))
+                    .frame(width: axis == .horizontal ? 3 : 32, height: axis == .vertical ? 3 : 32)
+                    .opacity(hover || dragStart != nil ? 1 : 0)
+                    .allowsHitTesting(false)
+            }
             .overlay {
                 Color.clear
-                    .frame(width: axis == .horizontal ? 7 : nil, height: axis == .vertical ? 7 : nil)
                     .contentShape(Rectangle())
                     .onHover { inside in
                         withAnimation(Motion.hover) { hover = inside }
@@ -279,6 +423,8 @@ struct PaneLeafView: View {
     var aiOpen: Bool = false
     /// Shown alone (zoomed): no dimming, header marks the zoom.
     var zoomed = false
+    /// Squeezed away because another pane is zoomed.
+    var hiddenByZoom = false
     @State private var targeted = false
     @State private var hover = false
     // Measured via a background reader so it never distorts the pane's layout.
@@ -305,22 +451,23 @@ struct PaneLeafView: View {
                     }
                     .overlay { InlineAICommandView(session: session, isActive: focused) }
                     .animation(Motion.banner, value: session.connectionState)
-                    // Clicking anywhere in the pane focuses it (runs alongside the
-                    // terminal's own click handling, so cursor placement / text
-                    // selection still work).
-                    .simultaneousGesture(TapGesture().onEnded { sessions.activeID = session.id })
+                    // Clicks inside the terminal focus the pane from the terminal
+                    // view itself (see WirelineTerminalView.mouseDown).
             }
             // Fill the allotted cell so panes divide the space evenly (without
             // this each pane shrinks to its content and leaves gaps).
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            // Unfocused panes recede (Ghostty's unfocused-split-opacity) instead
-            // of the focused one wearing a border.
+            // Unfocused panes recede (Ghostty's unfocused-split-opacity); the
+            // card's edge and shadow carry the focus too.
             .overlay {
-                WL.bg.opacity(focused || zoomed ? 0 : 1 - store.unfocusedSplitOpacity)
+                cardShape.fill(WL.bg.opacity(focused || zoomed ? 0 : (1 - store.unfocusedSplitOpacity) * 0.6))
                     .allowsHitTesting(false)
                     .animation(Motion.state, value: focused)
             }
-            .overlay(targeted ? WL.teal.opacity(0.15) : .clear)
+            .overlay(cardShape.fill(WL.teal.opacity(targeted ? 0.15 : 0)).allowsHitTesting(false))
+            .wlPaneCard(focused: focused || zoomed, opacity: store.terminalOpacity * WL.chromeOpacity)
+            .opacity(hiddenByZoom ? 0 : 1)
+            .allowsHitTesting(!hiddenByZoom)
             .wlHover($hover)
             .background(GeometryReader { geo in
                 Color.clear
@@ -341,38 +488,96 @@ struct PaneLeafView: View {
         }
     }
 
+    private var cardShape: RoundedRectangle {
+        RoundedRectangle(cornerRadius: WL.radius(10), style: .continuous)
+    }
+
     private func header(_ session: TerminalSession) -> some View {
-        HStack(spacing: 6) {
-            Circle().fill(focused ? WL.green : WL.textDim.opacity(0.5)).frame(width: 6, height: 6)
-            Text(session.title).font(WL.small)
-                .foregroundStyle(focused ? WL.textPrimary : WL.textDim).lineLimit(1)
+        PaneHeader(session: session, focused: focused, zoomed: zoomed, showActions: hover || focused,
+                   onActivate: { sessions.activeID = session.id }) {
+            paneButton("rectangle.split.2x1", loc("向右分屏", "Split right")) {
+                sessions.activeID = session.id
+                wlAnimateTerminalLayout { sessions.splitActive(.trailing) }
+            }
+            paneButton("rectangle.split.1x2", loc("向下分屏", "Split down")) {
+                sessions.activeID = session.id
+                wlAnimateTerminalLayout { sessions.splitActive(.bottom) }
+            }
+            paneButton(zoomed ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right",
+                       loc(zoomed ? "还原分屏" : "放大此分屏", zoomed ? "Restore splits" : "Zoom this pane")) {
+                wlAnimateTerminalLayout { sessions.activeID = session.id; sessions.toggleZoom() }
+            }
+            paneButton("xmark", loc("关闭分屏", "Close pane")) {
+                wlAnimateTerminalLayout { sessions.close(session.id) }
+            }
+        }
+        .wlContextMenu(zoomed ? [] : [
+            .item(loc("拆为独立标签", "Detach to a Tab"), systemImage: "rectangle.portrait.and.arrow.right") {
+                sessions.detachPaneToTab(session.id)
+            },
+            .divider,
+            .item(loc("关闭分屏", "Close Pane"), systemImage: "xmark", destructive: true) {
+                wlAnimateTerminalLayout { sessions.close(session.id) }
+            },
+        ])
+    }
+
+    private func paneButton(_ symbol: String, _ help: String, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol).font(.system(size: 10, weight: .medium))
+        }
+        .buttonStyle(.wlIcon(size: 22))
+        .help(help)
+    }
+}
+
+/// A pane card's title row: what's running (icon), the title, where it is
+/// (directory / host), and — on hover or focus — the pane actions.
+struct PaneHeader<Actions: View>: View {
+    @Environment(Localizer.self) private var loc
+    let session: TerminalSession
+    let focused: Bool
+    var zoomed = false
+    var showActions = true
+    var onActivate: () -> Void = {}
+    @ViewBuilder var actions: Actions
+
+    /// "~/Sites/rex-snake" for a local shell; the endpoint for SSH.
+    private var place: String? {
+        if case .localShell = session.kind {
+            guard let d = session.currentDirectory else { return nil }
+            let short = (d as NSString).abbreviatingWithTildeInPath
+            return short == session.title ? nil : short
+        }
+        return nil
+    }
+
+    var body: some View {
+        HStack(spacing: 7) {
+            SessionGlyph(session: session, size: 11)
+                .opacity(focused ? 1 : 0.7)
+            Text(session.title)
+                .font(WL.small.weight(.semibold))
+                .foregroundStyle(focused ? WL.textPrimary : WL.textDim)
+                .lineLimit(1)
+            if let place {
+                Text(place).font(WL.small).foregroundStyle(WL.textDim)
+                    .lineLimit(1).truncationMode(.head)
+            }
             if zoomed {
                 Text(loc("已放大", "Zoomed")).font(WL.caption).foregroundStyle(WL.green)
                     .padding(.horizontal, 6).padding(.vertical, 1)
                     .background(WL.green.opacity(0.12), in: Capsule())
             }
-            Spacer()
-            HStack(spacing: 0) {
-                Button { wlAnimateTerminalLayout { sessions.activeID = session.id; sessions.toggleZoom() } } label: {
-                    Image(systemName: zoomed ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
-                        .font(.system(size: 9, weight: .semibold))
-                }.buttonStyle(.wlIcon(size: 20)).help(loc(zoomed ? "还原分屏" : "放大此分屏", zoomed ? "Restore splits" : "Zoom this pane"))
-                if !zoomed {
-                    Button { sessions.detachPaneToTab(session.id) } label: {
-                        Image(systemName: "rectangle.portrait.and.arrow.right").font(.system(size: 10, weight: .medium))
-                    }.buttonStyle(.wlIcon(size: 20)).help(loc("拆为独立标签", "Detach to a tab"))
-                }
-                Button { wlAnimateTerminalLayout { sessions.close(session.id) } } label: {
-                    Image(systemName: "xmark").font(.system(size: 9, weight: .semibold))
-                }.buttonStyle(.wlIcon(size: 20)).help(loc("关闭分屏", "Close pane"))
-            }
-            .opacity(hover || focused ? 1 : 0)
-            .animation(Motion.hover, value: hover)
+            Spacer(minLength: 8)
+            HStack(spacing: 0) { actions }
+                .foregroundStyle(WL.textDim)
+                .opacity(showActions ? 1 : 0)
+                .animation(Motion.hover, value: showActions)
         }
-        .padding(.leading, 10).padding(.trailing, 4).frame(height: 26)
-        .background(focused ? WL.surface.opacity(0.6) : .clear)
+        .padding(.leading, 12).padding(.trailing, 6).frame(height: 32)
         .contentShape(Rectangle())
-        .onTapGesture { sessions.activeID = session.id }
+        .onTapGesture(perform: onActivate)
     }
 }
 

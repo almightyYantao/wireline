@@ -48,6 +48,9 @@ final class TerminalSession: Identifiable {
     /// prompt has gone away). Drives the "running…" badge shown on a backgrounded
     /// tab. Updated from the terminal view's prompt heuristic.
     var isBusy = false
+    /// Name of the program in the foreground of a local shell (`vim`, `node`,
+    /// `claude`), nil at the prompt. Picks the pane / tab icon.
+    var foregroundName: String?
 
     /// Coarse connection lifecycle for the animated status indicator: dialing
     /// (`connecting`) → server responding (`connected`) → process gone
@@ -241,6 +244,10 @@ final class TerminalSession: Identifiable {
             self?.applyReportedTitle(title)
         }
         terminalView.onOpenPath = { [weak self] path in self?.openPath(path) }
+        terminalView.onClickFocus = { [weak self] in
+            guard let self, let store = self.store, store.activeID != self.id else { return }
+            store.activeID = self.id
+        }
         terminalView.isActivePane = { [weak self] in
             guard let self else { return false }
             return self.store?.activeID == self.id
@@ -396,6 +403,12 @@ final class TerminalSession: Identifiable {
         guard let proc = terminalView.process, proc.childfd >= 0 else { return }
         let pgid = tcgetpgrp(proc.childfd)
         let running = pgid > 0 && pgid != proc.shellPid
+        var name: String?
+        if running {
+            var buf = [CChar](repeating: 0, count: 64)
+            if proc_name(pgid, &buf, UInt32(buf.count)) > 0 { name = String(cString: buf) }
+        }
+        if foregroundName != name { foregroundName = name }
         if running, !isBusy {
             busyStartedAt = Date()
             applyBusy(true, elapsed: 0)
@@ -882,21 +895,52 @@ final class SessionStore {
         persistLayout()
     }
 
+    /// ⌘D: split into a grid at most two panes wide. A pane alone in its row
+    /// gets a neighbour on the right; once its row holds two, the new pane
+    /// starts a row below the stack of rows, and the rows are evened out.
+    @discardableResult
+    func splitActiveGrid() -> UUID? {
+        guard let source = activeSession, let ti = tabIndex(containing: source.id),
+              let leaf = tabs[ti].leafID(for: source.id) else { return nil }
+        let path = tabs[ti].ancestors(ofLeaf: leaf)
+        guard var k = path.lastIndex(where: { $0.axis == .horizontal }) else {
+            return splitActive(.trailing)
+        }
+        // Climb to the top of the column of rows this row belongs to.
+        while k > 0, path[k - 1].axis == .vertical { k -= 1 }
+        let stack = path[k]
+        if let tabID = activeTabID { zoomedSession[tabID] = nil }
+        let id = spawn(siblingSession(of: source))
+        let branchID = UUID()
+        let rows = stack.rowCount
+        tabs[ti] = tabs[ti].stacking(.makeLeaf(id), below: stack.id, branchID: branchID)
+        setRatio(CGFloat(rows) / CGFloat(rows + 1), for: branchID)
+        activeTabID = tabs[ti].id
+        activeID = id
+        persist()
+        return id
+    }
+
+    /// A new session like `source`: same SSH host (sharing its connection), or
+    /// a local shell in the same directory.
+    private func siblingSession(of source: TerminalSession) -> TerminalSession {
+        switch source.kind {
+        case .ssh:
+            return TerminalSession(kind: source.kind, title: source.alias,
+                                   sharingControlSocket: source.controlSocket)
+        case .sftp, .localShell:
+            return TerminalSession(kind: .localShell, title: "Local Shell",
+                                   startDirectory: source.currentDirectory)
+        }
+    }
+
     /// Open a new pane next to the active one, like the source: a local shell
     /// in the same directory, or the same host over the same SSH connection.
     @discardableResult
     func splitActive(_ edge: PaneEdge) -> UUID? {
         guard let source = activeSession, let ti = tabIndex(containing: source.id),
               let leaf = tabs[ti].leafID(for: source.id) else { return nil }
-        let session: TerminalSession
-        switch source.kind {
-        case .ssh:
-            session = TerminalSession(kind: source.kind, title: source.alias,
-                                      sharingControlSocket: source.controlSocket)
-        case .sftp, .localShell:
-            session = TerminalSession(kind: .localShell, title: "Local Shell",
-                                      startDirectory: source.currentDirectory)
-        }
+        let session = siblingSession(of: source)
         if let tabID = activeTabID { zoomedSession[tabID] = nil }
         let id = spawn(session)
         tabs[ti] = tabs[ti].splitting(leaf: leaf, insert: id, edge: edge)

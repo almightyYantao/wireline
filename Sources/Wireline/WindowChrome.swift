@@ -64,8 +64,26 @@ final class WindowChromeController {
         // dragging a session tab is swallowed as a window move instead of an
         // `.onDrag`. The title-bar strip still moves the window.
         window.isMovableByWindowBackground = false
+        // An empty compact toolbar makes the title bar a little taller and
+        // centres the traffic lights in it, so the tabs can sit on the same row
+        // (Safari / Ghostty style) instead of a strip below.
+        if window.toolbar == nil {
+            let tb = NSToolbar(identifier: "wireline.titlebar")
+            tb.showsBaselineSeparator = false
+            tb.allowsUserCustomization = false
+            window.toolbar = tb
+        }
+        window.toolbarStyle = .unifiedCompact
         installZoomMonitor(window)
+        DispatchQueue.main.async { TitleBand.shared.measure(window) }
+        if resizeObserver == nil {
+            resizeObserver = NotificationCenter.default.addObserver(
+                forName: NSWindow.didResizeNotification, object: window, queue: .main) { [weak window] _ in
+                MainActor.assumeIsolated { if let window { TitleBand.shared.measure(window) } }
+            }
+        }
     }
+    private var resizeObserver: NSObjectProtocol?
 
     /// No-op kept for call sites; the hidden title bar is now SwiftUI-managed.
     func reapply() {}
@@ -80,12 +98,35 @@ final class WindowChromeController {
             if TitleBarZoomGuard.shared.pointerInNoZoomZone { return event }
             let h = window.contentView?.bounds.height ?? window.frame.height
             // Only the top title-bar strip (avoid the traffic-light buttons on the left).
-            if event.locationInWindow.y > h - 28, event.locationInWindow.x > 78 {
+            if event.locationInWindow.y > h - TitleBand.shared.height,
+               event.locationInWindow.x > TitleBand.shared.lightsTrailing {
                 window.zoom(nil)
                 return nil
             }
             return event
         }
+    }
+}
+
+/// The title-bar row, measured from the real traffic lights: its height (twice
+/// the lights' centre from the top, so content centred in it lines up with
+/// them) and where the lights end on the left.
+@Observable
+@MainActor
+final class TitleBand {
+    static let shared = TitleBand()
+    private(set) var height: CGFloat = 38
+    private(set) var lightsTrailing: CGFloat = 78
+
+    func measure(_ window: NSWindow) {
+        guard let zoom = window.standardWindowButton(.zoomButton), !zoom.isHidden,
+              let content = window.contentView else { return }
+        let r = zoom.convert(zoom.bounds, to: nil)
+        let centreFromTop = content.bounds.height - r.midY
+        let h = (centreFromTop * 2).rounded()
+        let t = r.maxX.rounded()
+        if h > 20, abs(h - height) > 0.5 { height = h }
+        if abs(t - lightsTrailing) > 0.5 { lightsTrailing = t }
     }
 }
 

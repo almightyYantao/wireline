@@ -588,6 +588,17 @@ final class WirelineTerminalView: LocalProcessTerminalView {
     /// Asked to open a file path ⌘-clicked in the terminal (URLs are SwiftTerm's).
     var onOpenPath: ((String) -> Void)?
 
+    /// A click landed in this pane: make it the active split.
+    var onClickFocus: (() -> Void)?
+
+    // SwiftTerm's mouseDown doesn't take first responder, and the click never
+    // reaches SwiftUI gestures over this AppKit view — focus the pane here.
+    override func mouseDown(with event: NSEvent) {
+        if window?.firstResponder !== self { window?.makeFirstResponder(self) }
+        onClickFocus?()
+        super.mouseDown(with: event)
+    }
+
     override func mouseUp(with event: NSEvent) {
         if event.modifierFlags.contains(.command), event.clickCount == 1,
            let token = pathToken(at: convert(event.locationInWindow, from: nil)) {

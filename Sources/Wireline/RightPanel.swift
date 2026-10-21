@@ -1,6 +1,7 @@
 import SwiftUI
 import WirelineCore
 import struct SwiftTerm.SearchOptions
+import SystemConfiguration
 
 /// The right side: batch/forwarding tools when an operation is selected,
 /// otherwise the terminal session area (tabs · connection info · terminal ·
@@ -129,7 +130,8 @@ struct RightPanel: View {
         .overlay(alignment: .trailing) {
             if showAI && !aiDocked {
                 aiPanel
-                    .background(WL.bg.opacity(0.94))
+                    .background(WL.bg)
+                    .wlOccludesTerminal()
                     .overlay(alignment: .leading) { Rectangle().fill(WL.border).frame(width: 1) }
                     .shadow(color: .black.opacity(WL.depth(0.28)), radius: 18, x: -4)
                     .transition(.move(edge: .trailing).combined(with: .opacity))
@@ -166,35 +168,30 @@ struct RightPanel: View {
     private var terminalColumn: some View {
         VStack(spacing: 0) {
             if !sessions.sessions.isEmpty {
-                // A thin strip in the window's title-bar region: dragging here
-                // moves the window, which keeps the tab bar below it in normal
-                // content territory so a tab's `.onDrag` isn't stolen as a move.
-                Color.clear.frame(height: 28).frame(maxWidth: .infinity)
+                // The tabs share the title-bar row with the traffic lights,
+                // centred on them; they block window dragging themselves (see
+                // SessionTabBar), the empty rest of the row still moves it.
                 SessionTabBar()
-                    .padding(.leading, sidebarCollapsed ? 52 : 0)
-                    .overlay(alignment: .trailing) { broadcastToggle.padding(.trailing, 8) }
-                Rectangle().fill(WL.border).frame(height: 1)
+                    .padding(.leading, sidebarCollapsed ? TitleBand.shared.lightsTrailing + 44 : 8)
+                    .padding(.trailing, 8)
+                    .overlay(alignment: .trailing) { broadcastToggle.padding(.trailing, 12) }
+                    .frame(height: TitleBand.shared.height)
+                    .padding(.bottom, 2)
                 if showBroadcast {
-                    VStack(spacing: 0) {
-                        broadcastBar
-                        Rectangle().fill(WL.border).frame(height: 1)
-                    }
-                    .transition(.move(edge: .top).combined(with: .opacity))
+                    broadcastBar
+                        .clipShape(RoundedRectangle(cornerRadius: WL.radius(10), style: .continuous))
+                        .padding(.horizontal, wlPaneGap).padding(.bottom, wlPaneGap)
+                        .transition(.move(edge: .top).combined(with: .opacity))
                 }
             }
             if let tab = sessions.activeTab, tab.sessionIDs.count > 1 {
-                // A merged tab: render its split layout — or just the zoomed pane.
-                Group {
-                    if let z = sessions.zoomedSession(inTab: tab.id), let leaf = tab.leafID(for: z) {
-                        PaneLeafView(paneID: leaf, sessionID: z, aiOpen: showAI, zoomed: true)
-                    } else {
-                        PaneTreeView(node: tab, aiOpen: showAI)
-                    }
-                }
-                .id(sessions.zoomedSession(inTab: tab.id))
-                .transition(.opacity)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                // A merged tab: its split layout. Zoom is part of the layout,
+                // so the pane grows in place instead of swapping views.
+                PaneTreeView(node: tab, aiOpen: showAI, zoomed: sessions.zoomedSession(inTab: tab.id))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(.horizontal, wlPaneGap).padding(.bottom, wlPaneGap)
             } else if let session = sessions.activeSession {
+                VStack(spacing: 0) {
                 ConnectionInfoBar(session: session)
                 GroupColorRule(alias: session.alias)
                 TerminalHostView(session: session, autoFocus: !showAI).id(session.id)
@@ -211,7 +208,7 @@ struct RightPanel: View {
                     .overlay { InlineAICommandView(session: session, isActive: true) }
                     .animation(Motion.banner, value: session.connectionState)
                     .animation(Motion.banner, value: showSearch)
-                    .overlay(dropTargeted ? WL.teal.opacity(0.12) : .clear)
+                    .overlay(WL.teal.opacity(dropTargeted ? 0.12 : 0))
                     .background(GeometryReader { geo in
                         Color.clear
                             .onAppear { termSize = geo.size }
@@ -224,6 +221,9 @@ struct RightPanel: View {
                         return dropOntoPane(str, leaf: leaf, edge: paneEdge(for: location, in: termSize),
                                             store: store, sessions: sessions)
                     } isTargeted: { dropTargeted = $0 }
+                }
+                .wlPaneCard(opacity: store.terminalOpacity * WL.chromeOpacity)
+                .padding(.horizontal, wlPaneGap)
                 StatusBar(session: session)
             } else if let host = detailHost {
                 HostDetailView(host: host, onEdit: onEditHost, onBack: { selectedAlias = nil })
@@ -235,6 +235,8 @@ struct RightPanel: View {
             }
         }
         .frame(maxWidth: .infinity)
+        // Pane cards sit on a slightly deeper canvas.
+        .background(sessions.sessions.isEmpty ? Color.clear : WL.paneCanvas)
     }
 
     /// The host backing the active session, for AI context.
@@ -260,6 +262,7 @@ struct RightPanel: View {
             .animation(Motion.state, value: showBroadcast)
         }
         .buttonStyle(.wlPlain)
+        .blocksWindowDrag()
         .help(loc("广播输入到所有会话", "Broadcast input to all sessions"))
     }
 
@@ -404,31 +407,93 @@ struct SessionTabBar: View {
     @Environment(SessionStore.self) private var sessions
     @Environment(\.openWindow) private var openWindow
     @Environment(Localizer.self) private var loc
+    /// The active tab's raised pill is one shape that slides between tabs.
+    @Namespace private var pill
 
     var body: some View {
+        HStack(spacing: 10) {
+            if let s = sessions.activeSession { ActiveSessionBadge(session: s) }
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 0) {
-                ForEach(Array(sessions.tabs.enumerated()), id: \.element.id) { index, tab in
-                    SessionTab(index: index + 1, tab: tab,
-                               isActive: sessions.activeTabID == tab.id)
+            HStack(spacing: 6) {
+                // One long capsule track holding every tab (segmented-control
+                // style); the active tab is a raised pill inside it.
+                HStack(spacing: 0) {
+                    let tabs = sessions.tabs
+                    ForEach(Array(tabs.enumerated()), id: \.element.id) { index, tab in
+                        let active = sessions.activeTabID == tab.id
+                        let prevActive = index > 0 && sessions.activeTabID == tabs[index - 1].id
+                        SessionTab(index: index + 1, tab: tab, isActive: active,
+                                   pill: pill, showSeparator: index > 0 && !active && !prevActive)
+                    }
                 }
+                .padding(3)
+                .background(Capsule(style: .continuous).fill(WL.textPrimary.opacity(WL.isLight ? 0.06 : 0.08)))
+                .animation(.spring(duration: 0.32, bounce: 0.12), value: sessions.activeTabID)
                 Button {
                     openLocalShell(sessions: sessions, openWindow: openWindow)
                 } label: {
                     Image(systemName: "plus").font(.system(size: 11, weight: .medium))
                 }
                 .buttonStyle(.wlIcon)
+                .blocksWindowDrag()
                 .padding(.horizontal, 6)
                 .help(loc("新建本地终端", "New local terminal"))
                 Spacer()
             }
         }
-        .frame(height: 36)
+        }
+        .frame(maxHeight: .infinity)
         // Transparent so the wallpaper / panel translucency reaches the very top,
-        // matching the rest of the panel instead of an opaque tab strip.
+        // matching the rest of the panel instead of an opaque tab strip. Only
+        // the tabs and buttons block window dragging; empty space moves it.
         .background(.clear)
-        .blocksWindowDrag()
     }
+}
+
+/// Left of the tabs: which machine the focused pane is on — alias over the
+/// endpoint for SSH, this Mac for a local shell.
+struct ActiveSessionBadge: View {
+    @Environment(HostStore.self) private var store
+    @Environment(Localizer.self) private var loc
+    let session: TerminalSession
+
+    private var lines: (String, String) {
+        switch session.kind {
+        case .ssh(let alias, _, _, _, _), .sftp(let alias, _, _):
+            let host = store.hosts.first { $0.alias == alias }
+            return (alias, host?.connectionSummary ?? "SSH")
+        case .localShell:
+            return (Host.currentName, loc("本机", "This Mac"))
+        }
+    }
+
+    var body: some View {
+        let (top, bottom) = lines
+        HStack(spacing: 8) {
+            Image(systemName: session.kind.isLocal ? "desktopcomputer" : "server.rack")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(store.groupColor(forAlias: session.alias)?.color ?? WL.textDim)
+            VStack(alignment: .leading, spacing: 0) {
+                Text(top).font(WL.small.weight(.semibold)).foregroundStyle(WL.textPrimary)
+                Text(bottom).font(WL.caption).foregroundStyle(WL.textDim)
+            }
+            .lineLimit(1)
+        }
+        .frame(maxWidth: 170, alignment: .leading)
+        .contentTransition(.opacity)
+        .animation(Motion.state, value: top)
+    }
+}
+
+extension SessionKind {
+    var isLocal: Bool { if case .localShell = self { return true } else { return false } }
+}
+
+extension Host {
+    /// This Mac's name ("Mac Studio"), for local sessions.
+    /// Read once: `Foundation.Host.current()` can block on a DNS lookup.
+    static let currentName: String =
+        (SCDynamicStoreCopyComputerName(nil, nil) as String?) ?? ProcessInfo.processInfo.hostName
 }
 
 /// One tab = a pane group. A single-session tab shows its title (and supports
@@ -441,6 +506,8 @@ struct SessionTab: View {
     let index: Int
     let tab: PaneNode
     let isActive: Bool
+    let pill: Namespace.ID
+    var showSeparator = false
     @State private var hover = false
     @State private var closeHover = false
     @State private var isEditing = false
@@ -472,13 +539,10 @@ struct SessionTab: View {
     }
 
     var body: some View {
-        HStack(spacing: 8) {
-            if let label = tab.sessionIDs.lazy.compactMap({ sessions.session($0) })
-                .compactMap({ store.groupColor(forAlias: $0.alias) }).first {
-                Circle().fill(label.color).frame(width: 6, height: 6)
+        HStack(spacing: 7) {
+            if let lead = tab.sessionIDs.lazy.compactMap({ sessions.session($0) }).first {
+                SessionGlyph(session: lead, size: 11).opacity(isActive ? 1 : 0.75)
             }
-            Text("\(index)").font(WL.small.weight(.semibold))
-                .foregroundStyle(isActive ? WL.green : WL.textDim.opacity(0.7))
             if tab.sessionIDs.count > 1 {
                 Image(systemName: "rectangle.split.2x1").font(WL.small).foregroundStyle(WL.teal)
             }
@@ -491,8 +555,8 @@ struct SessionTab: View {
                     .onExitCommand(perform: cancel)
                     .onChange(of: focused) { _, f in if !f { commit() } }
             } else {
-                Text(title).font(WL.small)
-                    .foregroundStyle(isActive ? WL.greenBright : WL.textDim).lineLimit(1)
+                Text(title).font(WL.small.weight(isActive ? .semibold : .regular))
+                    .foregroundStyle(isActive ? WL.textPrimary : WL.textDim).lineLimit(1)
             }
             if !isActive && running {
                 RunningBadge()
@@ -509,10 +573,26 @@ struct SessionTab: View {
             .opacity(hover || isActive ? 1 : 0)
             .help(loc("关闭标签", "Close tab"))
         }
-        .padding(.leading, 14).padding(.trailing, 8).padding(.vertical, 9)
-        .background(isActive ? WL.surface.opacity(0.7) : (hover ? WL.textPrimary.opacity(0.04) : .clear))
-        .overlay(alignment: .bottom) {
-            Capsule().fill(WL.green).frame(height: 2).padding(.horizontal, 10).opacity(isActive ? 1 : 0)
+        .padding(.leading, 11).padding(.trailing, 6).frame(height: 28)
+        // The active tab's raised pill is a single matched shape, so switching
+        // tabs slides it across the track. Others get a faint hover wash.
+        .background {
+            let shape = Capsule(style: .continuous)
+            if isActive {
+                shape.fill(WL.bg)
+                    .shadow(color: .black.opacity(WL.depth(0.2)), radius: 3, y: 1)
+                    .overlay(shape.strokeBorder(WL.textPrimary.opacity(WL.isLight ? 0.08 : 0.14), lineWidth: 1))
+                    .matchedGeometryEffect(id: "activeTabPill", in: pill)
+            } else {
+                shape.fill(WL.textPrimary.opacity(hover ? 0.06 : 0))
+            }
+        }
+        // A hairline between two inactive neighbours, like a segmented control.
+        .overlay(alignment: .leading) {
+            Rectangle().fill(WL.textDim.opacity(0.3)).frame(width: 1, height: 14)
+                .opacity(showSeparator ? 1 : 0)
+                .offset(x: -0.5)
+                .allowsHitTesting(false)
         }
         .animation(Motion.state, value: isActive)
         .animation(Motion.state, value: running)
@@ -520,10 +600,11 @@ struct SessionTab: View {
         .contentShape(Rectangle())
         .simultaneousGesture(TapGesture(count: 2).onEnded { if !isEditing, soleSession != nil { beginEdit() } })
         .simultaneousGesture(TapGesture(count: 1).onEnded { if !isEditing { sessions.focusTab(tab.id) } })
+        .blocksWindowDrag()
         // Drag this tab onto another tab's pane to merge them into a split.
         .onDrag { NSItemProvider(object: tab.id.uuidString as NSString) }
         .wlHover($hover) { TitleBarZoomGuard.shared.pointerInNoZoomZone = $0 }
-        .help(tooltip)
+        .help("⌘\(index) · " + tooltip)
         .contextMenu {
             if soleSession != nil { Button(loc("重命名…", "Rename…")) { beginEdit() } }
             Button(loc("关闭", "Close"), role: .destructive) { closeTab() }
@@ -767,7 +848,6 @@ struct StatusBar: View {
             .font(WL.caption).monospacedDigit()
             .foregroundStyle(WL.textDim)
             .padding(.horizontal, 18).frame(height: 24)
-            .overlay(alignment: .top) { Rectangle().fill(WL.border.opacity(0.5)).frame(height: 1) }
             .animation(Motion.state, value: session.connectionState)
         }
     }
@@ -830,7 +910,7 @@ struct FilesPicker: View {
                         }
                         .padding(.horizontal, 18).padding(.vertical, 8)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(selected == host.alias ? WL.green.opacity(0.16) : .clear)
+                        .background(WL.green.opacity(selected == host.alias ? 0.16 : 0))
                         .overlay(alignment: .leading) {
                             Rectangle().fill(WL.green).frame(width: 2)
                                 .opacity(selected == host.alias ? 1 : 0)
@@ -881,7 +961,7 @@ struct GroupColorRule: View {
         if let c = store.groupColor(forAlias: alias) {
             Rectangle().fill(c.color).frame(height: 2)
         } else {
-            Rectangle().fill(WL.border).frame(height: 1)
+            Rectangle().fill(WL.border.opacity(0.55)).frame(height: 1)
         }
     }
 }

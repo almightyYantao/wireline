@@ -732,7 +732,7 @@ struct WLPageHeader<Trailing: View>: View {
             Spacer(minLength: 12)
             trailing
         }
-        .padding(.leading, 52).padding(.trailing, 20)
+        .padding(.leading, 24).padding(.trailing, 20)
         .padding(.top, 28)
         .frame(minHeight: 64, alignment: .center)
         // This row sits in the window's title-bar band, where a mouse-down

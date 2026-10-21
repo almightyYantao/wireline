@@ -46,11 +46,14 @@ struct AIClient: Sendable {
 
                     var wire: [[String: String]] = [["role": "system", "content": system]]
                     wire += messages.map { ["role": $0.role.rawValue, "content": $0.content] }
+                    // Only the required fields. Optional sampling parameters
+                    // (temperature, top_p …) are rejected by some models — e.g.
+                    // recent Claude models refuse a non-default temperature — so
+                    // let every endpoint use its own defaults.
                     let body: [String: Any] = [
                         "model": model ?? config.activeModel,
                         "messages": wire,
-                        "stream": true,
-                        "temperature": 0.2
+                        "stream": true
                     ]
                     req.httpBody = try JSONSerialization.data(withJSONObject: body)
 

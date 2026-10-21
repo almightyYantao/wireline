@@ -128,7 +128,8 @@ struct WirelineApp: App {
                 Button("Focus Previous Pane") { NotificationCenter.default.post(name: .focusPrevPane, object: nil) }
                     .shortcut(.focusPrevPane, keys)
                 // Splits — every layout change runs freeze → animate → one reflow.
-                Button("Split Right") { wlAnimateTerminalLayout { sessions.splitActive(.trailing) } }
+                // ⌘D fills a two-wide grid: right while the row has room, then a new row.
+                Button("Split") { wlAnimateTerminalLayout { sessions.splitActiveGrid() } }
                     .shortcut(.splitRight, keys)
                 Button("Split Down") { wlAnimateTerminalLayout { sessions.splitActive(.bottom) } }
                     .shortcut(.splitDown, keys)

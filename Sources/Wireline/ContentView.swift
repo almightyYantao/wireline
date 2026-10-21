@@ -202,6 +202,10 @@ struct ContentView: View {
     /// edge opens it on hover, ⌘S or the corner button toggle it, a click
     /// outside (or connecting) closes it, and one opened by hover closes when
     /// the pointer leaves.
+    private var drawerShape: RoundedRectangle {
+        RoundedRectangle(cornerRadius: WL.radius(14), style: .continuous)
+    }
+
     private var sidebarDrawer: some View {
         ZStack(alignment: .topLeading) {
             if sidebarOpen {
@@ -227,7 +231,9 @@ struct ContentView: View {
             .buttonStyle(.wlIcon(tint: WL.textDim, size: 26))
             .help(Localizer.shared.t("主机列表 (⌘S)", "Hosts (⌘S)"))
             .blocksWindowDrag()   // title-bar band: see WLPageHeader
-            .padding(.leading, 14).padding(.top, 33)
+            // In the title-bar row, just right of the traffic lights.
+            .frame(height: TitleBand.shared.height)
+            .padding(.leading, TitleBand.shared.lightsTrailing + 10)
             .opacity(sidebarOpen ? 0 : 1)
 
             // Only in the hierarchy while open. Merely sliding it off-screen
@@ -244,9 +250,17 @@ struct ContentView: View {
                           onCollapse: { setSidebar(false) })
                     .frame(width: 340)
                     .frame(maxHeight: .infinity)
-                    .background(WL.bg.opacity(0.97))
-                    .overlay(alignment: .trailing) { Rectangle().fill(WL.border).frame(width: 1) }
-                    .shadow(color: .black.opacity(WL.depth(0.3)), radius: 18, x: 4)
+                    // A floating card like the panes: opaque (no terminal text
+                    // showing through), rounded, inset from the window edges.
+                    .background {
+                        drawerShape.fill(WL.bg)
+                            .shadow(color: .black.opacity(WL.depth(0.32)), radius: 22, x: 4, y: 6)
+                    }
+                    .clipShape(drawerShape)
+                    .overlay(drawerShape.strokeBorder(WL.textPrimary.opacity(WL.isLight ? 0.08 : 0.12), lineWidth: 1)
+                        .allowsHitTesting(false))
+                    .padding(wlPaneGap)
+                    .wlOccludesTerminal()
                     .onHover { inside in
                         if !inside, openedByHover { setSidebar(false) }
                     }
@@ -313,6 +327,7 @@ struct LeftPanel: View {
     @State private var showNewGroup = false
     @State private var searchHighlight = 0
     @FocusState private var searchFocused: Bool
+    @Namespace private var segment
 
     private var trimmed: String { query.trimmingCharacters(in: .whitespaces) }
 
@@ -363,8 +378,9 @@ struct LeftPanel: View {
                 Image(systemName: "sidebar.left").font(.system(size: 12, weight: .medium))
             }.buttonStyle(.wlIcon).help(loc("收起侧边栏", "Collapse sidebar"))
         }
-        .padding(.leading, 84).padding(.trailing, 10)
-        .frame(height: 52)
+        // The card is inset by the pane gap; clear the traffic lights.
+        .padding(.leading, TitleBand.shared.lightsTrailing + 6 - wlPaneGap).padding(.trailing, 8)
+        .frame(height: TitleBand.shared.height - wlPaneGap + 6)
         .blocksWindowDrag()   // title-bar band: see WLPageHeader
     }
 
@@ -394,27 +410,32 @@ struct LeftPanel: View {
                 .transition(.opacity)
             }
         }
-        .padding(.horizontal, 10).padding(.vertical, 7)
-        .background(WL.textPrimary.opacity(searchFocused ? 0.07 : 0.045),
-                    in: RoundedRectangle(cornerRadius: WL.radius(7)))
-        .overlay(RoundedRectangle(cornerRadius: WL.radius(7))
-            .stroke(WL.green.opacity(searchFocused ? 0.6 : 0), lineWidth: 1))
+        .padding(.horizontal, 12).padding(.vertical, 7)
+        .background(WL.textPrimary.opacity(searchFocused ? 0.08 : 0.055),
+                    in: Capsule(style: .continuous))
+        .overlay(Capsule(style: .continuous)
+            .strokeBorder(WL.green.opacity(searchFocused ? 0.55 : 0), lineWidth: 1))
         .animation(Motion.hover, value: searchFocused)
         .animation(Motion.hover, value: query.isEmpty)
         .padding(.horizontal, 12).padding(.bottom, 8)
     }
 
+    /// A segmented capsule, like the tab bar: one raised pill slides to the
+    /// selected section.
     private var functionRow: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 0) {
             FeatureButton(title: "SSH", symbol: "terminal", tint: WL.green,
-                          active: operation == nil) { operation = nil }
+                          active: operation == nil, pill: segment) { operation = nil }
             FeatureButton(title: loc("端口", "Ports"), symbol: "arrow.left.arrow.right", tint: WL.green,
-                          active: operation == .forwarding) { operation = .forwarding }
+                          active: operation == .forwarding, pill: segment) { operation = .forwarding }
             FeatureButton(title: loc("文件", "Files"), symbol: "folder", tint: WL.green,
-                          active: operation == .files) { operation = .files }
+                          active: operation == .files, pill: segment) { operation = .files }
             FeatureButton(title: loc("密钥", "Keys"), symbol: "key", tint: WL.green,
-                          active: operation == .keys) { operation = .keys }
+                          active: operation == .keys, pill: segment) { operation = .keys }
         }
+        .padding(3)
+        .background(Capsule(style: .continuous).fill(WL.textPrimary.opacity(WL.isLight ? 0.06 : 0.08)))
+        .animation(.spring(duration: 0.32, bounce: 0.12), value: operation)
         .padding(.horizontal, 12).padding(.bottom, 10)
     }
 
@@ -524,7 +545,9 @@ struct LeftPanel: View {
     private var bottomBar: some View {
         HStack {
             Button { onAdd(nil) } label: {
-                Label(loc("新建主机", "New Host"), systemImage: "plus").font(WL.small)
+                Label(loc("新建主机", "New Host"), systemImage: "plus").font(WL.small.weight(.medium))
+                    .padding(.horizontal, 12).padding(.vertical, 5)
+                    .background(WL.green.opacity(0.13), in: Capsule(style: .continuous))
             }
             .buttonStyle(.wlPlain).foregroundStyle(WL.green)
             Spacer()
@@ -543,6 +566,8 @@ struct FeatureButton: View {
     let symbol: String
     let tint: Color
     let active: Bool
+    /// Shared by a segmented row so the selected pill slides between buttons.
+    let pill: Namespace.ID
     let action: () -> Void
     @State private var hover = false
 
@@ -552,12 +577,20 @@ struct FeatureButton: View {
                 Image(systemName: symbol).font(.system(size: 10, weight: .medium))
                 Text(title).font(WL.small.weight(active ? .semibold : .regular))
             }
-            .foregroundStyle(active ? tint : (hover ? WL.textPrimary : WL.textDim))
+            .foregroundStyle(active ? WL.textPrimary : (hover ? WL.textPrimary : WL.textDim))
             .padding(.vertical, 6)
             .frame(maxWidth: .infinity)
-            .background(active ? tint.opacity(0.13) : WL.textPrimary.opacity(hover ? 0.05 : 0),
-                        in: RoundedRectangle(cornerRadius: WL.radius(6)))
-            .animation(Motion.state, value: active)
+            .background {
+                let shape = Capsule(style: .continuous)
+                if active {
+                    shape.fill(WL.isLight ? Color.white : WL.textPrimary.opacity(0.12))
+                        .shadow(color: .black.opacity(WL.depth(0.18)), radius: 3, y: 1)
+                        .matchedGeometryEffect(id: "segmentPill", in: pill)
+                } else {
+                    shape.fill(WL.textPrimary.opacity(hover ? 0.05 : 0))
+                }
+            }
+            .contentShape(Capsule())
         }
         .buttonStyle(.wlPlain)
         .wlHover($hover)
@@ -680,7 +713,7 @@ struct GroupHeader: View {
     }
 
     private var background: Color {
-        targeted ? WL.green.opacity(0.14) : .clear
+        WL.green.opacity(targeted ? 0.14 : 0)
     }
 }
 

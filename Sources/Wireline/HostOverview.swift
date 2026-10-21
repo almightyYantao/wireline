@@ -81,7 +81,7 @@ struct HostOverview: View {
             Button(action: onNew) { Label(loc("新建主机", "New Host"), systemImage: "plus") }
                 .buttonStyle(.wlPrimary)
         }
-        .padding(.leading, 52).padding(.trailing, 20).padding(.top, 28)
+        .padding(.leading, 24).padding(.trailing, 20).padding(.top, 28)
         .frame(minHeight: 64)
         .blocksWindowDrag()   // title-bar band: see WLPageHeader
         .padding(.bottom, 8)

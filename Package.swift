@@ -11,7 +11,8 @@ let package = Package(
         .library(name: "WirelineCore", targets: ["WirelineCore"])
     ],
     dependencies: [
-        .package(url: "https://github.com/migueldeicaza/SwiftTerm.git", from: "1.2.0"),
+        // Official 1.20.0 + one-line Metal fix (premultiplied clear colour for backgroundOpacity < 1).
+        .package(url: "https://github.com/almightyYantao/SwiftTerm.git", revision: "6d4db53cc5ec89b482e23aee6820f1c954adc378"),
         .package(url: "https://github.com/krzysztofzablocki/Inject.git", from: "1.5.2"),
         .package(url: "https://github.com/orlandos-nl/Citadel.git", from: "0.9.2"),
         .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.6.0")
