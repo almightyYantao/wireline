@@ -87,6 +87,12 @@ final class HostStore {
         didSet { UserDefaults.standard.set(lastConnected, forKey: "lastConnected") }
     }
 
+    /// The terminal renderer for new sessions. Config file only for now
+    /// (`terminal-engine`); "ghostty" falls back to SwiftTerm until the
+    /// libghostty engine can run (see `TerminalEngineKind.makeEngine`).
+    var terminalEngine: TerminalEngineKind {
+        didSet { UserDefaults.standard.set(terminalEngine.rawValue, forKey: "terminalEngine") }
+    }
     /// Render terminals on the GPU (SwiftTerm's Metal renderer).
     var terminalGPU: Bool {
         didSet { UserDefaults.standard.set(terminalGPU, forKey: "terminalGPU") }
@@ -231,6 +237,8 @@ final class HostStore {
         self.terminalCursorBlink = UserDefaults.standard.object(forKey: "terminalCursorBlink") as? Bool ?? true
         self.unfocusedSplitOpacity = UserDefaults.standard.object(forKey: "unfocusedSplitOpacity") as? Double ?? 0.7
         self.terminalGPU = UserDefaults.standard.object(forKey: "terminalGPU") as? Bool ?? true
+        self.terminalEngine = UserDefaults.standard.string(forKey: "terminalEngine")
+            .flatMap(TerminalEngineKind.init) ?? .swiftterm
         self.terminalPaddingX = UserDefaults.standard.object(forKey: "terminalPaddingX") as? Double ?? 16
         self.terminalPaddingY = UserDefaults.standard.object(forKey: "terminalPaddingY") as? Double ?? 10
         self.inheritWorkingDirectory = UserDefaults.standard.object(forKey: "inheritWorkingDirectory") as? Bool ?? true

@@ -95,6 +95,29 @@ struct TerminalAppearance: Equatable {
     var cursorBlink: Bool
 }
 
+/// Which renderer new sessions use (`terminal-engine` in the config file).
+enum TerminalEngineKind: String, CaseIterable, Sendable {
+    case swiftterm, ghostty
+
+    /// The engine for a new session: the setting, unless libghostty can't run
+    /// here (not started, or a GhosttyKit without manual IO) — then SwiftTerm.
+    @MainActor
+    static func makeEngine(frame: CGRect) -> any TerminalEngine {
+        let wanted = UserDefaults.standard.string(forKey: "terminalEngine").flatMap(Self.init) ?? .swiftterm
+        if wanted == .ghostty {
+            if GhosttyTerminalView.isAvailable { return GhosttyTerminalView(frame: frame) }
+            if !warnedFallback {
+                warnedFallback = true
+                let why = GhosttyRuntime.shared.failure ?? "this GhosttyKit has no manual-IO backend"
+                ghosttyLog.warning("terminal-engine = ghostty unavailable (\(why, privacy: .public)); using SwiftTerm")
+            }
+        }
+        return WirelineTerminalView(frame: frame)
+    }
+
+    @MainActor private static var warnedFallback = false
+}
+
 /// The ⌘-click path rule both engines use.
 enum TerminalPathToken {
     static func token(in chars: [Character], at col: Int) -> String? {

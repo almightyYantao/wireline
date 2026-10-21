@@ -347,6 +347,11 @@ struct RightPanel: View {
         .padding(8)
         .transition(.wlSlide(.top))
         .onExitCommand(perform: closeSearch)
+        // libghostty counts matches on a background thread.
+        .onReceive(NotificationCenter.default.publisher(for: .ghosttySearchDidUpdate)) { note in
+            guard let session = sessions.activeSession, note.object as AnyObject? === session.terminalView else { return }
+            updateSummary(session)
+        }
     }
 
     /// A small "Aa" / ".*" chip that lights up green when its search option is on.
