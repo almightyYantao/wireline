@@ -77,8 +77,7 @@ struct VimHintView: View {
                 .font(.system(size: 14))
                 .foregroundStyle(WL.green)
                 .frame(width: 34, height: 34)
-                .background(WL.surface.opacity(0.9), in: RoundedRectangle(cornerRadius: WL.radius(8)))
-                .overlay(RoundedRectangle(cornerRadius: WL.radius(8)).stroke(WL.green.opacity(0.5), lineWidth: 1))
+                .wlFloating(Circle(), fill: WL.bg.opacity(0.95), shadow: 0.25, radius: 8, y: 2)
         }
         .buttonStyle(.wlPlain)
         .help(loc("Vim 速查表", "Vim cheat sheet"))
@@ -91,14 +90,13 @@ struct VimHintView: View {
                     .font(WL.small.weight(.semibold)).foregroundStyle(WL.green)
                 Spacer()
                 Button { collapsed = true } label: {
-                    Image(systemName: "xmark").font(.system(size: 10, weight: .bold))
-                        .foregroundStyle(WL.textDim)
+                    Image(systemName: "xmark").font(.system(size: 9, weight: .semibold))
                 }
-                .buttonStyle(.wlPlain)
+                .buttonStyle(.wlIcon(size: 22))
                 .help(loc("收起为浮窗图标", "Collapse to a floating icon"))
             }
-            .padding(.horizontal, 12).padding(.vertical, 10)
-            Rectangle().fill(WL.border).frame(height: 1)
+            .padding(.leading, 14).padding(.trailing, 8).padding(.vertical, 8)
+            WLFormDivider()
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
@@ -125,8 +123,8 @@ struct VimHintView: View {
         }
         .frame(width: 232)
         .frame(maxHeight: 460)
-        .background(WL.bg.opacity(0.92), in: RoundedRectangle(cornerRadius: WL.radius(10)))
-        .overlay(RoundedRectangle(cornerRadius: WL.radius(10)).stroke(WL.border, lineWidth: WL.borderWidth))
-        .shadow(color: .black.opacity(0.4), radius: 12, y: 4)
+        .clipShape(RoundedRectangle(cornerRadius: WL.radius(14), style: .continuous))
+        .wlFloating(RoundedRectangle(cornerRadius: WL.radius(14), style: .continuous),
+                    fill: WL.bg.opacity(0.94), shadow: 0.32, radius: 14, y: 4)
     }
 }

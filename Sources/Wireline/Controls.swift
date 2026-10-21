@@ -198,11 +198,11 @@ struct WLCheckboxToggleStyle: ToggleStyle {
         var body: some View {
             let on = configuration.isOn
             HStack(spacing: 8) {
-                RoundedRectangle(cornerRadius: WL.radius(3.5))
-                    .fill(on ? WL.green : WL.bg.opacity(0.4))
+                RoundedRectangle(cornerRadius: WL.radius(4), style: .continuous)
+                    .fill(on ? WL.green : WL.fieldFill)
                     .frame(width: 14, height: 14)
-                    .overlay(RoundedRectangle(cornerRadius: WL.radius(3.5))
-                        .stroke(on ? Color.clear : (hover ? WL.green.opacity(0.7) : WL.border), lineWidth: 1))
+                    .overlay(RoundedRectangle(cornerRadius: WL.radius(4), style: .continuous)
+                        .stroke((hover ? WL.green.opacity(0.7) : WL.border).opacity(on ? 0 : 1), lineWidth: 1))
                     .overlay {
                         if on {
                             Image(systemName: "checkmark")

@@ -13,6 +13,7 @@ struct HostOverview: View {
     var onFiles: (Host) -> Void
     var onDetails: (Host) -> Void
     @State private var filter = ""
+    @FocusState private var filterFocused: Bool
 
     private var onlineCount: Int {
         store.hosts.filter { if case .online = store.statuses[$0.alias] { return true } else { return false } }.count
@@ -68,10 +69,11 @@ struct HostOverview: View {
             HStack(spacing: 6) {
                 Image(systemName: "line.3.horizontal.decrease").font(.system(size: 10)).foregroundStyle(WL.textDim)
                 TextField(loc("过滤", "Filter"), text: $filter)
-                    .textFieldStyle(.plain).font(WL.small).frame(width: 150)
+                    .textFieldStyle(.plain).font(WL.small).foregroundStyle(WL.textPrimary)
+                    .focused($filterFocused).frame(width: 150)
             }
-            .padding(.horizontal, 10).padding(.vertical, 6)
-            .background(WL.textPrimary.opacity(0.05), in: RoundedRectangle(cornerRadius: WL.radius(7)))
+            .padding(.horizontal, 12).padding(.vertical, 6)
+            .wlSearchCapsule(focused: filterFocused)
             Button { Task { await store.checkAll() } } label: {
                 Image(systemName: "arrow.clockwise").font(.system(size: 11, weight: .medium))
             }.buttonStyle(.wlIcon).help(loc("刷新状态", "Refresh statuses"))
@@ -140,6 +142,9 @@ private struct HostCard: View {
     @State private var hover = false
 
     private var s: HostStatus { status ?? .unknown }
+    private var cardShape: RoundedRectangle {
+        RoundedRectangle(cornerRadius: WL.radius(12), style: .continuous)
+    }
 
     private var statusText: String {
         switch s {
@@ -179,16 +184,22 @@ private struct HostCard: View {
             }
             .padding(14)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(WL.surface.opacity(hover ? 0.7 : 0.45), in: RoundedRectangle(cornerRadius: WL.radius(10)))
+            // A raised card; hover lifts it (deeper shadow on the shape only,
+            // accent edge fading in over the hairline — same shape throughout).
+            .background {
+                cardShape.fill(WL.cardFill)
+                    .overlay(cardShape.fill(WL.textPrimary.opacity(hover ? 0.03 : 0)))
+                    .shadow(color: .black.opacity(WL.depth(hover ? 0.18 : 0.08)), radius: hover ? 9 : 3, y: hover ? 3 : 1)
+            }
             .overlay(alignment: .leading) {
+                // The group's colour label: a short capsule, as in the drawer.
                 if let color {
-                    UnevenRoundedRectangle(topLeadingRadius: WL.radius(10), bottomLeadingRadius: WL.radius(10))
-                        .fill(color.color).frame(width: 3)
+                    Capsule().fill(color.color).frame(width: 3, height: 18).padding(.leading, 5)
                 }
             }
-            .overlay(RoundedRectangle(cornerRadius: WL.radius(10))
-                .stroke(hover ? WL.green.opacity(0.45) : WL.border.opacity(0.55), lineWidth: 1))
-            .shadow(color: .black.opacity(hover ? WL.depth(0.14) : 0), radius: 8, y: 3)
+            .overlay(cardShape.strokeBorder(WL.hairline, lineWidth: 1))
+            .overlay(cardShape.strokeBorder(WL.green.opacity(hover ? 0.45 : 0), lineWidth: 1))
+            .contentShape(cardShape)
         }
         .buttonStyle(.wlPlain)
         .wlHover($hover)

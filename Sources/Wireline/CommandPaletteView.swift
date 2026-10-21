@@ -59,9 +59,12 @@ struct CommandPaletteView: View {
                         highlighted = max(highlighted - 1, 0); return .handled
                     }
             }
-            .padding(.horizontal, 18).padding(.vertical, 16)
+            // The query is a capsule field inset in the card, like the drawer's search.
+            .padding(.horizontal, 16).padding(.vertical, 11)
+            .wlSearchCapsule(focused: focused)
+            .padding(10)
 
-            Rectangle().fill(WL.border).frame(height: 1)
+            WLFormDivider()
 
             ScrollViewReader { proxy in
                 ScrollView {
@@ -80,7 +83,7 @@ struct CommandPaletteView: View {
                                 .id(cmd.id)
                         }
                     }
-                    .padding(6)
+                    .padding(8)
                 }
                 .onChange(of: highlighted) {
                     guard keyboardNav, results.indices.contains(highlighted) else { return }
@@ -260,7 +263,8 @@ private struct PaletteRow: View {
             Image(systemName: command.systemImage)
                 .font(.system(size: 11, weight: .medium)).foregroundStyle(command.tint)
                 .frame(width: 26, height: 26)
-                .background(command.tint.opacity(isHighlighted ? 0.16 : 0.1), in: RoundedRectangle(cornerRadius: WL.radius(6)))
+                .background(command.tint.opacity(isHighlighted ? 0.16 : 0.1),
+                            in: RoundedRectangle(cornerRadius: WL.radius(8), style: .continuous))
             VStack(alignment: .leading, spacing: 1) {
                 Text(command.title).font(WL.body).foregroundStyle(WL.textPrimary).lineLimit(1)
                 if let sub = command.subtitle {

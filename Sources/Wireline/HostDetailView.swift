@@ -17,7 +17,7 @@ struct HostDetailView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
-            Rectangle().fill(WL.border.opacity(0.6)).frame(height: 1)
+            WLFormDivider()
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
                 group(loc("连接", "Connection"), rows: [
@@ -68,51 +68,50 @@ struct HostDetailView: View {
     @ViewBuilder
     private var memorySection: some View {
         let facts = mem.facts(for: host.alias)
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text(loc("AI 记忆", "AI Memory")).font(WL.small.weight(.semibold))
-                    .foregroundStyle(WL.green).textCase(.uppercase)
-                Spacer()
-                if !facts.isEmpty {
-                    BracketButton(loc("清空", "Clear")) { mem.clear(host.alias) }
-                }
-            }
+        WLFormSection(loc("AI 记忆", "AI Memory")) {
             if facts.isEmpty {
                 Text(loc("AI 在对话中了解到该主机的稳定信息后会记在这里，用于让回答更贴合本机。",
                          "The AI records durable facts about this host here to tailor its answers."))
                     .font(WL.caption).foregroundStyle(WL.textDim)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.vertical, 12)
             } else {
-                ForEach(facts, id: \.self) { fact in
-                    HStack(alignment: .top, spacing: 8) {
-                        Text("•").foregroundStyle(WL.green)
+                ForEach(Array(facts.enumerated()), id: \.element) { i, fact in
+                    if i > 0 { WLFormDivider() }
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Circle().fill(WL.green).frame(width: 5, height: 5).alignmentGuide(.firstTextBaseline) { $0[.bottom] }
                         Text(fact).font(WL.small).foregroundStyle(WL.textPrimary).textSelection(.enabled)
                         Spacer()
                         Button { mem.remove(fact, for: host.alias) } label: {
-                            Image(systemName: "xmark").font(.system(size: 8)).foregroundStyle(WL.textDim)
-                        }.buttonStyle(.wlPlain)
+                            Image(systemName: "xmark").font(.system(size: 8, weight: .semibold))
+                        }
+                        .buttonStyle(.wlIcon(size: 20))
+                        .help(loc("删除这条", "Forget this"))
                     }
+                    .padding(.vertical, 8)
                 }
+                WLFormDivider()
+                HStack {
+                    Spacer()
+                    BracketButton(loc("清空", "Clear")) { mem.clear(host.alias) }
+                }
+                .padding(.vertical, 8)
             }
         }
     }
 
     private func group(_ title: String, rows: [(String, String)]) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(title).font(WL.small.weight(.semibold)).foregroundStyle(WL.green).textCase(.uppercase)
-            VStack(alignment: .leading, spacing: 6) {
-                ForEach(rows, id: \.0) { key, value in
-                    HStack(alignment: .top, spacing: 14) {
-                        Text(key).font(WL.small).foregroundStyle(WL.textDim)
-                            .frame(width: 90, alignment: .leading)
-                        Text(value).font(WL.body).foregroundStyle(WL.textPrimary).textSelection(.enabled)
-                        Spacer()
-                    }
+        WLFormSection(title) {
+            ForEach(Array(rows.enumerated()), id: \.offset) { i, row in
+                if i > 0 { WLFormDivider() }
+                HStack(alignment: .top, spacing: 14) {
+                    Text(row.0).font(WL.small).foregroundStyle(WL.textDim)
+                        .frame(width: 90, alignment: .leading)
+                    Text(row.1).font(WL.body).foregroundStyle(WL.textPrimary).textSelection(.enabled)
+                    Spacer()
                 }
+                .padding(.vertical, 8)
             }
-            .padding(12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(WL.surface.opacity(0.5), in: RoundedRectangle(cornerRadius: WL.radius(6)))
-            .overlay(RoundedRectangle(cornerRadius: WL.radius(6)).stroke(WL.border, lineWidth: WL.borderWidth))
         }
     }
 }

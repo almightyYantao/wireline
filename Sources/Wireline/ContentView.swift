@@ -677,7 +677,7 @@ struct GroupHeader: View {
             }
         }
         .padding(.leading, 14).padding(.trailing, 10).padding(.top, 10).padding(.bottom, 4)
-        .background(background, in: RoundedRectangle(cornerRadius: WL.radius(6)))
+        .background(background, in: RoundedRectangle(cornerRadius: WL.radius(8), style: .continuous))
         .padding(.horizontal, 4)
         .contentShape(Rectangle())
         .onTapGesture { onToggle?() }
@@ -715,9 +715,7 @@ private struct ConfigToast: View {
                     Text(t.text).font(WL.small).foregroundStyle(WL.textPrimary)
                 }
                 .padding(.horizontal, 14).padding(.vertical, 8)
-                .background(.ultraThinMaterial, in: Capsule())
-                .overlay(Capsule().stroke(WL.border.opacity(0.7), lineWidth: 1))
-                .shadow(color: .black.opacity(0.25), radius: 12, y: 4)
+                .wlFloating(Capsule(style: .continuous), fill: WL.bg.opacity(0.96), shadow: 0.25, radius: 12, y: 4)
                 .padding(.bottom, 44)
                 .transition(.wlSlide(.bottom))
                 .id(t.id)

@@ -139,9 +139,8 @@ struct HostEditorView: View {
                     Spacer()
                     Image(systemName: "chevron.up.chevron.down").font(.system(size: 10)).foregroundStyle(WL.textDim)
                 }
-                .padding(.horizontal, 10).padding(.vertical, 7)
-                .background(WL.bg.opacity(0.5), in: RoundedRectangle(cornerRadius: WL.radius(6)))
-                .overlay(RoundedRectangle(cornerRadius: WL.radius(6)).stroke(WL.border.opacity(0.6), lineWidth: 1))
+                .padding(.leading, 12).padding(.trailing, 10).padding(.vertical, 7)
+                .background(WL.fieldFill, in: Capsule(style: .continuous))
             }
             .menuStyle(.borderlessButton).menuIndicator(.hidden)
             BracketButton(loc("浏览…", "Browse…")) { browseForKey() }

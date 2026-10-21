@@ -196,7 +196,7 @@ private struct SnippetRow: View {
         HStack(spacing: 10) {
             Image(systemName: "bolt.fill").font(.system(size: 10)).foregroundStyle(WL.green)
                 .frame(width: 22, height: 22)
-                .background(WL.green.opacity(0.1), in: RoundedRectangle(cornerRadius: WL.radius(6)))
+                .background(WL.green.opacity(0.1), in: RoundedRectangle(cornerRadius: WL.radius(7), style: .continuous))
             VStack(alignment: .leading, spacing: 2) {
                 Text(snippet.name).font(WL.body).foregroundStyle(WL.textPrimary).lineLimit(1)
                 Text(snippet.command).font(WL.caption).foregroundStyle(WL.textDim).lineLimit(1)
