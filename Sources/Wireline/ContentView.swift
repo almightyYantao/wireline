@@ -50,7 +50,9 @@ struct ContentView: View {
     @State private var selectedAlias: String?
     @State private var showQuickConnect = false
     @State private var showCommandPalette = false
-    @State private var sidebarCollapsed = UserDefaults.standard.bool(forKey: "sidebarCollapsed")
+    @State private var sidebarOpen = false
+    @State private var openedByHover = false
+    @State private var hoverOpenTask: DispatchWorkItem?
     @State private var chrome = WindowChromeController()
     @State private var palette = Palette.shared
     @ObserveInjection var inject
@@ -62,39 +64,15 @@ struct ContentView: View {
             // panel above composites over it uniformly.
             WallpaperView(path: store.terminalBgImagePath)
                 .ignoresSafeArea()
-            HStack(spacing: 0) {
-                // A drawer: the panel stays mounted at its full 340pt and slides
-                // under a clip whose width animates, so its contents never re-lay
-                // out mid-animation (and search text / scroll position survive).
-                ZStack(alignment: .leading) {
-                    collapsedSidebarStrip
-                        .opacity(sidebarCollapsed ? 1 : 0)
-                        .allowsHitTesting(sidebarCollapsed)
-                    LeftPanel(query: $query, operation: $operation, selectedAlias: $selectedAlias,
-                              onAdd: { editing = HostEditContext(host: nil, defaultGroup: $0) },
-                              onEdit: { editing = HostEditContext(host: $0) },
-                              onBackup: { showBackup = true },
-                              onOpenFiles: { fileHost = $0; operation = .files },
-                              onCollapse: toggleSidebar)
-                        .frame(width: 340)
-                        .offset(x: sidebarCollapsed ? -340 : 0)
-                        .opacity(sidebarCollapsed ? 0 : 1)
-                        .allowsHitTesting(!sidebarCollapsed)
-                        .accessibilityHidden(sidebarCollapsed)
-                }
-                .frame(width: sidebarCollapsed ? 34 : 340, alignment: .leading)
-                // One tint for the whole drawer, constant through the animation.
-                // If the panel and strip each carried their own, the panel's fade
-                // and the gap between its sliding edge and the shrinking clip
-                // would let the undimmed wallpaper flash through.
-                .background(WL.bg.opacity(store.terminalOpacity * WL.chromeOpacity))
-                .clipped()
-                Rectangle().fill(WL.border).frame(width: 1)
-                RightPanel(operation: $operation, fileHost: $fileHost, selectedAlias: $selectedAlias,
-                           onEditHost: { editing = HostEditContext(host: $0) },
-                           sidebarCollapsed: sidebarCollapsed)
-            }
-            .ignoresSafeArea()
+            // The terminal area always fills the window; the host list is a
+            // drawer that slides *over* it. Opening or closing it never resizes
+            // a terminal, so there's nothing to reflow.
+            RightPanel(operation: $operation, fileHost: $fileHost, selectedAlias: $selectedAlias,
+                       onEditHost: { editing = HostEditContext(host: $0) },
+                       sidebarCollapsed: true)
+                .ignoresSafeArea()
+            sidebarDrawer
+                .ignoresSafeArea()
 
             overlays
         }
@@ -107,10 +85,11 @@ struct ContentView: View {
             // the terminal view and auto-collapse the sidebar for more room.
             if new > old {
                 operation = nil
-                if !sidebarCollapsed { wlAnimateTerminalLayout { sidebarCollapsed = true } }
-                UserDefaults.standard.set(true, forKey: "sidebarCollapsed")
+                setSidebar(false)
             }
         }
+        .modifier(DrawerAutoClose(activeTab: sessions.activeTabID, selectedAlias: selectedAlias,
+                                  operation: operation, close: { setSidebar(false) }))
         .onReceive(NotificationCenter.default.publisher(for: .toggleSidebar)) { _ in toggleSidebar() }
         .onReceive(NotificationCenter.default.publisher(for: .editHost)) { _ in
             if let host = currentHost { editing = HostEditContext(host: host) }
@@ -180,13 +159,13 @@ struct ContentView: View {
             if showQuickConnect {
                 scrim { wlAnimate(Motion.modalOut) { showQuickConnect = false } }
                 modalCard(width: 620, height: 420) {
-                    QuickConnectView(onClose: { wlAnimate(Motion.modalOut) { showQuickConnect = false } })
+                    CommandPaletteView(onClose: { wlAnimate(Motion.modalOut) { showQuickConnect = false } })
                 }
             }
             if showCommandPalette {
                 scrim { wlAnimate(Motion.modalOut) { showCommandPalette = false } }
                 modalCard(width: 640, height: 460) {
-                    CommandPaletteView(onClose: { wlAnimate(Motion.modalOut) { showCommandPalette = false } })
+                    CommandPaletteView(initialQuery: ">", onClose: { wlAnimate(Motion.modalOut) { showCommandPalette = false } })
                 }
             }
         }
@@ -210,26 +189,71 @@ struct ContentView: View {
             .transition(.wlModal)
     }
 
-    private func toggleSidebar() {
-        // The sidebar's width resizes the terminal: animate the layout with the
-        // terminal grid frozen, then reflow it exactly once at the end.
-        wlAnimateTerminalLayout { sidebarCollapsed.toggle() }
-        UserDefaults.standard.set(sidebarCollapsed, forKey: "sidebarCollapsed")
+    private func toggleSidebar() { setSidebar(!sidebarOpen) }
+
+    private func setSidebar(_ open: Bool, byHover: Bool = false) {
+        hoverOpenTask?.cancel(); hoverOpenTask = nil
+        guard open != sidebarOpen else { return }
+        openedByHover = open && byHover
+        wlAnimate(open ? Motion.expand : Motion.popOut) { sidebarOpen = open }
     }
 
-    /// Thin strip shown when the sidebar is collapsed, with an expand button.
-    private var collapsedSidebarStrip: some View {
-        VStack(spacing: 0) {
-            Button(action: toggleSidebar) {
-                Image(systemName: "sidebar.left").font(.system(size: 13))
+    /// The host list as an overlay drawer: a 6pt hot zone on the window's left
+    /// edge opens it on hover, ⌘S or the corner button toggle it, a click
+    /// outside (or connecting) closes it, and one opened by hover closes when
+    /// the pointer leaves.
+    private var sidebarDrawer: some View {
+        ZStack(alignment: .topLeading) {
+            if sidebarOpen {
+                Color.black.opacity(WL.depth(0.14))
+                    .contentShape(Rectangle())
+                    .onTapGesture { setSidebar(false) }
+                    .transition(.opacity)
             }
-            .buttonStyle(.wlIcon(tint: WL.green, size: 26))
-            .padding(.top, 30).padding(.bottom, 10)
-            .help("展开侧边栏")
-            Spacer()
+            // Hover hot zone along the left edge.
+            Color.clear
+                .frame(width: 6).frame(maxHeight: .infinity)
+                .contentShape(Rectangle())
+                .onHover { inside in
+                    guard inside, !sidebarOpen else { hoverOpenTask?.cancel(); return }
+                    let task = DispatchWorkItem { setSidebar(true, byHover: true) }
+                    hoverOpenTask = task
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.18, execute: task)
+                }
+            // Corner button, level with the tab bar.
+            Button(action: toggleSidebar) {
+                Image(systemName: "sidebar.left").font(.system(size: 13, weight: .medium))
+            }
+            .buttonStyle(.wlIcon(tint: WL.textDim, size: 26))
+            .help(Localizer.shared.t("主机列表 (⌘S)", "Hosts (⌘S)"))
+            .blocksWindowDrag()   // title-bar band: see WLPageHeader
+            .padding(.leading, 14).padding(.top, 33)
+            .opacity(sidebarOpen ? 0 : 1)
+
+            // Only in the hierarchy while open. Merely sliding it off-screen
+            // left its AppKit-backed pieces (the host list's NSScrollView, the
+            // search field) catching clicks across the window's left 340pt —
+            // SwiftUI's offset / allowsHitTesting don't reach them. Search text
+            // and folded groups live outside the panel, so nothing is lost.
+            if sidebarOpen {
+                LeftPanel(query: $query, operation: $operation, selectedAlias: $selectedAlias,
+                          onAdd: { editing = HostEditContext(host: nil, defaultGroup: $0) },
+                          onEdit: { editing = HostEditContext(host: $0) },
+                          onBackup: { showBackup = true },
+                          onOpenFiles: { fileHost = $0; operation = .files; setSidebar(false) },
+                          onCollapse: { setSidebar(false) })
+                    .frame(width: 340)
+                    .frame(maxHeight: .infinity)
+                    .background(WL.bg.opacity(0.97))
+                    .overlay(alignment: .trailing) { Rectangle().fill(WL.border).frame(width: 1) }
+                    .shadow(color: .black.opacity(WL.depth(0.3)), radius: 18, x: 4)
+                    .onHover { inside in
+                        if !inside, openedByHover { setSidebar(false) }
+                    }
+                    .transition(Motion.reduce ? .opacity : .move(edge: .leading))
+            }
         }
-        .frame(width: 34)
-        .frame(maxHeight: .infinity)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 }
 
@@ -341,6 +365,7 @@ struct LeftPanel: View {
         }
         .padding(.leading, 84).padding(.trailing, 10)
         .frame(height: 52)
+        .blocksWindowDrag()   // title-bar band: see WLPageHeader
     }
 
     private var searchBar: some View {
@@ -423,6 +448,7 @@ struct LeftPanel: View {
                               onAdd: (() -> Void)?) -> some View {
         let isCollapsed = collapsed.contains(title)
         GroupHeader(title: title, count: hosts.count, collapsed: isCollapsed,
+                    color: onAdd != nil ? store.groupColors[title]?.color : nil,
                     onToggle: { toggle(title) }, onAdd: onAdd, onDrop: onDrop,
                     menu: groupMenu(title: title, deletable: onAdd != nil, onAdd: onAdd))
         if !isCollapsed {
@@ -437,6 +463,14 @@ struct LeftPanel: View {
         var menu: [WLMenuItem] = [.item(loc("新建分组…", "New Group…"), systemImage: "plus") { presentNewGroup() }]
         if deletable {
             menu.append(.item(loc("在此新建主机", "New host here"), systemImage: "plus.circle") { onAdd?() })
+            // Colour label: marks this group's hosts, tabs and terminals.
+            let current = store.groupColors[title]
+            var colors: [WLMenuItem] = GroupColor.allCases.map { c in
+                .item(c.label, checked: current == c) { store.groupColors[title] = c }
+            }
+            colors.append(.divider)
+            colors.append(.item(loc("无", "None"), checked: current == nil) { store.groupColors[title] = nil })
+            menu.append(.submenu(loc("颜色标识", "Colour Label"), systemImage: "paintpalette", colors))
             menu.append(.divider)
             menu.append(.item(loc("删除分组", "Delete Group"), systemImage: "trash", destructive: true) {
                 store.deleteGroup(title)
@@ -588,6 +622,7 @@ struct GroupHeader: View {
     let title: String
     var count: Int = 0
     var collapsed: Bool = false
+    var color: Color? = nil
     var onToggle: (() -> Void)?
     var onAdd: (() -> Void)?
     var onDrop: (([String]) -> Void)?
@@ -607,6 +642,7 @@ struct GroupHeader: View {
                     .rotationEffect(.degrees(collapsed ? 0 : 90))
                     .frame(width: 10)
             }
+            if let color { Circle().fill(color).frame(width: 7, height: 7) }
             Text(displayTitle).font(WL.small.weight(.semibold))
                 .foregroundStyle(targeted ? WL.green : WL.textDim)
             if count > 0 {
@@ -673,5 +709,24 @@ private struct ConfigToast: View {
         }
         .frame(maxWidth: .infinity)
         .allowsHitTesting(false)
+    }
+}
+
+/// Anything picked in the host drawer that changes what the main area shows —
+/// an open host's tab, a host's details, a tool (ports / files / keys) — puts
+/// the drawer away, so you never close it yourself. Searching, folding groups
+/// and context menus leave it open. (A modifier to keep `ContentView.body`
+/// within the type-checker's budget.)
+private struct DrawerAutoClose: ViewModifier {
+    let activeTab: UUID?
+    let selectedAlias: String?
+    let operation: SidebarItem?
+    let close: () -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: activeTab) { _, new in if new != nil { close() } }
+            .onChange(of: selectedAlias) { _, new in if new != nil { close() } }
+            .onChange(of: operation) { _, _ in close() }
     }
 }

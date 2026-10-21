@@ -909,6 +909,25 @@ final class SessionStore {
         return id
     }
 
+    /// Open an SSH session to `host` as a new pane beside `leaf` (a host dragged
+    /// onto a terminal's edge).
+    @discardableResult
+    func splitHost(_ host: Host, password: String?, sudoPassword: String?,
+                   ontoLeaf leaf: UUID, edge: PaneEdge) -> UUID? {
+        guard let ti = tabs.firstIndex(where: { $0.contains(leaf: leaf) }) else { return nil }
+        let session = TerminalSession(
+            kind: .ssh(alias: host.alias, password: password, sudoPassword: sudoPassword,
+                       autoSudo: host.autoSudo, args: host.launchArgTokens),
+            title: host.alias)
+        if let tabID = activeTabID { zoomedSession[tabID] = nil }
+        let id = spawn(session)
+        tabs[ti] = tabs[ti].splitting(leaf: leaf, insert: id, edge: edge == .center ? .trailing : edge)
+        activeTabID = tabs[ti].id
+        activeID = id
+        persist()
+        return id
+    }
+
     /// Zoom the active pane to fill its tab, or restore the split.
     func toggleZoom() {
         guard let tabID = activeTabID, let tab = activeTab, tab.sessionIDs.count > 1,

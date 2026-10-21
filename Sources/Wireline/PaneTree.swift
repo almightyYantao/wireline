@@ -292,7 +292,7 @@ struct PaneLeafView: View {
         if let session = sessions.session(sessionID) {
             VStack(spacing: 0) {
                 header(session)
-                Rectangle().fill(WL.border.opacity(0.6)).frame(height: 1)
+                GroupColorRule(alias: session.alias)
                 TerminalHostView(session: session, autoFocus: focused && !aiOpen).id(session.id)
                     .wlTerminalPadding(store)
                     .overlay(alignment: .top) {
@@ -332,11 +332,9 @@ struct PaneLeafView: View {
             // Drop another tab here to merge it into this group (splitting this
             // pane along the nearest edge).
             .dropDestination(for: String.self) { items, location in
-                guard let str = items.first, let draggedTab = UUID(uuidString: str) else { return false }
-                wlAnimateTerminalLayout {
-                    sessions.mergeTab(draggedTab, ontoLeaf: paneID, edge: paneEdge(for: location, in: paneSize))
-                }
-                return true
+                guard let str = items.first else { return false }
+                return dropOntoPane(str, leaf: paneID, edge: paneEdge(for: location, in: paneSize),
+                                    store: store, sessions: sessions)
             } isTargeted: { targeted = $0 }
         } else {
             Color.clear
@@ -376,4 +374,23 @@ struct PaneLeafView: View {
         .contentShape(Rectangle())
         .onTapGesture { sessions.activeID = session.id }
     }
+}
+
+/// Something dropped on a terminal pane: a tab (its id) merges into a split; a
+/// host (its alias, dragged from the sidebar or overview) opens a new SSH pane
+/// on that edge.
+@MainActor
+func dropOntoPane(_ payload: String, leaf: UUID, edge: PaneEdge,
+                  store: HostStore, sessions: SessionStore) -> Bool {
+    if let tab = UUID(uuidString: payload) {
+        wlAnimateTerminalLayout { sessions.mergeTab(tab, ontoLeaf: leaf, edge: edge) }
+        return true
+    }
+    guard let host = store.hosts.first(where: { $0.alias == payload }) else { return false }
+    store.lastConnected[host.alias] = Date()
+    wlAnimateTerminalLayout {
+        sessions.splitHost(host, password: store.password(for: host),
+                           sudoPassword: store.sudoPassword(for: host), ontoLeaf: leaf, edge: edge)
+    }
+    return true
 }

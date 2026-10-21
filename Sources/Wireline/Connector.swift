@@ -7,6 +7,7 @@ import WirelineCore
 @MainActor
 func connectHost(_ host: Host, store: HostStore, sessions: SessionStore,
                  openWindow: OpenWindowAction) {
+    store.lastConnected[host.alias] = Date()
     if store.useBuiltInTerminal {
         sessions.open(host: host, password: store.password(for: host), sudoPassword: store.sudoPassword(for: host))
         // Bring the main window forward so the new session is visible (e.g. when

@@ -21,6 +21,10 @@ struct AIPanelView: View {
     @State private var showFleet = false
     // Owned by RightPanel so ⌘I / tab switches can query and re-assert focus.
     @FocusState.Binding var inputFocused: Bool
+    /// Docked as a column beside the terminal (true) or floating over it.
+    var docked: Bool = true
+    /// Pin / unpin the panel; nil hides the pin button.
+    var onTogglePin: (() -> Void)? = nil
 
     private let maxAgentSteps = 8
     private let mcpResultCap = 4000                      // chars of tool output fed back
@@ -224,36 +228,52 @@ struct AIPanelView: View {
                 Text(loc("AI 助手", "AI Assistant")).font(WL.body.weight(.semibold)).foregroundStyle(WL.textPrimary)
                 Spacer()
                 if ai.hasFastModel {
-                    Button { useFast.toggle() } label: {
-                        Text("\(useFast ? "[x]" : "[ ]") \(loc("快速", "Fast"))")
-                            .font(WL.small).foregroundStyle(useFast ? WL.green : WL.textDim)
+                    chip(loc("快速", "Fast"), on: useFast) { useFast.toggle() }
+                        .help(loc("用便宜/快速模型跑这条", "Use the fast/cheap model"))
+                }
+                chip(loc("自动执行", "Agent"), on: ai.agentMode) { ai.agentMode.toggle() }
+                    .help(loc("开启后 AI 会自动执行命令并根据输出继续", "Let AI run commands and continue from their output"))
+                HStack(spacing: 0) {
+                    if !messages.isEmpty {
+                        Button {
+                            messages.removeAll(); modelMessages.removeAll(); errorText = nil
+                            sessionTokens = 0; chats.clear(conversationKey)
+                        } label: { Image(systemName: "trash").font(.system(size: 11, weight: .medium)) }
+                            .buttonStyle(.wlIcon).help(loc("清空对话", "Clear conversation"))
                     }
-                    .buttonStyle(.wlPlain)
-                    .help(loc("用便宜/快速模型跑这条", "Use the fast/cheap model"))
-                }
-                // Bracket checkbox — matches the app's [button] motif, clearly clickable.
-                Button { ai.agentMode.toggle() } label: {
-                    Text("\(ai.agentMode ? "[x]" : "[ ]") \(loc("自动执行", "Agent"))")
-                        .font(WL.small)
-                        .foregroundStyle(ai.agentMode ? WL.green : WL.textDim)
-                }
-                .buttonStyle(.wlPlain)
-                .help(loc("开启后 AI 会自动执行命令并根据输出继续", "Let AI run commands and continue from their output"))
-                if !messages.isEmpty {
-                    BracketButton(loc("清空", "Clear")) {
-                        messages.removeAll(); modelMessages.removeAll(); errorText = nil
-                        sessionTokens = 0; chats.clear(conversationKey)
+                    if let onTogglePin {
+                        Button(action: onTogglePin) {
+                            Image(systemName: docked ? "pin.fill" : "pin").font(.system(size: 11, weight: .medium))
+                        }
+                        .buttonStyle(.wlIcon(tint: docked ? WL.green : nil))
+                        .help(docked ? loc("取消固定：改为浮在终端上方", "Unpin: float over the terminal")
+                                     : loc("固定为侧栏：终端让出位置", "Pin as a column beside the terminal"))
                     }
+                    Button(action: onClose) { Image(systemName: "xmark").font(.system(size: 10, weight: .semibold)) }
+                        .buttonStyle(.wlIcon).help(loc("关闭 (⌘I)", "Close (⌘I)"))
                 }
-                Button(action: onClose) {
-                    Image(systemName: "xmark").font(.system(size: 11, weight: .bold)).foregroundStyle(WL.textDim)
-                }.buttonStyle(.wlPlain)
             }
             if sessionTokens > 0 {
                 Text(usageText).font(WL.caption).foregroundStyle(WL.textDim)
             }
         }
         .padding(.horizontal, 14).padding(.top, 32).padding(.bottom, 10)
+        .blocksWindowDrag()   // title-bar band: see WLPageHeader
+    }
+
+    /// A small on/off pill for the header toggles.
+    private func chip(_ title: String, on: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                Circle().fill(on ? WL.green : WL.textDim.opacity(0.5)).frame(width: 5, height: 5)
+                Text(title).font(WL.caption)
+            }
+            .foregroundStyle(on ? WL.green : WL.textDim)
+            .padding(.horizontal, 8).padding(.vertical, 3)
+            .background((on ? WL.green.opacity(0.12) : WL.textPrimary.opacity(0.05)), in: Capsule())
+            .animation(Motion.state, value: on)
+        }
+        .buttonStyle(.wlPlain)
     }
 
     private var usageText: String {

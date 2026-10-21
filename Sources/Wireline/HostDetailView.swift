@@ -9,14 +9,17 @@ struct HostDetailView: View {
     @Environment(\.openWindow) private var openWindow
     let host: Host
     var onEdit: (Host) -> Void
+    var onBack: (() -> Void)?
     @State private var mem = HostMemoryStore.shared
 
     private var status: HostStatus { store.statuses[host.alias] ?? .unknown }
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            header
+            Rectangle().fill(WL.border.opacity(0.6)).frame(height: 1)
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
-                header
                 group(loc("连接", "Connection"), rows: [
                     (loc("别名", "Alias"), host.alias),
                     (loc("主机", "Host"), host.connectHostname),
@@ -39,23 +42,26 @@ struct HostDetailView: View {
                          "Resolves via ~/.ssh/config — `ssh \(host.alias)`, scp, and VS Code Remote all work too."))
                     .font(WL.caption).foregroundStyle(WL.textDim)
             }
-            .padding(24)
+            .padding(.horizontal, 28).padding(.vertical, 22)
+        }
         }
         .background(.clear)
+        // Esc goes back to the overview (a hidden cancel button: works without
+        // anything on the page holding focus).
+        .background {
+            if let onBack {
+                Button("", action: onBack).keyboardShortcut(.cancelAction).opacity(0).allowsHitTesting(false)
+            }
+        }
     }
 
     private var header: some View {
-        HStack(spacing: 12) {
-            Circle().fill(status.tagColor).frame(width: 10, height: 10)
-            Text(host.alias).font(WL.mono(20, .bold)).foregroundStyle(WL.greenBright)
-            Spacer()
-            BracketButton(loc("检测", "Check")) { Task { await store.check(host) } }
-            BracketButton(loc("编辑", "Edit")) { onEdit(host) }
-            Button {
+        WLPageHeader(host.alias, subtitle: "\(status.tagText) · \(host.connectionSummary)", onBack: onBack) {
+            Button(loc("检测", "Check")) { Task { await store.check(host) } }.buttonStyle(.wlSecondary)
+            Button(loc("编辑", "Edit")) { onEdit(host) }.buttonStyle(.wlSecondary)
+            Button(loc("连接", "Connect")) {
                 connectHost(host, store: store, sessions: sessions, openWindow: openWindow)
-            } label: {
-                Text("[\(loc("连接", "Connect"))]").font(WL.body).foregroundStyle(WL.green)
-            }.buttonStyle(.wlPlain)
+            }.buttonStyle(.wlPrimary)
         }
     }
 

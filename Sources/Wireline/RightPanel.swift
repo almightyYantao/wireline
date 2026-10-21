@@ -19,6 +19,8 @@ struct RightPanel: View {
     var sidebarCollapsed: Bool = false
     @State private var ai = AIConfig.shared
     @State private var showAI = false
+    /// Pinned as a column vs floating over the terminal (default).
+    @AppStorage("aiDocked") private var aiDocked = false
     // Lifted out of AIPanelView so the ⌘I handler and tab switches can tell
     // whether the panel currently holds keyboard focus, and grab it if not.
     @FocusState private var aiFocused: Bool
@@ -74,13 +76,13 @@ struct RightPanel: View {
                 // Open but not focused → just focus it (don't hide). Only hide
                 // when it already has focus, so ⌘I acts as "bring me to the AI".
                 if aiFocused {
-                    wlAnimateTerminalLayout { showAI = false }
+                    setAI(false)
                     sessions.focusActiveTerminal()
                 } else {
                     aiFocused = true
                 }
             } else {
-                wlAnimateTerminalLayout { showAI = true }   // AIPanelView.onAppear takes focus on appear.
+                setAI(true)   // AIPanelView.onAppear takes focus on appear.
             }
         }
         .onChange(of: sessions.activeID) { _, _ in
@@ -111,30 +113,53 @@ struct RightPanel: View {
 
     @ViewBuilder
     private var sessionArea: some View {
-        // AI panel sits BESIDE the terminal (a real column that shrinks the
-        // terminal), not on top of it — so its translucent background reveals the
-        // wallpaper, never the terminal underneath. The column slides in while the
-        // terminal grid is frozen (see TerminalResizeGate), so it reflows once.
+        // The AI panel floats over the terminal by default (opening it resizes
+        // nothing); pinned, it becomes a column beside it, sliding in while the
+        // terminal grid is frozen (see TerminalResizeGate) so it reflows once.
         HStack(spacing: 0) {
             terminalColumn
-            if showAI {
+            if showAI && aiDocked {
                 Rectangle().fill(WL.border).frame(width: 1)
-                AIPanelView(session: sessions.activeSession,
-                            host: activeHost,
-                            onClose: { wlAnimateTerminalLayout { showAI = false }; sessions.focusActiveTerminal() },
-                            inputFocused: $aiFocused)
+                aiPanel
                     .transition(.move(edge: .trailing).combined(with: .opacity))
-                    // Bind the panel's identity to the conversation (per host; all
-                    // local shells share "__local__"), so switching to a *different*
-                    // host gives it a fresh view with that host's transcript. The
-                    // conversation itself lives in `AIConvoState`, outside the view,
-                    // so the rebuild neither loses nor cross-contaminates a reply
-                    // that's still streaming. Two tabs of one host share the panel.
-                    .id(activeHost?.alias ?? "__local__")
+            }
+        }
+        // Unpinned, the panel floats over the terminal: opening it resizes
+        // nothing. Pinned, it's a real column (the terminal makes room once).
+        .overlay(alignment: .trailing) {
+            if showAI && !aiDocked {
+                aiPanel
+                    .background(WL.bg.opacity(0.94))
+                    .overlay(alignment: .leading) { Rectangle().fill(WL.border).frame(width: 1) }
+                    .shadow(color: .black.opacity(WL.depth(0.28)), radius: 18, x: -4)
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
             }
         }
         // The AI panel opens only via its keyboard shortcut (Toggle AI Panel) or
         // the command palette — no floating button. See the `.toggleAI` handler above.
+    }
+
+    private var aiPanel: some View {
+        AIPanelView(session: sessions.activeSession,
+                    host: activeHost,
+                    onClose: { setAI(false); sessions.focusActiveTerminal() },
+                    inputFocused: $aiFocused,
+                    docked: aiDocked,
+                    onTogglePin: { wlAnimateTerminalLayout { aiDocked.toggle() } })
+            // Bind the panel's identity to the conversation (per host; all
+            // local shells share "__local__"), so switching to a *different*
+            // host gives it a fresh view with that host's transcript. The
+            // conversation itself lives in `AIConvoState`, outside the view,
+            // so the rebuild neither loses nor cross-contaminates a reply
+            // that's still streaming. Two tabs of one host share the panel.
+            .id(activeHost?.alias ?? "__local__")
+    }
+
+    /// Open / close the AI panel: a pinned column goes through the terminal
+    /// layout freeze; a floating one just slides.
+    private func setAI(_ on: Bool) {
+        if aiDocked { wlAnimateTerminalLayout { showAI = on } }
+        else { wlAnimate(on ? Motion.expand : Motion.popOut) { showAI = on } }
     }
 
     @ViewBuilder
@@ -171,7 +196,7 @@ struct RightPanel: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let session = sessions.activeSession {
                 ConnectionInfoBar(session: session)
-                Rectangle().fill(WL.border).frame(height: 1)
+                GroupColorRule(alias: session.alias)
                 TerminalHostView(session: session, autoFocus: !showAI).id(session.id)
                     .wlTerminalPadding(store)
                     .overlay(alignment: .top) {
@@ -195,17 +220,18 @@ struct RightPanel: View {
                     // Drop another tab here (near an edge) to merge it into a
                     // split with this session.
                     .dropDestination(for: String.self) { items, location in
-                        guard let str = items.first, let draggedTab = UUID(uuidString: str),
-                              let leaf = sessions.activeTab?.anyLeafID else { return false }
-                        sessions.mergeTab(draggedTab, ontoLeaf: leaf,
-                                          edge: paneEdge(for: location, in: termSize))
-                        return true
+                        guard let str = items.first, let leaf = sessions.activeTab?.anyLeafID else { return false }
+                        return dropOntoPane(str, leaf: leaf, edge: paneEdge(for: location, in: termSize),
+                                            store: store, sessions: sessions)
                     } isTargeted: { dropTargeted = $0 }
                 StatusBar(session: session)
             } else if let host = detailHost {
-                HostDetailView(host: host, onEdit: onEditHost)
+                HostDetailView(host: host, onEdit: onEditHost, onBack: { selectedAlias = nil })
             } else {
-                IdleConsole()
+                HostOverview(onEdit: onEditHost,
+                             onNew: { NotificationCenter.default.post(name: .newConnection, object: nil) },
+                             onFiles: { fileHost = $0; operation = .files },
+                             onDetails: { selectedAlias = $0.alias })
             }
         }
         .frame(maxWidth: .infinity)
@@ -410,6 +436,7 @@ struct SessionTabBar: View {
 /// glyph. Dragging a tab onto another tab's pane merges them.
 struct SessionTab: View {
     @Environment(SessionStore.self) private var sessions
+    @Environment(HostStore.self) private var store
     @Environment(Localizer.self) private var loc
     let index: Int
     let tab: PaneNode
@@ -446,6 +473,10 @@ struct SessionTab: View {
 
     var body: some View {
         HStack(spacing: 8) {
+            if let label = tab.sessionIDs.lazy.compactMap({ sessions.session($0) })
+                .compactMap({ store.groupColor(forAlias: $0.alias) }).first {
+                Circle().fill(label.color).frame(width: 6, height: 6)
+            }
             Text("\(index)").font(WL.small.weight(.semibold))
                 .foregroundStyle(isActive ? WL.green : WL.textDim.opacity(0.7))
             if tab.sessionIDs.count > 1 {
@@ -774,21 +805,6 @@ struct StatusBar: View {
 
 // MARK: - Idle / tool containers
 
-struct IdleConsole: View {
-    @Environment(Localizer.self) private var loc
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("> wireline").font(WL.mono(22, .bold)).foregroundStyle(WL.green)
-            Text(loc("未连接", "Not connected")).font(WL.body).foregroundStyle(WL.textDim)
-            Text(loc("选择左侧主机连接，或按 ⌘K 快速连接，⌘T 打开本地终端。",
-                     "Pick a host on the left, or press ⌘K to quick-connect, ⌘T for a local terminal."))
-                .font(WL.body).foregroundStyle(WL.textDim)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-        .background(.clear)
-    }
-}
-
 /// A panel to pick a host and open its visual SFTP file browser. Single click
 /// selects a row; double click opens it.
 struct FilesPicker: View {
@@ -849,10 +865,23 @@ struct ToolContainer<Content: View>: View {
     @ViewBuilder var content: Content
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text(title).font(WL.body.weight(.semibold)).foregroundStyle(WL.green)
-                .padding(.leading, 18 + leadingInset).padding(.trailing, 18).padding(.vertical, 12)
-            Rectangle().fill(WL.border).frame(height: 1)
+            WLPageHeader(title)
+            Rectangle().fill(WL.border.opacity(0.6)).frame(height: 1)
             content
+        }
+    }
+}
+
+/// The line under a terminal's header: a 2pt band in the host group's colour
+/// label (red = production …), else the usual hairline.
+struct GroupColorRule: View {
+    @Environment(HostStore.self) private var store
+    let alias: String
+    var body: some View {
+        if let c = store.groupColor(forAlias: alias) {
+            Rectangle().fill(c.color).frame(height: 2)
+        } else {
+            Rectangle().fill(WL.border).frame(height: 1)
         }
     }
 }

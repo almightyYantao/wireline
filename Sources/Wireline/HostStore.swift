@@ -70,6 +70,23 @@ final class HostStore {
     var terminalPaddingY: Double {
         didSet { UserDefaults.standard.set(terminalPaddingY, forKey: "terminalPaddingY") }
     }
+    /// Colour label per group — e.g. red for production — shown on its hosts'
+    /// rows, tabs and terminal edge so you always know where you're typing.
+    var groupColors: [String: GroupColor] = (UserDefaults.standard.dictionary(forKey: "groupColors") as? [String: String] ?? [:])
+        .compactMapValues(GroupColor.init) {
+        didSet { UserDefaults.standard.set(groupColors.mapValues(\.rawValue), forKey: "groupColors") }
+    }
+
+    func groupColor(forAlias alias: String) -> GroupColor? {
+        guard let g = hosts.first(where: { $0.alias == alias })?.group else { return nil }
+        return groupColors[g]
+    }
+
+    /// When each host was last connected (for the overview page).
+    var lastConnected: [String: Date] = (UserDefaults.standard.dictionary(forKey: "lastConnected") as? [String: Date]) ?? [:] {
+        didSet { UserDefaults.standard.set(lastConnected, forKey: "lastConnected") }
+    }
+
     /// Render terminals on the GPU (SwiftTerm's Metal renderer).
     var terminalGPU: Bool {
         didSet { UserDefaults.standard.set(terminalGPU, forKey: "terminalGPU") }
@@ -573,3 +590,4 @@ final class HostStore {
 enum CursorShape: String, CaseIterable, Sendable {
     case block, bar, underline
 }
+

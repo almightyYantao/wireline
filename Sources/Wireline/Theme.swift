@@ -83,3 +83,29 @@ extension HostStatus {
         }
     }
 }
+
+/// Group colour labels. Raw values are what's persisted.
+enum GroupColor: String, CaseIterable, Sendable {
+    case red, orange, green, blue, purple
+
+    @MainActor var color: Color {
+        switch self {
+        case .red: return WL.red
+        case .orange: return WL.amber
+        case .green: return WL.green
+        case .blue: return WL.teal
+        case .purple: return WL.purple
+        }
+    }
+
+    @MainActor var label: String {
+        let l = Localizer.shared
+        switch self {
+        case .red: return l.t("红色（生产）", "Red (production)")
+        case .orange: return l.t("橙色（预发）", "Orange (staging)")
+        case .green: return l.t("绿色（测试）", "Green (testing)")
+        case .blue: return l.t("蓝色", "Blue")
+        case .purple: return l.t("紫色", "Purple")
+        }
+    }
+}

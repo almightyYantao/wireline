@@ -699,3 +699,45 @@ private struct ConfigLockModifier: ViewModifier {
         .animation(Motion.state, value: locked)
     }
 }
+
+// MARK: - Page header
+
+/// The header every full-width page uses (tools, host details, overview):
+/// clears the 28pt title-bar band (traffic lights), then a row level with the
+/// tab bar that starts right of the drawer's corner button.
+struct WLPageHeader<Trailing: View>: View {
+    let title: String
+    var subtitle: String?
+    var onBack: (() -> Void)?
+    @ViewBuilder var trailing: Trailing
+
+    init(_ title: String, subtitle: String? = nil, onBack: (() -> Void)? = nil,
+         @ViewBuilder trailing: () -> Trailing = { EmptyView() }) {
+        self.title = title; self.subtitle = subtitle; self.onBack = onBack; self.trailing = trailing()
+    }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            if let onBack {
+                Button(action: onBack) { Image(systemName: "chevron.left").font(.system(size: 11, weight: .semibold)) }
+                    .buttonStyle(.wlIcon)
+                    .help(Localizer.shared.t("返回", "Back"))
+            }
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title).font(WL.mono(14, .semibold)).foregroundStyle(WL.textPrimary).lineLimit(1)
+                if let subtitle {
+                    Text(subtitle).font(WL.caption).foregroundStyle(WL.textDim).lineLimit(1)
+                }
+            }
+            Spacer(minLength: 12)
+            trailing
+        }
+        .padding(.leading, 52).padding(.trailing, 20)
+        .padding(.top, 28)
+        .frame(minHeight: 64, alignment: .center)
+        // This row sits in the window's title-bar band, where a mouse-down
+        // starts a window drag unless the view says otherwise — without this
+        // the buttons here never get the click.
+        .blocksWindowDrag()
+    }
+}

@@ -9,12 +9,15 @@ struct PaletteCommand: Identifiable {
     let category: String
     let systemImage: String
     let tint: Color
+    /// Shown instead of the category (a host's status / latency).
+    var badge: (text: String, color: Color)? = nil
     let run: () -> Void
 }
 
-/// A Spotlight-style "do anything" palette (⌘P): fuzzy-search every app action —
-/// connect a host, open a terminal, run a snippet, switch theme, open settings —
-/// and run it, all from the keyboard. ↑/↓ to move, Return to run, Esc to close.
+/// One bar for everything (Raycast-style). Typing searches hosts — Return
+/// connects — followed by matching actions; a leading ">" searches only
+/// commands (actions, snippets, themes). ⌘K opens it empty, ⌘P opens it with
+/// ">". ↑/↓ to move, Return to run, Esc to close.
 struct CommandPaletteView: View {
     @Environment(HostStore.self) private var store
     @Environment(SessionStore.self) private var sessions
@@ -22,8 +25,12 @@ struct CommandPaletteView: View {
     @Environment(Localizer.self) private var loc
     @Environment(\.openWindow) private var openWindow
     var onClose: () -> Void
+    @State private var query: String
 
-    @State private var query = ""
+    init(initialQuery: String = "", onClose: @escaping () -> Void) {
+        self.onClose = onClose
+        _query = State(initialValue: initialQuery)
+    }
     @State private var highlighted = 0
     /// Set by arrow keys so the list scrolling under a resting pointer doesn't
     /// yank the highlight back; cleared as soon as the mouse actually moves.
@@ -33,8 +40,10 @@ struct CommandPaletteView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
-                Image(systemName: "command").font(.system(size: 15)).foregroundStyle(WL.green)
-                TextField(loc("执行命令…", "Run a command…"), text: $query)
+                Image(systemName: commandMode ? "command" : "magnifyingglass")
+                    .font(.system(size: 15)).foregroundStyle(WL.green)
+                    .contentTransition(.symbolEffect(.replace))
+                TextField(loc("搜索主机，或输入 > 执行命令", "Search hosts, or type > for commands"), text: $query)
                     .textFieldStyle(.plain)
                     .font(WL.mono(18))
                     .foregroundStyle(WL.textPrimary)
@@ -90,17 +99,55 @@ struct CommandPaletteView: View {
         }
         .background(WL.bg)
         .preferredColorScheme(WL.colorScheme)
-        .onAppear { focused = true }
+        .onAppear {
+            focused = true
+            // Focusing selects all; with a prefilled ">" the first keystroke
+            // would replace it. Put the caret after it instead.
+            DispatchQueue.main.async {
+                (NSApp.keyWindow?.firstResponder as? NSTextView)?.moveToEndOfDocument(nil)
+            }
+        }
         .onExitCommand { onClose() }
     }
 
     // MARK: - Filtering
 
+    private var commandMode: Bool { query.hasPrefix(">") }
+
     private var results: [PaletteCommand] {
-        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
-        guard !q.isEmpty else { return commands }
-        return commands.filter {
+        var q = query.trimmingCharacters(in: .whitespaces).lowercased()
+        if commandMode { q = String(q.dropFirst()).trimmingCharacters(in: .whitespaces) }
+        let cmds = q.isEmpty ? commands : commands.filter {
             ($0.title + " " + $0.category + " " + ($0.subtitle ?? "")).lowercased().contains(q)
+        }
+        return commandMode ? cmds : hostCommands(q) + cmds
+    }
+
+    /// Hosts first: fuzzy-ranked when typing, most recently used when empty.
+    private func hostCommands(_ q: String) -> [PaletteCommand] {
+        let hosts: [Host]
+        if q.isEmpty {
+            hosts = store.hosts.sorted {
+                let a = store.lastConnected[$0.alias] ?? .distantPast, b = store.lastConnected[$1.alias] ?? .distantPast
+                return a != b ? a > b : $0.alias.localizedCaseInsensitiveCompare($1.alias) == .orderedAscending
+            }
+        } else {
+            hosts = store.search(q)
+        }
+        return hosts.map { host in
+            let s = store.statuses[host.alias] ?? .unknown
+            let text: String = switch s {
+            case .online(let ms): "\(ms) ms"
+            case .offline: loc("离线", "offline")
+            case .checking: loc("探测中", "checking")
+            case .unknown: ""
+            }
+            return PaletteCommand(
+                title: host.alias, subtitle: host.connectionSummary, category: loc("连接", "Connect"),
+                systemImage: "network", tint: store.groupColor(forAlias: host.alias)?.color ?? WL.green,
+                badge: text.isEmpty ? nil : (text, s.tagColor)) {
+                connectHost(host, store: store, sessions: sessions, openWindow: openWindow)
+            }
         }
     }
 
@@ -176,16 +223,6 @@ struct CommandPaletteView: View {
                            systemImage: "gearshape", tint: WL.textDim) { openWindow(id: "settings") },
         ]
 
-        // Connect to any host.
-        let connect = loc("连接", "Connect")
-        for host in store.hosts {
-            out.append(PaletteCommand(
-                title: host.alias, subtitle: host.connectionSummary, category: connect,
-                systemImage: "network", tint: WL.green) {
-                connectHost(host, store: store, sessions: sessions, openWindow: openWindow)
-            })
-        }
-
         // Run a snippet in the active session (inserts it so you can review / fill).
         if let session = sessions.activeSession {
             let snip = loc("片段", "Snippet")
@@ -231,7 +268,11 @@ private struct PaletteRow: View {
                 }
             }
             Spacer()
-            Text(command.category).font(WL.caption).foregroundStyle(WL.textDim)
+            if let badge = command.badge {
+                Text(badge.text).font(WL.caption.monospacedDigit()).foregroundStyle(badge.color)
+            } else {
+                Text(command.category).font(WL.caption).foregroundStyle(WL.textDim)
+            }
             if isHighlighted {
                 Image(systemName: "return").font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(WL.textDim)

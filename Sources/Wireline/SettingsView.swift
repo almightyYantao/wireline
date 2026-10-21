@@ -59,6 +59,7 @@ struct SettingsView: View {
         // Sits in the title-bar band, level with the traffic lights.
         .padding(.leading, 84).padding(.trailing, 16)
         .frame(height: 52)
+        .blocksWindowDrag()   // title-bar band: see WLPageHeader
     }
 
     private var general: some View {

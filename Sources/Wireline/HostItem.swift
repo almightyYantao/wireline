@@ -60,7 +60,11 @@ struct HostItem: View {
         .background(rowBackground)
         .animation(Motion.state, value: isSelected)
         .overlay(alignment: .leading) {
-            Rectangle().fill(WL.green).frame(width: 2).opacity(isActive || isSelected ? 1 : 0)
+            // The group's colour label stays visible; otherwise the accent bar
+            // marks the selected row.
+            let label = store.groupColor(forAlias: host.alias)?.color
+            Rectangle().fill(label ?? WL.green).frame(width: label == nil ? 2 : 3)
+                .opacity(label != nil || isActive || isSelected ? 1 : 0)
         }
         .wlHover($hover)
         .draggable(host.alias) {
@@ -77,11 +81,13 @@ struct HostItem: View {
             .item(loc("编辑…", "Edit…"), systemImage: "pencil") { onEdit() },
             .item(loc("检测状态", "Check status"), systemImage: "arrow.clockwise") { Task { await store.check(host) } }
         ]
-        for g in store.groups {
-            items.append(.item(loc("移到分组：\(g)", "Move to: \(g)"), systemImage: "folder") { store.setGroup(g, for: [host.alias]) })
-        }
         if !store.groups.isEmpty {
-            items.append(.item(loc("移到未分组", "Move to Ungrouped"), systemImage: "tray") { store.setGroup(nil, for: [host.alias]) })
+            var move: [WLMenuItem] = store.groups.map { g in
+                .item(g, checked: host.group == g) { store.setGroup(g, for: [host.alias]) }
+            }
+            move.append(.divider)
+            move.append(.item(loc("未分组", "Ungrouped"), checked: host.group == nil) { store.setGroup(nil, for: [host.alias]) })
+            items.append(.submenu(loc("移到分组", "Move to Group"), systemImage: "folder", move))
         }
         items.append(.divider)
         items.append(.item(loc("删除", "Delete"), systemImage: "trash", destructive: true) { store.delete(host) })
