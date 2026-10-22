@@ -441,11 +441,12 @@ final class TerminalSession: Identifiable {
     }
 
     private func pollForeground() {
-        let proc = io.process
-        guard proc.childfd >= 0 else { return }
-        let pgid = tcgetpgrp(proc.childfd)
-        let running = pgid > 0 && pgid != proc.shellPid
-        let name = running ? ForegroundProcess.identify(pgid) : nil
+        let running: Bool, name: String?
+        switch io.foregroundJob() {
+        case .none: return
+        case .child: (running, name) = (false, nil)
+        case .job(let pgid, let n): (running, name) = (true, ForegroundProcess.identify(pgid) ?? n)
+        }
         if foregroundName != name { foregroundName = name }
         if running, !isBusy {
             busyStartedAt = Date()
@@ -490,6 +491,10 @@ final class TerminalSession: Identifiable {
         isBusy = false
         connectionState = .connecting
 
+        // The old child may have died inside a full-screen program: undo the
+        // modes it left on (alternate screen, mouse tracking, hidden cursor…)
+        // without touching the screen or scrollback.
+        terminalView.feed(text: TerminalModeReset.afterChildExit)
         // A dim divider so the restart reads clearly in the scrollback.
         terminalView.feed(text: "\r\n\u{1b}[2m──────── 重新连接 / reconnecting ────────\u{1b}[0m\r\n")
         launch()

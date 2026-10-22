@@ -2,11 +2,12 @@ import AppKit
 import XCTest
 import struct SwiftTerm.SearchOptions
 import GhosttyKit
+import WirelineCore
 @testable import Wireline
 
 /// End-to-end check of the libghostty engine the way a session runs it: one
 /// `GhosttyTerminalView` with manual IO, wired to a real `TerminalIO` (its
-/// `LocalProcess` PTY runs `/bin/zsh -l`) exactly as `TerminalSession.init`
+/// `PTYProcess` PTY runs `/bin/zsh -l`) exactly as `TerminalSession.init`
 /// does, in a window that never takes focus, driven through the view's own
 /// key path.
 ///
@@ -168,7 +169,7 @@ final class GhosttyHarnessTests: XCTestCase {
         log("window \(window.windowNumber) key=\(window.isKeyWindow) firstResponder=\(window.firstResponder === view)")
         pump(0.1)                               // the real size reaches io_resize_cb first
         launch()
-        log("child started via TerminalIO/LocalProcess, pid \(io.process.shellPid), grid \(view.gridSize.ws_col)×\(view.gridSize.ws_row)")
+        log("child started via TerminalIO/PTYProcess, pid \(io.childPID), grid \(view.gridSize.ws_col)×\(view.gridSize.ws_row)")
 
         // 1. The shell comes up.
         let prompt = wait(10) { screen(view).contains("wl%") }
@@ -433,12 +434,37 @@ final class GhosttyHarnessTests: XCTestCase {
 
         // 14. Reconnect into the same view (TerminalSession.reconnect), without
         // ghostty_surface_io_exited: the old child exits, a new one feeds on.
-        view.send(txt: "exit 3\r")
+        // It dies inside a "full-screen app": alternate screen, focus reports,
+        // mouse tracking, hidden cursor all left on.
+        view.send(txt: "echo PRIMARY-''MARK\r")     // quotes: only the output reads PRIMARY-MARK
+        XCTAssertTrue(wait(5) { screen(view).contains("\nPRIMARY-MARK") })
+        view.send(txt: "printf '\\033[?1049h\\033[?1004h\\033[?1000h\\033[?25l\\033[5;10HALT-'SCREEN; sleep 0.3; exit 3\r")
         let exited = wait(5) { !disconnects.isEmpty }
         log("child exit → onDisconnected \(disconnects) (\(exited)); typing while dead reaches the child: \(io.isRunning)")
         XCTAssertTrue(exited)
+        pump(0.2)                               // libghostty parses on its IO thread
+        let leftOn = (view.ioGlue.alternateScreen, view.ioGlue.focusReporting)
+        let altShown = screen(view).contains("ALT-SCREEN")
+        // As TerminalSession.reconnect does it.
         io.resetForReconnect()
+        view.feed(text: TerminalModeReset.afterChildExit)
+        let resetOff = (view.ioGlue.alternateScreen, view.ioGlue.focusReporting)
+        pump(0.2)
+        let primary = screen(view)
         view.feed(text: "\r\n\u{1b}[2m──────── 重新连接 / reconnecting ────────\u{1b}[0m\r\n")
+        pump(0.2)
+        let rows = screen(view).components(separatedBy: "\n")
+        let markRow = rows.lastIndex { $0.trimmingCharacters(in: .whitespaces) == "PRIMARY-MARK" }
+        let sepRow = rows.lastIndex { $0.contains("reconnecting") }
+        log("mode reset: alt/focus left on \(leftOn) → \(resetOff); primary screen back \(!primary.contains("ALT-SCREEN") && primary.contains("PRIMARY-MARK")); "
+            + "mark row \(markRow ?? -1), separator row \(sepRow ?? -1)")
+        XCTAssertTrue(leftOn == (true, true), "sniffer saw the modes go on")
+        XCTAssertTrue(altShown)
+        XCTAssertTrue(resetOff == (false, false), "sniffer saw the reset")
+        XCTAssertFalse(primary.contains("ALT-SCREEN"))
+        XCTAssertTrue(primary.contains("\nPRIMARY-MARK"))
+        if let markRow, let sepRow { XCTAssertGreaterThan(sepRow, markRow + 1, "separator below the old prompt line, nothing overwritten") }
+        else { XCTFail("mark / separator rows missing:\n\(rows.suffix(12).joined(separator: "\n"))") }
         launch()
         let again = wait(10) { screen(view).components(separatedBy: "reconnecting").last?.contains("wl%") == true }
         type("echo again", into: window)
