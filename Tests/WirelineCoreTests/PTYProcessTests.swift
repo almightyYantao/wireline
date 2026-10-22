@@ -132,6 +132,19 @@ final class PTYProcessTests: XCTestCase {
         XCTAssertTrue(text.contains("41 123"), text)
     }
 
+    /// TIOCSWINSZ reaches an interactive shell as SIGWINCH.
+    func testResizeSignalsShell() throws {
+        let p = make()
+        try p.start(executable: "/bin/zsh", args: ["-f", "-i"], environment: Self.env + ["PS1=Z> "],
+                    windowSize: Self.size)
+        XCTAssertTrue(wait { text.contains("Z> ") }, text)
+        p.resize(winsize(ws_row: 50, ws_col: 77, ws_xpixel: 0, ws_ypixel: 0))
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        p.send(ArraySlice("echo C=$COLUMNS L=$LINES; exit\n".utf8))
+        XCTAssertTrue(wait { !exits.isEmpty })
+        XCTAssertTrue(text.contains("C=77 L=50"), text)
+    }
+
     /// The child leads a session whose controlling terminal is the PTY, so
     /// the shell's jobs show up as the foreground process group.
     func testForegroundJob() throws {
