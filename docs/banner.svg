@@ -1,34 +1,97 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="340" viewBox="0 0 1280 340" role="img" aria-label="Wireline — native macOS SSH client with a built-in AI copilot">
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="340" viewBox="0 0 1280 340" role="img" aria-label="Wireline 1.0 — a native macOS SSH fleet manager that never locks up your data">
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#0a0e0a"/>
-      <stop offset="1" stop-color="#0f150f"/>
+      <stop offset="0" stop-color="#14162c"/>
+      <stop offset="0.55" stop-color="#0d0e1b"/>
+      <stop offset="1" stop-color="#160d1f"/>
     </linearGradient>
-    <radialGradient id="glow" cx="50%" cy="0%" r="75%">
-      <stop offset="0" stop-color="#35d07f" stop-opacity="0.15"/>
-      <stop offset="1" stop-color="#35d07f" stop-opacity="0"/>
+    <radialGradient id="glowA" cx="12%" cy="0%" r="60%">
+      <stop offset="0" stop-color="#5fd3ec" stop-opacity="0.28"/>
+      <stop offset="1" stop-color="#5fd3ec" stop-opacity="0"/>
     </radialGradient>
-    <style>text{font-family:'SF Mono','JetBrains Mono',Menlo,Consolas,monospace}</style>
+    <radialGradient id="glowB" cx="92%" cy="15%" r="60%">
+      <stop offset="0" stop-color="#c46fe6" stop-opacity="0.24"/>
+      <stop offset="1" stop-color="#c46fe6" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glowC" cx="55%" cy="120%" r="60%">
+      <stop offset="0" stop-color="#7b7fe8" stop-opacity="0.22"/>
+      <stop offset="1" stop-color="#7b7fe8" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2a2a2e"/>
+      <stop offset="1" stop-color="#0b0b0d"/>
+    </linearGradient>
+    <linearGradient id="w" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#66d9ec"/>
+      <stop offset="0.45" stop-color="#7b7fe8"/>
+      <stop offset="0.72" stop-color="#d46fe6"/>
+      <stop offset="1" stop-color="#e8967a"/>
+    </linearGradient>
+    <linearGradient id="pill" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#5fd3ec"/>
+      <stop offset="0.5" stop-color="#8a7cf0"/>
+      <stop offset="1" stop-color="#d46fe6"/>
+    </linearGradient>
+    <filter id="soft" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="5"/>
+    </filter>
+    <clipPath id="frame"><rect width="1280" height="340" rx="22"/></clipPath>
+    <style>
+      .sans { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "PingFang SC", "Helvetica Neue", "Segoe UI", sans-serif; }
+      .mono { font-family: "SF Mono", ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace; }
+    </style>
   </defs>
 
-  <rect width="1280" height="340" fill="url(#bg)"/>
-  <rect width="1280" height="340" fill="url(#glow)"/>
-  <rect x="0.5" y="0.5" width="1279" height="339" fill="none" stroke="#1b241b"/>
+  <g clip-path="url(#frame)">
+    <rect width="1280" height="340" fill="url(#bg)"/>
+    <rect width="1280" height="340" fill="url(#glowA)"/>
+    <rect width="1280" height="340" fill="url(#glowB)"/>
+    <rect width="1280" height="340" fill="url(#glowC)"/>
+    <!-- quiet "wire lines" -->
+    <g fill="none" stroke="#8c9cff" stroke-opacity="0.09" stroke-width="1.2">
+      <path d="M-20 262 C 260 210, 520 318, 800 262 S 1180 214, 1300 250"/>
+      <path d="M-20 278 C 260 228, 520 334, 800 278 S 1180 230, 1300 266"/>
+      <path d="M-20 294 C 260 246, 520 350, 800 294 S 1180 246, 1300 282"/>
+    </g>
+  </g>
+  <rect x="0.5" y="0.5" width="1279" height="339" rx="21.5" fill="none" stroke="#ffffff" stroke-opacity="0.08"/>
 
-  <!-- window dots -->
-  <circle cx="40" cy="40" r="7" fill="#ff5f57"/>
-  <circle cx="64" cy="40" r="7" fill="#febc2e"/>
-  <circle cx="88" cy="40" r="7" fill="#28c840"/>
+  <!-- app icon -->
+  <g transform="translate(186 95)">
+    <rect width="150" height="150" rx="34" fill="url(#tile)" stroke="#ffffff" stroke-opacity="0.35" stroke-width="1"/>
+    <polyline points="29,40 49,111.5 75,69 100.5,111.5 121,40" fill="none" stroke="#c9c2ff" stroke-opacity="0.55" stroke-width="18" stroke-linecap="round" stroke-linejoin="round" filter="url(#soft)"/>
+    <polyline points="29,40 49,111.5 75,69 100.5,111.5 121,40" fill="none" stroke="#ffffff" stroke-width="16.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <polyline points="29,40 49,111.5 75,69 100.5,111.5 121,40" fill="none" stroke="url(#w)" stroke-width="13.5" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
 
-  <!-- centered wordmark -->
-  <text x="640" y="168" text-anchor="middle" font-size="78" font-weight="700" fill="#c8d3c8">&gt; <tspan fill="#35d07f">wireline</tspan></text>
+  <!-- wordmark + version -->
+  <text x="372" y="158" class="sans" font-size="74" font-weight="700" fill="#ffffff" letter-spacing="-1">Wireline</text>
+  <g transform="translate(660 112)">
+    <rect width="74" height="44" rx="22" fill="url(#pill)"/>
+    <text x="37" y="31" text-anchor="middle" class="sans" font-size="25" font-weight="700" fill="#ffffff">1.0</text>
+  </g>
 
-  <!-- tagline -->
-  <text x="640" y="212" text-anchor="middle" font-size="24" fill="#c8d3c8">native macOS SSH client · built-in AI copilot</text>
+  <!-- taglines -->
+  <text x="374" y="203" class="sans" font-size="25" font-weight="600" fill="#ffffff">Native macOS SSH fleet manager — never locks up your data</text>
+  <text x="374" y="236" class="sans" font-size="19" fill="#ffffff" fill-opacity="0.66">原生 macOS SSH 舰队管理器 · 绝不锁定你的数据 · 主机就在标准 ~/.ssh/config</text>
 
-  <!-- feature line -->
-  <text x="640" y="256" text-anchor="middle" font-size="19" fill="#63755f">内置终端 &#183; AI 副驾 &#183; 舰队群跑 &#183; 标准 ~/.ssh/config</text>
-
-  <!-- prompt line -->
-  <text x="640" y="298" text-anchor="middle" font-size="18" fill="#35d07f" opacity="0.85">$ ⌘; 说人话 → 生成命令 → 执行</text>
+  <!-- capability chips -->
+  <g class="mono" font-size="14" fill="#ffffff" fill-opacity="0.86">
+    <g transform="translate(374 258)">
+      <rect width="212" height="30" rx="15" fill="#ffffff" fill-opacity="0.07" stroke="#ffffff" stroke-opacity="0.14"/>
+      <text x="106" y="20" text-anchor="middle">libghostty · Metal GPU</text>
+    </g>
+    <g transform="translate(598 258)">
+      <rect width="160" height="30" rx="15" fill="#ffffff" fill-opacity="0.07" stroke="#ffffff" stroke-opacity="0.14"/>
+      <text x="80" y="20" text-anchor="middle">⌘D grid splits</text>
+    </g>
+    <g transform="translate(770 258)">
+      <rect width="196" height="30" rx="15" fill="#ffffff" fill-opacity="0.07" stroke="#ffffff" stroke-opacity="0.14"/>
+      <text x="98" y="20" text-anchor="middle">fleet run · one line</text>
+    </g>
+    <g transform="translate(978 258)">
+      <rect width="150" height="30" rx="15" fill="#ffffff" fill-opacity="0.07" stroke="#ffffff" stroke-opacity="0.14"/>
+      <text x="75" y="20" text-anchor="middle">AI · BYO model</text>
+    </g>
+  </g>
 </svg>

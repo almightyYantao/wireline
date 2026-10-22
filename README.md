@@ -28,17 +28,22 @@ Wrapped in a native macOS card-and-capsule interface (light and dark themes, can
   <video src="https://github.com/almightyYantao/wireline/raw/main/docs/ai-demo.mp4" controls muted width="90%"></video>
 </p>
 
-<p align="center"><img src="docs/image/splits.png" width="90%" alt="Split panes on the libghostty GPU terminal: node, Claude Code and python, each with its own program icon"></p>
-<p align="center"><img src="docs/image/wallpaper.png" width="90%" alt="App-wide wallpaper & themes"></p>
+<p align="center"><img src="docs/image/wallpaper.png" width="90%" alt="Grid splits running Claude Code, node, python and htop — light theme"></p>
+<p align="center"><img src="docs/image/splits-dark.png" width="90%" alt="The same splits in the dark theme"></p>
 <p align="center">
-  <img src="docs/image/files.png" width="90%" alt="Dual-pane SFTP browser">
+  <img src="docs/image/command-palette.png" width="32%" alt="⌘P palette">
+  <img src="docs/image/ssh-connect.png" width="32%" alt="SSH connection panel">
+  <img src="docs/image/snippets.png" width="32%" alt="Snippets popover">
 </p>
+<p align="center"><img src="docs/image/files.png" width="90%" alt="Dual-pane SFTP browser"></p>
 
 ---
 
 ## ⚡ GPU terminal
 
 The terminal is **libghostty** — the core of [Ghostty](https://ghostty.org) — drawn on the GPU with **Metal**.
+
+<p align="center"><img src="docs/image/gpu.png" width="90%" alt="A Rust build, a flood of access logs and htop, drawn on the GPU"></p>
 
 - **Drawn on the GPU**: glyphs come from a GPU atlas and every frame is composited by Metal shaders, so the CPU only parses. Fast-scrolling build logs, `tail -f`, huge `cat`s and full-screen TUIs (htop, vim, Claude Code) stay smooth, and scrolling back through long history doesn't stutter.
 - **Parsed once**: Wireline owns the PTY and feeds the byte stream straight into libghostty — no multiplexer in between re-parsing everything. What reaches the screen costs one parse.
@@ -49,6 +54,8 @@ The terminal is **libghostty** — the core of [Ghostty](https://ghostty.org) �
 ---
 
 ## 🚀 Fleet
+
+<p align="center"><img src="docs/image/ai-fleet.png" width="90%" alt="Fleet run: one sentence across a host group, results aggregated into a table"></p>
 
 The thing a single-host AI terminal can't give you: operate a whole group at once, because Wireline knows your host graph.
 

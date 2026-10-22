@@ -28,8 +28,13 @@
   <video src="https://github.com/almightyYantao/wireline/raw/main/docs/ai-demo.mp4" controls muted width="90%"></video>
 </p>
 
-<p align="center"><img src="docs/image/splits.png" width="90%" alt="libghostty GPU 终端分屏：node、Claude Code、python，每个窗格显示各自的程序图标"></p>
-<p align="center"><img src="docs/image/wallpaper.png" width="90%" alt="整窗壁纸与主题"></p>
+<p align="center"><img src="docs/image/wallpaper.png" width="90%" alt="网格分屏：Claude Code、node、python、htop（浅色主题）"></p>
+<p align="center"><img src="docs/image/splits-dark.png" width="90%" alt="同样的分屏（深色主题）"></p>
+<p align="center">
+  <img src="docs/image/command-palette.png" width="32%" alt="⌘P 面板">
+  <img src="docs/image/ssh-connect.png" width="32%" alt="SSH 连接面板">
+  <img src="docs/image/snippets.png" width="32%" alt="快捷指令浮层">
+</p>
 <p align="center"><img src="docs/image/files.png" width="90%" alt="双栏 SFTP 文件管理"></p>
 
 ---
@@ -37,6 +42,8 @@
 ## ⚡ GPU 终端
 
 终端内核是 **libghostty**（[Ghostty](https://ghostty.org) 的内核），用 **Metal** 在 GPU 上绘制。
+
+<p align="center"><img src="docs/image/gpu.png" width="90%" alt="Rust 编译、刷屏的访问日志和 htop，全部在 GPU 上绘制"></p>
 
 - **GPU 绘制**：字形放在 GPU 图集里，每一帧由 Metal 着色器合成，CPU 只负责解析。飞速滚动的编译日志、`tail -f`、`cat` 大文件，以及 htop、vim、Claude Code 这类全屏程序都很顺；回翻很长的历史也不卡。
 - **只解析一次**：PTY 由 Wireline 自己管理，字节流直接喂给 libghostty，中间没有多路复用器再解析一遍。屏幕上看到的每个字只花一次解析。
@@ -47,6 +54,8 @@
 ---
 
 ## 🚀 舰队(Fleet)
+
+<p align="center"><img src="docs/image/ai-fleet.png" width="90%" alt="舰队群跑：一句话跑遍一组主机，结果汇总成表"></p>
 
 单机 AI 终端给不了的能力:一次操作一整个分组——因为 Wireline 掌握你的主机图谱。
 
