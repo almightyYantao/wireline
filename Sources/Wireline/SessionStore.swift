@@ -165,6 +165,8 @@ final class TerminalSession: Identifiable {
     let io: TerminalIO
     /// Live remote vitals (SSH sessions only), polled over the ControlMaster socket.
     let stats = StatsMonitor()
+    /// The connect panel's view of the current ssh attempt (SSH sessions only).
+    let connect = ConnectProgress()
 
     weak var store: SessionStore?
     private var askpassURL: URL?
@@ -250,13 +252,17 @@ final class TerminalSession: Identifiable {
                 self.notifyCommandFinished(elapsed: duration, exitCode: exitCode)
             }
         }
-        io.onOutput = { [weak self] in self?.noteOutput() }
+        io.onOutput = { [weak self] in
+            self?.noteOutput()
+            self?.connect.noteOutput()
+        }
         io.onConnected = { [weak self] in
             guard let self, self.connectionState == .connecting else { return }
             self.connectionState = .connected
         }
         io.onDisconnected = { [weak self] _ in
             guard let self else { return }
+            self.connect.processExited()
             self.commandMarks.reset()
             self.connectionState = .disconnected
             self.isRunning = false
@@ -281,6 +287,11 @@ final class TerminalSession: Identifiable {
             self.inlineAI.activate(prefill: nl)
         }
         inlineAI.session = self
+        // `-E` sends ssh's warnings and errors to the connect log too; put them
+        // back in the terminal, where they'd have appeared without it.
+        connect.onUserFacingLine = { [weak self] line in
+            self?.terminalView.feed(text: line + "\r\n")
+        }
     }
 
     /// Handle an OSC-7 working-directory report: record the absolute path (for the
@@ -520,9 +531,12 @@ final class TerminalSession: Identifiable {
             }
             // Touch ID–protected keys are served by Wireline's own ssh-agent.
             SSHAgentEnvironment.apply(to: &env)
+            // `-v -E`: the debug log goes to a file (never the terminal) that the
+            // connect panel follows to show resolve → connect → auth → session.
+            let logArgs = connect.begin().map { ["-v", "-E", $0] } ?? []
             // Enable ControlMaster so a side channel can poll server stats over
             // the same authenticated connection (no re-auth, no PTY interference).
-            let args = [
+            let args = logArgs + [
                 "-o", "StrictHostKeyChecking=accept-new",
                 "-o", "ControlMaster=auto",
                 "-o", "ControlPath=\(controlSocket)",
@@ -616,12 +630,20 @@ final class TerminalSession: Identifiable {
         busyTimer?.cancel()
         busyTimer = nil
         stats.stop()
+        connect.stop()
         io.stopLogging()
         isLogging = false
         io.terminate()
         if ownsControlSocket { try? FileManager.default.removeItem(atPath: controlSocket) }
         if let askpassURL { try? FileManager.default.removeItem(at: askpassURL) }
         askpassURL = nil
+    }
+
+    /// The connect panel's 取消: stop dialing. The session ends up disconnected,
+    /// with the usual reconnect banner.
+    func cancelConnect() {
+        connect.stop()
+        terminate()
     }
 
     /// Write a throwaway askpass script that prints the password from an env var.
