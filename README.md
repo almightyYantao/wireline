@@ -47,30 +47,6 @@ The thing a single-host AI terminal can't give you: operate a whole group at onc
 
 ---
 
-## ⚔️ Wireline vs Termius vs Warp
-
-| | **Wireline** | Termius | Warp |
-|---|---|---|---|
-| Positioning | Native macOS SSH **fleet manager** | Cross-platform SSH client | AI-native terminal |
-| Host data in plain `~/.ssh/config` | ✅ single source | ❌ own vault | — doesn't manage hosts |
-| Works fully local, no account | ✅ | ⚠️ account for sync/AI | ✅ (login optional since 2026) |
-| Bring-your-own AI endpoint / full local Ollama | ✅ all AI, incl. the fleet agent | ❌ cloud model only, no BYOK | ⚠️ local AI for command-gen only; agent is cloud |
-| Fleet: group → one sentence → parallel → AI aggregates to a table | ✅ | ⚠️ broadcast input (no synthesis) or cloud chat agent | ❌ no host graph |
-| MCP tools, local-first (your model calls them) | ✅ stdio + HTTP, secrets in Keychain | ❌ | ⚠️ via its cloud agent |
-| Visual SFTP browser | ✅ | ✅ | ❌ |
-| GUI port forwarding | ✅ | ✅ | ❌ |
-| AI edit remote file + change review | ✅ | ❌ | ❌ |
-| NL → command / diagnose | ✅ | ✅ | ✅ (most polished) |
-| Cross-platform (Win/Linux/mobile) | ❌ macOS only | ✅ | ✅ desktop |
-
-*Competitor capabilities as of 2026-07 — they move fast; verify against current releases.*
-
-**What only Wireline does, all at once:** keep your hosts in plain `~/.ssh/config` (no lock-in), run **every** AI feature — including the fleet agent — on your own endpoint or fully offline via Ollama, and command a whole group in one sentence with the output distilled into a single table.
-
-> Warp added local AI but still won't manage your hosts. Termius manages hosts but locks them in its vault and runs AI only in its cloud. Wireline keeps your hosts in plain `~/.ssh/config`, runs AI on your own model (or fully offline), and commands the whole fleet in one sentence.
-
----
-
 ## 🤖 AI Copilot
 
 AI is the lever that makes the above feel effortless — not a bolt-on. In Settings → AI, enter an **OpenAI-compatible endpoint + key** (a relay or direct), or point it at local **Ollama** (nothing leaves your machine). The ✨ button by the terminal opens the AI panel.
@@ -103,24 +79,6 @@ A draggable, always-on-top little sprite that floats over your desktop the momen
 - **Safe**: dangerous commands still require confirmation before running on your fleet; secrets redacted before sending
 - **Floating & tidy**: borderless, transparent, drag it anywhere; the chat unfolds *upward* so the pet stays put under your cursor; its own persisted history
 - Toggle it on/off in **Settings → AI → Desktop Pet**
-
----
-
-## ✅ To-Do
-
-A standalone daily checklist that lives right next to your terminals — open it with **⌥⌘D** (remappable) or from the menu-bar icon.
-
-- **Menu-bar extra**: a live count of open items, quick-add, and quick-toggle without opening a window
-- **Due date & time** with overdue highlighting, and **system notifications** when an item comes due
-- **Priority (star), tags, notes, and nested subtasks** (with `done/total` progress)
-- **Recurring items** (daily / weekly / monthly) — completing one spawns the next occurrence automatically
-- **Search** and **tag filtering**; filter by all / active / done
-- **Keyboard-driven**: ↑↓ to select, space to toggle, return to edit, delete to remove, **⌘Z to undo**
-- **AI recap** (reuses your configured endpoint): a natural-language *today / this-month* summary of what you finished and what still needs attention
-- **Smart add**: type “submit the report tomorrow 3pm” and the AI fills in the title, due time, and priority
-- Composites over the **same wallpaper backdrop** as the main window, and rides along inside the **encrypted backup / migration** — switch Macs and your to-dos come too
-
-Data lives only in a local `todos.json` (plus the opt-in encrypted backup); it never touches `~/.ssh/config`.
 
 ---
 
@@ -157,7 +115,7 @@ Data lives only in a local `todos.json` (plus the opt-in encrypted backup); it n
 - 🔀 Graphical port forwarding (`ssh -L`, jump hosts, one-click toggle)
 - 🧰 **Snippets**: search them from the ⚡ popover or ⌘P (English, Chinese or pinyin); Return inserts, ⌘Return runs; `{{name}}` parameters filled in place and remembered; Linux / macOS scopes; scripts and dangerous commands ask first
 - 🔑 **SSH key manager**: list `~/.ssh` keys with fingerprints, generate (ed25519/rsa/ecdsa), import keys from elsewhere (fixes permissions), copy public key, or deploy to a host via `ssh-copy-id`
-- 💾 Encrypted backup & migration to a file, or **to WebDAV** (ciphertext only) — to-dos ride along too
+- 💾 Encrypted backup & migration to a file, or **to WebDAV** (ciphertext only)
 
 **Native experience & personalization**
 - 🖼 App-wide **wallpaper**: image or looping **mp4**, translucent panels over it (paused when off-screen)
