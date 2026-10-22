@@ -96,6 +96,11 @@ final class WindowChromeController {
             // lives in the title-bar strip (e.g. the session tab bar, which uses
             // double-click to rename). Otherwise the click would be swallowed here.
             if TitleBarZoomGuard.shared.pointerInNoZoomZone { return event }
+            // Hover tracking can lag a click; the registered control frames
+            // (the tab track) are checked against the click itself.
+            let top = (window.contentView?.bounds.height ?? window.frame.height) - event.locationInWindow.y
+            let p = CGPoint(x: event.locationInWindow.x, y: top)
+            if TitleBarZoomGuard.shared.rects.values.contains(where: { $0.contains(p) }) { return event }
             let h = window.contentView?.bounds.height ?? window.frame.height
             // Only the top title-bar strip (avoid the traffic-light buttons on the left).
             if event.locationInWindow.y > h - TitleBand.shared.height,
@@ -152,4 +157,7 @@ extension View {
 final class TitleBarZoomGuard: @unchecked Sendable {
     static let shared = TitleBarZoomGuard()
     var pointerInNoZoomZone = false
+    /// Title-band controls that use double-click themselves, in window
+    /// coordinates with a top-left origin (SwiftUI's global space).
+    var rects: [UUID: CGRect] = [:]
 }

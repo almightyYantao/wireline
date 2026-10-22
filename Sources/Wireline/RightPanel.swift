@@ -425,6 +425,7 @@ struct SessionTabBar: View {
     @Environment(Localizer.self) private var loc
     /// The active tab's raised pill is one shape that slides between tabs.
     @Namespace private var pill
+    @State private var zoomGuardID = UUID()
 
     var body: some View {
         HStack(spacing: 10) {
@@ -443,6 +444,14 @@ struct SessionTabBar: View {
                     }
                 }
                 .wlCapsuleTrack()
+                // Double-clicking a tab renames it; keep the window's
+                // double-click-to-zoom off this area.
+                .background(GeometryReader { g in
+                    Color.clear
+                        .onAppear { TitleBarZoomGuard.shared.rects[zoomGuardID] = g.frame(in: .global) }
+                        .onChange(of: g.frame(in: .global)) { _, f in TitleBarZoomGuard.shared.rects[zoomGuardID] = f }
+                        .onDisappear { TitleBarZoomGuard.shared.rects[zoomGuardID] = nil }
+                })
                 .animation(Motion.resolved(Motion.slide), value: sessions.activeTabID)
                 Button {
                     openLocalShell(sessions: sessions, openWindow: openWindow)
