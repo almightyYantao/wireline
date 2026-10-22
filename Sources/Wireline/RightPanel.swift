@@ -626,7 +626,8 @@ struct SessionTab: View {
         // to `.onDrag` and a single-tap gesture often never fires.
         .simultaneousGesture(TapGesture(count: 1).onEnded {
             guard !isEditing else { return }
-            if (NSApp.currentEvent?.clickCount ?? 1) >= 2 { beginEdit() } else { sessions.focusTab(tab.id) }
+            let double = TitleBarZoomGuard.shared.takeDoubleClick() || (NSApp.currentEvent?.clickCount ?? 1) >= 2
+            if double { beginEdit() } else { sessions.focusTab(tab.id) }
         })
         .blocksWindowDrag()
         // Drag this tab onto another tab's pane to merge them into a split.

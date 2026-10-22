@@ -90,17 +90,24 @@ final class WindowChromeController {
 
     private func installZoomMonitor(_ window: NSWindow) {
         guard monitor == nil else { return }
-        monitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak window] event in
-            guard let window, event.window === window, event.clickCount == 2 else { return event }
-            // Don't zoom when the double-click is over an interactive control that
-            // lives in the title-bar strip (e.g. the session tab bar, which uses
-            // double-click to rename). Otherwise the click would be swallowed here.
-            if TitleBarZoomGuard.shared.pointerInNoZoomZone { return event }
-            // Hover tracking can lag a click; the registered control frames
-            // (the tab track) are checked against the click itself.
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .leftMouseUp]) { [weak window] event in
+            guard let window, event.window === window, event.clickCount >= 2 else { return event }
+            // A double-click on a title-band control that uses it (the tab
+            // track: double-click renames). The system title bar would zoom the
+            // window on any double-click here, so hand the control a plain
+            // single click and flag the double-click for it to read.
             let top = (window.contentView?.bounds.height ?? window.frame.height) - event.locationInWindow.y
             let p = CGPoint(x: event.locationInWindow.x, y: top)
-            if TitleBarZoomGuard.shared.rects.values.contains(where: { $0.contains(p) }) { return event }
+            if TitleBarZoomGuard.shared.rects.values.contains(where: { $0.contains(p) }) {
+                if event.type == .leftMouseDown { TitleBarZoomGuard.shared.doubleClickPending = true }
+                return NSEvent.mouseEvent(with: event.type, location: event.locationInWindow,
+                                          modifierFlags: event.modifierFlags, timestamp: event.timestamp,
+                                          windowNumber: event.windowNumber, context: nil,
+                                          eventNumber: event.eventNumber, clickCount: 1,
+                                          pressure: event.pressure) ?? event
+            }
+            guard event.type == .leftMouseDown, event.clickCount == 2 else { return event }
+            if TitleBarZoomGuard.shared.pointerInNoZoomZone { return event }
             let h = window.contentView?.bounds.height ?? window.frame.height
             // Only the top title-bar strip (avoid the traffic-light buttons on the left).
             if event.locationInWindow.y > h - TitleBand.shared.height,
@@ -160,4 +167,12 @@ final class TitleBarZoomGuard: @unchecked Sendable {
     /// Title-band controls that use double-click themselves, in window
     /// coordinates with a top-left origin (SwiftUI's global space).
     var rects: [UUID: CGRect] = [:]
+    /// Set when a double-click inside `rects` was turned into a single click.
+    var doubleClickPending = false
+
+    /// Read (and clear) the flag.
+    func takeDoubleClick() -> Bool {
+        defer { doubleClickPending = false }
+        return doubleClickPending
+    }
 }
