@@ -555,12 +555,16 @@ struct SessionTab: View {
 
     var body: some View {
         HStack(spacing: 7) {
-            if let lead = tab.sessionIDs.lazy.compactMap({ sessions.session($0) }).first {
-                SessionGlyph(session: lead, size: 11).opacity(isActive ? 1 : 0.75)
+            // One icon per pane, in layout order (claude · node · python …).
+            HStack(spacing: 3) {
+                ForEach(tab.sessionIDs.prefix(4).compactMap { sessions.session($0) }) { s in
+                    SessionGlyph(session: s, size: 11)
+                }
+                if tab.sessionIDs.count > 4 {
+                    Text("+\(tab.sessionIDs.count - 4)").font(WL.caption).foregroundStyle(WL.textDim)
+                }
             }
-            if tab.sessionIDs.count > 1 {
-                Image(systemName: "rectangle.split.2x1").font(WL.small).foregroundStyle(WL.teal)
-            }
+            .opacity(isActive ? 1 : 0.75)
             if isEditing {
                 TextField("", text: $draft)
                     .textFieldStyle(.plain).font(WL.small).foregroundStyle(WL.greenBright)

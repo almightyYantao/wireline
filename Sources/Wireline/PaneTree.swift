@@ -220,41 +220,73 @@ struct SessionGlyph: View {
     var size: CGFloat = 11
 
     var body: some View {
-        let (symbol, tint) = Self.look(session, store: store)
-        Image(systemName: symbol)
-            .font(.system(size: size, weight: .medium))
-            .foregroundStyle(tint)
-            .frame(width: size + 5)
-            .contentTransition(.symbolEffect(.replace))
-            .animation(Motion.state, value: symbol)
+        let look = Self.look(session, store: store)
+        Group {
+            switch look.icon {
+            case .brand(let b):
+                if let img = b.image {
+                    Image(nsImage: img).resizable().interpolation(.high)
+                        .frame(width: size + 1, height: size + 1)
+                } else {
+                    Image(systemName: "terminal").font(.system(size: size, weight: .medium))
+                }
+            case .symbol(let name):
+                Image(systemName: name).font(.system(size: size, weight: .medium))
+                    .contentTransition(.symbolEffect(.replace))
+            }
+        }
+        .foregroundStyle(look.tint)
+        .frame(width: size + 5)
+        .animation(Motion.state, value: look.key)
     }
 
+    enum Icon { case brand(BrandIcon), symbol(String) }
+    struct Look { var icon: Icon; var tint: Color; var key: String }
+
+    private static func brand(_ b: BrandIcon) -> Look {
+        Look(icon: .brand(b), tint: b.hex.map { Color(hex: $0) } ?? WL.textPrimary, key: b.rawValue)
+    }
+    private static func symbol(_ s: String, _ tint: Color) -> Look { Look(icon: .symbol(s), tint: tint, key: s) }
+
+    /// What's running in the pane (local shells: the PTY's foreground program),
+    /// else what kind of session it is.
     @MainActor
-    static func look(_ s: TerminalSession, store: HostStore) -> (String, Color) {
-        let prog = (s.activeEditor ?? s.foregroundName)?.lowercased()
-        if let prog {
+    static func look(_ s: TerminalSession, store: HostStore) -> Look {
+        if let prog = (s.activeEditor ?? s.foregroundName)?.lowercased() {
             switch prog {
-            case "claude":                                  return ("sparkles", WL.amber)
-            case "codex", "gemini", "aider", "cursor-agent": return ("sparkles", WL.purple)
-            case "vim", "nvim", "vi", "hx", "nano", "emacs", "micro": return ("pencil.line", WL.green)
-            case "node", "bun", "deno", "npm", "pnpm", "yarn", "npx": return ("hexagon", WL.green)
-            case "python", "python3", "ipython", "uv":      return ("chevron.left.forwardslash.chevron.right", WL.teal)
-            case "git", "lazygit", "tig", "gitui":          return ("arrow.triangle.branch", WL.amber)
-            case "htop", "btop", "top", "glances":          return ("chart.bar.xaxis", WL.teal)
-            case "docker", "kubectl", "k9s", "lazydocker":  return ("shippingbox", WL.teal)
-            case "ssh", "mosh":                             return ("network", WL.teal)
-            case "make", "cargo", "go", "swift", "xcodebuild", "gradle": return ("hammer", WL.amber)
-            case "less", "more", "man", "bat":              return ("doc.text", WL.textDim)
-            default:                                         return ("gearshape.2", WL.textDim)
+            case "claude":                                   return brand(.claude)
+            case "codex":                                    return brand(.openai)
+            case "gemini":                                   return brand(.gemini)
+            case "node", "npm", "npx", "pnpm", "yarn":       return brand(.node)
+            case "bun", "bunx":                              return brand(.bun)
+            case "deno":                                     return brand(.deno)
+            case "python", "ipython", "uv", "pip":           return brand(.python)
+            case "git", "lazygit", "tig", "gitui":           return brand(.git)
+            case "docker", "lazydocker", "colima":           return brand(.docker)
+            case "kubectl", "k9s", "helm":                   return brand(.kubernetes)
+            case "vim", "vi", "view", "vimdiff":             return brand(.vim)
+            case "nvim":                                     return brand(.neovim)
+            case "cargo", "rustc":                           return brand(.rust)
+            case "go":                                       return brand(.go)
+            case "psql", "pgcli":                            return brand(.postgres)
+            case "mysql", "mycli":                           return brand(.mysql)
+            case "redis-cli", "redis-server":                return brand(.redis)
+            case "aider", "cursor-agent", "opencode", "amp": return symbol("sparkles", WL.purple)
+            case "hx", "nano", "emacs", "micro":             return symbol("pencil.line", WL.green)
+            case "htop", "btop", "top", "glances":           return symbol("chart.bar.xaxis", WL.teal)
+            case "ssh", "mosh":                              return symbol("network", WL.teal)
+            case "make", "swift", "xcodebuild", "gradle":    return symbol("hammer", WL.amber)
+            case "less", "more", "man", "bat":               return symbol("doc.text", WL.textDim)
+            default:                                          return symbol("gearshape.2", WL.textDim)
             }
         }
         switch s.kind {
         case .ssh(let alias, _, _, _, _):
-            return ("server.rack", store.groupColor(forAlias: alias)?.color ?? WL.teal)
+            return symbol("server.rack", store.groupColor(forAlias: alias)?.color ?? WL.teal)
         case .sftp(let alias, _, _):
-            return ("folder", store.groupColor(forAlias: alias)?.color ?? WL.teal)
+            return symbol("folder", store.groupColor(forAlias: alias)?.color ?? WL.teal)
         case .localShell:
-            return ("terminal", WL.textDim)
+            return symbol("terminal", WL.textDim)
         }
     }
 }

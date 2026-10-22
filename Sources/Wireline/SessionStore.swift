@@ -413,11 +413,7 @@ final class TerminalSession: Identifiable {
         guard proc.childfd >= 0 else { return }
         let pgid = tcgetpgrp(proc.childfd)
         let running = pgid > 0 && pgid != proc.shellPid
-        var name: String?
-        if running {
-            var buf = [CChar](repeating: 0, count: 64)
-            if proc_name(pgid, &buf, UInt32(buf.count)) > 0 { name = String(cString: buf) }
-        }
+        let name = running ? ForegroundProcess.identify(pgid) : nil
         if foregroundName != name { foregroundName = name }
         if running, !isBusy {
             busyStartedAt = Date()
@@ -752,7 +748,15 @@ final class SessionStore {
     /// The focused session within the active tab (drives which pane is highlighted
     /// and where the keyboard goes).
     var activeID: UUID? {
-        didSet { if activeID != oldValue { persistLayout() } }
+        didSet {
+            guard activeID != oldValue else { return }
+            if let id = activeID {
+                focusHistory.removeAll { $0 == id }
+                focusHistory.append(id)
+                if focusHistory.count > 64 { focusHistory.removeFirst() }
+            }
+            persistLayout()
+        }
     }
 
     var activeTab: PaneNode? { tabs.first { $0.id == activeTabID } }
@@ -1098,8 +1102,24 @@ final class SessionStore {
         tabs.swapAt(cur, dest)
     }
 
+    /// Panes in the order they were last focused (most recent last) — closing
+    /// the focused pane returns to the one you were in before it, like tmux /
+    /// Ghostty, instead of jumping to the first pane.
+    private var focusHistory: [UUID] = []
+
     func close(_ id: UUID) {
         guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
+        focusHistory.removeAll { $0 == id }
+        // Closing the focused pane: fall back to the pane focused before it in
+        // the same tab, else its neighbour before it in layout order.
+        var successor: UUID?
+        if activeID == id, let ti = tabIndex(containing: id) {
+            let ids = tabs[ti].sessionIDs
+            successor = focusHistory.last { ids.contains($0) }
+            if successor == nil, let k = ids.firstIndex(of: id) {
+                successor = k > 0 ? ids[k - 1] : ids.dropFirst().first
+            }
+        }
         sessions[index].terminate()
         sessions.remove(at: index)
         // Remove the session from its tab; drop the tab if it becomes empty.
@@ -1120,7 +1140,9 @@ final class SessionStore {
         }
         zoomedSession = zoomedSession.filter { id, s in tabs.contains { $0.id == id && $0.leafID(for: s) != nil } }
         if let at = activeTab {
-            if at.leafID(for: activeID ?? UUID()) == nil { activeID = at.sessionIDs.first }
+            if at.leafID(for: activeID ?? UUID()) == nil {
+                activeID = successor.flatMap { at.leafID(for: $0) != nil ? $0 : nil } ?? at.sessionIDs.first
+            }
         } else {
             activeID = nil
         }
