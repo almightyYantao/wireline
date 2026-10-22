@@ -28,6 +28,7 @@
   <video src="https://github.com/almightyYantao/wireline/raw/main/docs/ai-demo.mp4" controls muted width="90%"></video>
 </p>
 
+<p align="center"><img src="docs/image/splits.png" width="90%" alt="libghostty GPU 终端分屏：node、Claude Code、python，每个窗格显示各自的程序图标"></p>
 <p align="center"><img src="docs/image/wallpaper.png" width="90%" alt="整窗壁纸与主题"></p>
 <p align="center"><img src="docs/image/files.png" width="90%" alt="双栏 SFTP 文件管理"></p>
 

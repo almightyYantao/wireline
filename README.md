@@ -28,6 +28,7 @@ Wrapped in a native macOS card-and-capsule interface (light and dark themes, can
   <video src="https://github.com/almightyYantao/wireline/raw/main/docs/ai-demo.mp4" controls muted width="90%"></video>
 </p>
 
+<p align="center"><img src="docs/image/splits.png" width="90%" alt="Split panes on the libghostty GPU terminal: node, Claude Code and python, each with its own program icon"></p>
 <p align="center"><img src="docs/image/wallpaper.png" width="90%" alt="App-wide wallpaper & themes"></p>
 <p align="center">
   <img src="docs/image/files.png" width="90%" alt="Dual-pane SFTP browser">
