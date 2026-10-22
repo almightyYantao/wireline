@@ -39,3 +39,18 @@ final class TerminalStreamSnifferTests: XCTestCase {
         XCTAssertEqual(events(["\u{1b}]7;file://x/a\u{18}\u{1b}]7;file://x/b\u{07}"]), [.workingDirectory("file://x/b")])
     }
 }
+
+final class TerminalModeResetTests: XCTestCase {
+    /// The Ghostty engine learns focus reporting / alternate screen from the
+    /// stream, so it must see the reconnect reset turn them off.
+    func testSnifferSeesModesOff() {
+        var sniffer = TerminalStreamSniffer()
+        _ = sniffer.feed(Array("\u{1b}[?1049h\u{1b}[?1004h\u{1b}[?1000;1006h".utf8))
+        let events = sniffer.feed(Array(TerminalModeReset.afterChildExit.utf8))
+        for mode in [1049, 1000, 1002, 1003, 1006, 1015, 1004, 2004, 1] {
+            XCTAssertTrue(events.contains(.privateMode(mode, false)), "mode \(mode)")
+        }
+        XCTAssertTrue(events.contains(.privateMode(25, true)))
+        XCTAssertFalse(events.contains { if case .privateMode(_, true) = $0 { $0 != .privateMode(25, true) } else { false } })
+    }
+}

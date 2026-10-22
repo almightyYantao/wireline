@@ -459,6 +459,10 @@ final class TerminalSession: Identifiable {
         isBusy = false
         connectionState = .connecting
 
+        // The old child may have died inside a full-screen program: undo the
+        // modes it left on (alternate screen, mouse tracking, hidden cursor…)
+        // without touching the screen or scrollback.
+        terminalView.feed(text: TerminalModeReset.afterChildExit)
         // A dim divider so the restart reads clearly in the scrollback.
         terminalView.feed(text: "\r\n\u{1b}[2m──────── 重新连接 / reconnecting ────────\u{1b}[0m\r\n")
         launch()
