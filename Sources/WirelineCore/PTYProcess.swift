@@ -44,12 +44,14 @@ public struct PTYSpawnError: Error, Equatable {
 /// queue that waits out `EAGAIN` and partial writes, in order), and watches
 /// for exit (a process source). Output reaches main through a `PTYMailbox`,
 /// coalesced and in order; the exit status follows the last byte the child
-/// wrote. Main keeps its own `dup` of the master for ioctls (window size,
-/// foreground group), so it never touches an fd the queue may be closing.
+/// wrote. `windowSize` keeps its own `dup` of the master for ioctls (window
+/// size, foreground group), behind a lock, so neither main nor a renderer's
+/// thread ever touches an fd the queue may be closing.
 ///
-/// Spawning uses `forkpty` (new session, slave as controlling terminal via
-/// TIOCSCTTY; signals reset to default; every other fd closed) — see
-/// `PTYSpawn.spawn` for why not `posix_spawn`.
+/// Spawning: `forkpty` (new session, the slave as controlling terminal — so
+/// the shell gets SIGWINCH and job control), then in the child only a
+/// prepared `posix_spawn(POSIX_SPAWN_SETEXEC)` that execs with default signals,
+/// an empty mask and no fds but 0–2. No Swift code runs between fork and exec.
 @MainActor
 public final class PTYProcess {
     /// Output from the child, in order, on main.
@@ -65,9 +67,11 @@ public final class PTYProcess {
     /// How long `terminate()` waits after SIGHUP before SIGKILL.
     public var terminateGrace: TimeInterval = 2
 
+    /// The PTY's window size, settable from any thread; it outlives each
+    /// child, so the next one starts at the latest size.
+    public nonisolated let windowSize = PTYWindowSize()
+
     private var child: PTYChild?
-    /// Main's own `dup` of the master, for ioctls only.
-    private var controlFD: Int32 = -1
 
     public init() {}
 
@@ -76,13 +80,17 @@ public final class PTYProcess {
     ///   - args: arguments after argv[0].
     ///   - execName: argv[0] (e.g. `-zsh` for a login shell); the executable path if nil.
     ///   - currentDirectory: ignored when it isn't a directory.
+    ///   - size: the window size to start at (stored as `windowSize`); nil
+    ///     keeps the last size set, or 80×24.
     public func start(executable: String, args: [String], environment: [String],
                       execName: String? = nil, currentDirectory: String? = nil,
-                      windowSize: winsize) throws {
+                      windowSize size: winsize? = nil) throws {
         guard !isRunning else { return }
+        if let size { windowSize.set(size) }
+        let initial = windowSize.current ?? winsize(ws_row: 24, ws_col: 80, ws_xpixel: 0, ws_ypixel: 0)
         let (pid, master) = try PTYSpawn.spawn(
             executable: executable, argv: [execName ?? executable] + args, env: environment,
-            cwd: currentDirectory, size: windowSize)
+            cwd: currentDirectory, size: initial)
         let mailbox = PTYMailbox()
         let child = PTYChild(pid: pid, fd: master, mailbox: mailbox, grace: terminateGrace,
                              notify: { [weak self] in
@@ -90,7 +98,7 @@ public final class PTYProcess {
         })
         self.child = child
         self.pid = pid
-        controlFD = fcntl(master, F_DUPFD_CLOEXEC, 0)
+        windowSize.attach(fd: fcntl(master, F_DUPFD_CLOEXEC, 0), spawnedAt: initial)
         isRunning = true
         child.queue.async { child.activate() }
     }
@@ -102,18 +110,12 @@ public final class PTYProcess {
         child.queue.async { child.write(copy) }
     }
 
-    /// TIOCSWINSZ (the child gets SIGWINCH).
-    public func resize(_ size: winsize) {
-        guard controlFD >= 0 else { return }
-        var ws = size
-        _ = ioctl(controlFD, TIOCSWINSZ, &ws)
-    }
+    /// TIOCSWINSZ (the child gets SIGWINCH). Same as `windowSize.set`.
+    public func resize(_ size: winsize) { windowSize.set(size) }
 
     /// Who owns the terminal: the child itself, or a job it started.
     public func foregroundJob() -> PTYForegroundJob {
-        guard controlFD >= 0 else { return .none }
-        let pgid = tcgetpgrp(controlFD)
-        guard pgid > 0 else { return .none }
+        guard let pgid = windowSize.withFD({ tcgetpgrp($0) }), pgid > 0 else { return .none }
         guard pgid != pid else { return .child }
         var buf = [CChar](repeating: 0, count: 64)
         let name = proc_name(pgid, &buf, UInt32(buf.count)) > 0
@@ -134,7 +136,7 @@ public final class PTYProcess {
         child = nil
         isRunning = false
         pid = 0
-        if controlFD >= 0 { close(controlFD); controlFD = -1 }
+        windowSize.detach()
     }
 
     /// Largest slice handed to `onOutput` at once, so a flood doesn't stall main.
@@ -156,7 +158,63 @@ public final class PTYProcess {
 
     deinit {
         if let child { child.queue.async { child.terminate() } }
-        if controlFD >= 0 { close(controlFD) }
+        windowSize.detach()
+    }
+}
+
+/// A PTY's window size: the latest size and an fd to apply it with, under one
+/// lock, so it can be set from any thread (main, or a renderer's IO thread
+/// that must resize the PTY in step with its grid) while children come and go.
+public final class PTYWindowSize: Sendable {
+    private struct State {
+        var fd: Int32 = -1
+        var size: winsize?
+    }
+    private let state = OSAllocatedUnfairLock(initialState: State())
+
+    public init() {}
+
+    /// The last size set.
+    public var current: winsize? { state.withLock { $0.size } }
+
+    /// Remember `size` and give it to the running child's PTY, if any (TIOCSWINSZ
+    /// only signals the child when the size actually changes).
+    public func set(_ size: winsize) {
+        state.withLock { s in
+            s.size = size
+            Self.apply(s)
+        }
+    }
+
+    /// A new child's master (a dup this owns). If the size moved since the PTY
+    /// was opened at `spawnedAt`, apply the newer one.
+    func attach(fd: Int32, spawnedAt: winsize) {
+        state.withLock { s in
+            if s.fd >= 0 { close(s.fd) }
+            s.fd = fd
+            if let size = s.size, !Self.same(size, spawnedAt) { Self.apply(s) }
+        }
+    }
+
+    func detach() {
+        state.withLock { s in
+            if s.fd >= 0 { close(s.fd) }
+            s.fd = -1
+        }
+    }
+
+    /// Run an ioctl-style query against the PTY; nil when there's no child.
+    func withFD<T: Sendable>(_ body: @Sendable (Int32) -> T) -> T? {
+        state.withLock { s in s.fd >= 0 ? body(s.fd) : nil }
+    }
+
+    private static func apply(_ s: State) {
+        guard s.fd >= 0, var ws = s.size else { return }
+        _ = ioctl(s.fd, TIOCSWINSZ, &ws)
+    }
+
+    private static func same(_ a: winsize, _ b: winsize) -> Bool {
+        a.ws_row == b.ws_row && a.ws_col == b.ws_col && a.ws_xpixel == b.ws_xpixel && a.ws_ypixel == b.ws_ypixel
     }
 }
 
@@ -441,58 +499,81 @@ final class PTYChild: Sendable {
 // MARK: - Spawn
 
 enum PTYSpawn {
-    /// A new PTY with `executable` on its slave as session leader. Returns the
-    /// child's pid and the master fd (non-blocking, close-on-exec).
+    /// A new PTY with `executable` on its slave as session leader and the slave
+    /// as its controlling terminal. Returns the child's pid and the master fd
+    /// (non-blocking, close-on-exec).
+    ///
+    /// `forkpty` makes the session and the controlling terminal (`login_tty`:
+    /// setsid + TIOCSCTTY) — `posix_spawn` alone can't: its file actions run
+    /// before POSIX_SPAWN_SETSID, so the slave it opens never becomes the
+    /// controlling tty, and the shell then gets no SIGWINCH and no job control.
+    /// The forked child then only calls a `posix_spawn` prepared here with
+    /// POSIX_SPAWN_SETEXEC — it replaces itself in place with default signal
+    /// handlers, an empty mask, no fds but 0–2, and the working directory set —
+    /// or `_exit(127)`. Everything it touches is allocated before the fork, so
+    /// no allocator, lock or Swift runtime call runs between fork and exec.
     static func spawn(executable: String, argv: [String], env: [String], cwd: String?,
                       size: winsize) throws -> (pid: pid_t, master: Int32) {
-        // fork + login_tty rather than posix_spawn: a child spawned into a new
-        // session that merely open()s the slave did not get it as its
-        // controlling terminal when launched from the app (it did from a
-        // shell), leaving it with no job control, no SIGWINCH on resize, no ^C
-        // and no foreground process group. login_tty does an explicit
-        // TIOCSCTTY. Everything the child needs is prepared before fork; the
-        // child only makes async-signal-safe calls, then execs.
+        // Fail here for the usual mistake; anything else exits 127 in the child.
         guard access(executable, X_OK) == 0 else { throw PTYSpawnError(errno: errno) }
-        let cExe = strdup(executable)
-        let cArgv = argv.map { strdup($0) } + [nil]
-        let cEnv = env.map { strdup($0) } + [nil]
-        let cCwd = cwd.flatMap { isDirectory($0) ? strdup($0) : nil }
-        defer {
-            free(cExe); cArgv.forEach { free($0) }; cEnv.forEach { free($0) }; free(cCwd)
-        }
-        let maxFD = Int32(min(getdtablesize(), 65536))
+        var attr: posix_spawnattr_t?
+        posix_spawnattr_init(&attr)
+        defer { posix_spawnattr_destroy(&attr) }
+        posix_spawnattr_setflags(&attr, Int16(POSIX_SPAWN_SETEXEC | POSIX_SPAWN_CLOEXEC_DEFAULT
+                                              | POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_SETSIGMASK))
         var all = sigset_t(), none = sigset_t()
         sigfillset(&all); sigemptyset(&none)
+        posix_spawnattr_setsigdefault(&attr, &all)
+        posix_spawnattr_setsigmask(&attr, &none)
+
+        var actions: posix_spawn_file_actions_t?
+        posix_spawn_file_actions_init(&actions)
+        defer { posix_spawn_file_actions_destroy(&actions) }
+        for fd: Int32 in 0...2 { posix_spawn_file_actions_addinherit_np(&actions, fd) }
+        if let cwd, isDirectory(cwd) {
+            if #available(macOS 26, *) {
+                posix_spawn_file_actions_addchdir(&actions, cwd)
+            } else {
+                posix_spawn_file_actions_addchdir_np(&actions, cwd)
+            }
+        }
+
+        let cExecutable = strdup(executable)
+        let cArgv = cStrings(argv), cEnv = cStrings(env)
+        let childPid = UnsafeMutablePointer<pid_t>.allocate(capacity: 1)
+        defer {
+            free(cExecutable)
+            freeCStrings(cArgv); freeCStrings(cEnv)
+            childPid.deallocate()
+        }
 
         var master: Int32 = -1
         var ws = size
-        // Block signals across fork so the child can't run a parent handler.
-        var saved = sigset_t()
-        pthread_sigmask(SIG_SETMASK, &all, &saved)
         let pid = forkpty(&master, nil, nil, &ws)
         if pid == 0 {
-            // Child: forkpty has done setsid + TIOCSCTTY + dup2 onto 0–2.
-            for sig: Int32 in 1..<32 { signal(sig, SIG_DFL) }
-            var fd: Int32 = 3
-            while fd < maxFD { close(fd); fd += 1 }
-            if let cCwd { _ = chdir(cCwd) }
-            pthread_sigmask(SIG_SETMASK, &none, nil)
-            cArgv.withUnsafeBufferPointer { av in
-                cEnv.withUnsafeBufferPointer { ev in
-                    _ = execve(cExe, av.baseAddress, ev.baseAddress)
-                }
-            }
+            // The child: nothing but the exec (see above).
+            _ = posix_spawn(childPid, cExecutable, &actions, &attr, cArgv, cEnv)
             _exit(127)
         }
-        let forkErrno = errno
-        pthread_sigmask(SIG_SETMASK, &saved, nil)
-        guard pid > 0 else { throw PTYSpawnError(errno: forkErrno) }
-
+        guard pid > 0 else { throw PTYSpawnError(errno: errno) }
         // Not inherited by anything else this app spawns.
         _ = fcntl(master, F_SETFD, FD_CLOEXEC)
         let flags = fcntl(master, F_GETFL)
         _ = fcntl(master, F_SETFL, flags | O_NONBLOCK)
         return (pid, master)
+    }
+
+    private static func cStrings(_ strings: [String]) -> UnsafeMutablePointer<UnsafeMutablePointer<CChar>?> {
+        let p = UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>.allocate(capacity: strings.count + 1)
+        for (i, s) in strings.enumerated() { p[i] = strdup(s) }
+        p[strings.count] = nil
+        return p
+    }
+
+    private static func freeCStrings(_ p: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>) {
+        var i = 0
+        while let s = p[i] { free(s); i += 1 }
+        p.deallocate()
     }
 
     private static func isDirectory(_ path: String) -> Bool {

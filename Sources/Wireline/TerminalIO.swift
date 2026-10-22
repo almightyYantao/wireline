@@ -22,6 +22,10 @@ final class TerminalIO {
     /// The child process in its PTY.
     private let process = PTYProcess()
 
+    /// The PTY's size, settable from any thread — for an engine that
+    /// `coalescesResize` and must resize the PTY in step with its grid.
+    nonisolated var ptyWindowSize: PTYWindowSize { process.windowSize }
+
     init(password: String?, sudoPassword: String? = nil, autoSudo: Bool) {
         self.password = password
         self.sudoPassword = sudoPassword
@@ -63,10 +67,14 @@ final class TerminalIO {
     /// previous child exited or was terminated (reconnect).
     func start(executable: String, args: [String], environment: [String]?,
                execName: String? = nil, currentDirectory: String? = nil) {
+        // An engine that sizes the PTY itself has already set the size it wants
+        // (and may update it concurrently): don't overwrite it with a read of ours.
+        let ownsSize = engine?.coalescesResize == true && process.windowSize.current != nil
         do {
             try process.start(executable: executable, args: args,
                               environment: environment ?? Terminal.getEnvironmentVariables(termName: "xterm-256color"),
-                              execName: execName, currentDirectory: currentDirectory, windowSize: windowSize)
+                              execName: execName, currentDirectory: currentDirectory,
+                              windowSize: ownsSize ? nil : windowSize)
         } catch {
             // Couldn't exec: report it like a child that exited 127 at once.
             DispatchQueue.main.async { MainActor.assumeIsolated { self.terminated(exitCode: 127) } }
@@ -111,6 +119,8 @@ final class TerminalIO {
 
     /// The engine's grid changed size.
     func gridDidChange() {
+        // It already told the PTY, synchronously with its reflow.
+        if engine?.coalescesResize == true { engine?.didDeliverResize(); return }
         // Throttle, not debounce: while a drag keeps resizing, still deliver at
         // most every `settle` seconds so the shell keeps redrawing its prompt.
         guard pendingResize == nil else { return }

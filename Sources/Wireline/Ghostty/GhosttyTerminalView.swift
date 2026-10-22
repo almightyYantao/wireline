@@ -43,7 +43,10 @@ final class GhosttyTerminalView: NSView, TerminalEngine {
 
     // MARK: TerminalEngine state
 
-    weak var io: TerminalIO?
+    weak var io: TerminalIO? {
+        // io_resize_cb resizes this session's PTY directly (see GhosttyIO).
+        didSet { ioGlue.box.attach(io?.ptyWindowSize) }
+    }
     var onInput: ((ArraySlice<UInt8>) -> Void)?
     var onGridResize: (() -> Void)?
     var onCloseRequested: (() -> Void)?
@@ -166,10 +169,13 @@ final class GhosttyTerminalView: NSView, TerminalEngine {
     func feed(text: String) { ioGlue.feed(ArraySlice(Array(text.utf8))) }
     func send(txt: String) { ioGlue.sendToChild(Array(txt.utf8)) }
     func didDeliverResize() {}   // libghostty handles prompt redraw on resize (OSC 133) itself
+    /// libghostty coalesces a drag itself, and io_resize_cb resizes the PTY
+    /// synchronously, under the terminal lock, before the grid reflows.
+    var coalescesResize: Bool { true }
     @discardableResult func flushPendingResize() -> Bool { io?.flushPendingResize() ?? false }
 
     /// The grid libghostty last reported through `io_resize_cb` — the size
-    /// its parser is at, so a redraw after TIOCSWINSZ lands right.
+    /// its parser is at, and the PTY's.
     var gridSize: winsize { ioGlue.grid ?? winsize(ws_row: 24, ws_col: 80, ws_xpixel: 0, ws_ypixel: 0) }
 
     /// One cell in points.

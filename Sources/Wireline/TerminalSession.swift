@@ -86,6 +86,8 @@ final class WirelineTerminalView: TerminalView, TerminalEngine {
     // MARK: TerminalEngine
 
     func feed(_ bytes: ArraySlice<UInt8>) { feed(byteArray: bytes) }
+    /// SwiftTerm reflows on the main thread: `TerminalIO` throttles the PTY.
+    var coalescesResize: Bool { false }
 
     var gridSize: winsize {
         let t = getTerminal()

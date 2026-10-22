@@ -682,17 +682,53 @@ final class TerminalSession: Identifiable {
 
         # --- Wireline shell integration: report cwd via OSC 7 (tab title tracking) ---
         _wireline_osc7() { printf '\\033]7;file://%s%s\\a' "${HOST:-}" "$PWD"; }
-        # OSC 133 prompt marks: A right before the prompt, C when a command starts.
-        # Lets Wireline blank the prompt before a resize reflow so zsh's SIGWINCH
-        # redraw replaces it in place instead of stacking duplicates.
-        _wireline_osc133_prompt() { printf '\\033]133;A\\a'; }
-        _wireline_osc133_exec() { printf '\\033]133;C\\a'; }
+        # OSC 133 prompt marks, the way Ghostty's own zsh integration places
+        # them: in PS1 itself (A at the start, k=s on each continuation line of
+        # a multi-line prompt, B before the input), so zsh re-emits them on every
+        # redisplay — notably its SIGWINCH redraw. The terminal blanks the marked
+        # prompt before a resize reflow and the redraw replaces it in place,
+        # instead of stacking prompts or scattering right-prompt copies. Plus C
+        # when a command starts and D with its status. Only when this hook runs
+        # last (themes rebuild PS1 in their own precmd); otherwise A is printed.
+        _wireline_133_precmd() {
+          builtin local -i st=$?
+          builtin emulate -L zsh -o no_warn_create_global -o no_aliases
+          if ! builtin zle; then
+            (( ${_wireline_133_state:-0} == 1 )) && builtin print -n "\\e]133;D;$st\\a"
+          fi
+          builtin local markA=$'%{\\e]133;A;cl=line\\a%}' markS=$'%{\\e]133;P;k=s\\a%}' markB=$'%{\\e]133;B\\a%}'
+          if [[ -o prompt_percent && ${precmd_functions[-1]} == _wireline_133_precmd ]]; then
+            builtin local changed=0
+            if [[ -n ${_wireline_ps1+x} ]]; then
+              if [[ $PS1 == $_wireline_marked_ps1 ]]; then PS1=$_wireline_ps1; PS2=$_wireline_ps2
+              elif [[ $PS1 != $_wireline_ps1 ]]; then changed=1; fi
+            fi
+            _wireline_ps1=$PS1 _wireline_ps2=$PS2
+            # A trailing bare '%' would swallow the '%{' of the mark.
+            [[ $PS1 == *[^%]% || $PS1 == % ]] && PS1=$PS1%
+            PS1=${markA}${PS1}${markB}
+            (( ! changed )) && [[ $PS1 == *$'\\n'* ]] && PS1=${PS1//$'\\n'/$'\\n'${markS}}
+            [[ $PS2 == *[^%]% || $PS2 == % ]] && PS2=$PS2%
+            PS2=${markS}${PS2}${markB}
+            _wireline_marked_ps1=$PS1
+          else
+            precmd_functions=(${precmd_functions:#_wireline_133_precmd} _wireline_133_precmd)
+            builtin zle || builtin print -n '\\e]133;A;cl=line\\a'
+          fi
+          _wireline_133_state=2
+        }
+        _wireline_133_preexec() {
+          builtin emulate -L zsh -o no_warn_create_global -o no_aliases
+          if [[ -n ${_wireline_ps1+x} && $PS1 == $_wireline_marked_ps1 ]]; then PS1=$_wireline_ps1; PS2=$_wireline_ps2; fi
+          builtin print -n '\\e]133;C\\a'
+          _wireline_133_state=1
+        }
         if [[ -z "${_wireline_osc7_installed:-}" ]]; then
           _wireline_osc7_installed=1
           typeset -ag precmd_functions chpwd_functions preexec_functions
-          precmd_functions+=(_wireline_osc7 _wireline_osc133_prompt)
+          precmd_functions+=(_wireline_osc7 _wireline_133_precmd)
           chpwd_functions+=(_wireline_osc7)
-          preexec_functions+=(_wireline_osc133_exec)
+          preexec_functions+=(_wireline_133_preexec)
         fi
         """
         // `/etc/zshrc` derives HISTFILE from ZDOTDIR, which at that point is this
@@ -730,7 +766,7 @@ final class TerminalSession: Identifiable {
     /// Ensure the shim directory holds the current startup files, and return it.
     /// Re-verified on every launch (four small reads) so a deleted, truncated, or
     /// outdated shim heals itself instead of breaking every session from then on.
-    private static func zshIntegrationZDOTDIR() -> URL? {
+    static func zshIntegrationZDOTDIR() -> URL? {
         let dir = zshIntegrationDir
         let fm = FileManager.default
         try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
