@@ -206,10 +206,11 @@ struct RightPanel: View {
                     .wlTerminalPadding(store)
                     .overlay(alignment: .top) {
                         if showSearch { terminalSearchBar(session) }
-                        else if session.connectionState == .disconnected {
+                        else if session.connectionState == .disconnected, !session.connect.isShowingFailure {
                             DisconnectedBanner(session: session)
                         }
                     }
+                    .overlay { ConnectPanelOverlay(session: session) }
                     .overlay(alignment: .topTrailing) {
                         if session.activeEditor == "vim" { VimHintView() }
                     }

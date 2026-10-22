@@ -474,10 +474,11 @@ struct PaneLeafView: View {
                 TerminalHostView(session: session, autoFocus: focused && !aiOpen).id(session.id)
                     .wlTerminalPadding(store)
                     .overlay(alignment: .top) {
-                        if session.connectionState == .disconnected {
+                        if session.connectionState == .disconnected, !session.connect.isShowingFailure {
                             DisconnectedBanner(session: session)
                         }
                     }
+                    .overlay { ConnectPanelOverlay(session: session) }
                     .overlay(alignment: .topTrailing) {
                         if session.activeEditor == "vim" { VimHintView() }
                     }
