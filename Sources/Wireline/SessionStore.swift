@@ -159,7 +159,7 @@ final class TerminalSession: Identifiable {
     let alias: String
     let startedAt = Date()
     private(set) var isRunning = true
-    /// The renderer (SwiftTerm today; see `TerminalEngine`).
+    /// The renderer — SwiftTerm, or libghostty (`terminal-engine`); see `TerminalEngine`.
     let terminalView: any TerminalEngine
     /// The PTY and the byte-stream logic around it (engine-independent).
     let io: TerminalIO
@@ -205,7 +205,7 @@ final class TerminalSession: Identifiable {
         case .sftp, .localShell:
             self.io = TerminalIO(password: nil, autoSudo: false)
         }
-        self.terminalView = WirelineTerminalView(frame: CGRect(x: 0, y: 0, width: 800, height: 480))
+        self.terminalView = TerminalEngineKind.makeEngine(frame: CGRect(x: 0, y: 0, width: 800, height: 480))
         // Engine ⇄ PTY: output goes to the engine, keystrokes and grid changes
         // come back to the PTY.
         terminalView.io = io

@@ -92,6 +92,21 @@ if [[ -d "${BINDIR}/SwiftTerm_SwiftTerm.bundle" ]]; then
     cp -R "${BINDIR}/SwiftTerm_SwiftTerm.bundle" "${OUT}/Contents/Resources/"
 fi
 
+# libghostty's runtime resources, where it looks for them in an app bundle:
+#   Contents/Resources/ghostty/shell-integration   (GHOSTTY_RESOURCES_DIR, set by GhosttyRuntime)
+#   Contents/Resources/terminfo/78/xterm-ghostty     (the sentinel libghostty climbs to; TERMINFO = ../terminfo)
+# plus Ghostty's MIT licence. From scripts/fetch-ghosttykit.sh.
+GHOSTTY_SHARE="Vendor/ghostty-share"
+if [[ -d "${GHOSTTY_SHARE}/ghostty" && -d "${GHOSTTY_SHARE}/terminfo" ]]; then
+    echo "▸ Copying libghostty resources…"
+    mkdir -p "${OUT}/Contents/Resources/ghostty"
+    cp -R "${GHOSTTY_SHARE}/ghostty/shell-integration" "${OUT}/Contents/Resources/ghostty/"
+    cp -R "${GHOSTTY_SHARE}/terminfo" "${OUT}/Contents/Resources/"
+    cp "Sources/Wireline/Ghostty/LICENSE-ghostty" "${OUT}/Contents/Resources/ghostty/LICENSE"
+else
+    echo "  ⚠ ${GHOSTTY_SHARE} missing — run scripts/fetch-ghosttykit.sh (the libghostty engine needs it)"
+fi
+
 # Code signing.
 #
 # Keychain items are ACL-bound to the app's *code signing identity*. An ad-hoc

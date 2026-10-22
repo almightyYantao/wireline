@@ -587,18 +587,7 @@ final class WirelineTerminalView: TerminalView, TerminalEngine {
         let y = isFlipped ? point.y : bounds.height - point.y
         let row = Int(y / cellH), col = Int(point.x / cellW)
         guard row >= 0, row < t.rows, let line = t.getLine(row: row) else { return nil }
-        let chars = Array(line.translateToString(trimRight: false))
-        guard col >= 0, col < chars.count, !chars[col].isWhitespace else { return nil }
-        let stop: (Character) -> Bool = { $0.isWhitespace || "'\"`()[]{}<>|,;".contains($0) }
-        var a = col, b = col
-        while a > 0, !stop(chars[a - 1]) { a -= 1 }
-        while b + 1 < chars.count, !stop(chars[b + 1]) { b += 1 }
-        var token = String(chars[a...b])
-        // Drop a trailing ":line:col" (compiler output) and sentence punctuation.
-        if let r = token.range(of: #"(:\d+)+:?$"#, options: .regularExpression) { token.removeSubrange(r) }
-        while let last = token.last, ".:".contains(last) { token.removeLast() }
-        guard !token.contains("://"), token.contains("/") || token.hasPrefix("~") else { return nil }
-        return token
+        return TerminalPathToken.token(in: Array(line.translateToString(trimRight: false)), at: col)
     }
 
     /// SwiftTerm draws the IME composition preview as a floating `NSTextField`

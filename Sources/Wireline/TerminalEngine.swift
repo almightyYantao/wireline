@@ -94,3 +94,44 @@ struct TerminalAppearance: Equatable {
     var cursorShape: CursorShape
     var cursorBlink: Bool
 }
+
+/// Which renderer new sessions use (`terminal-engine` in the config file).
+enum TerminalEngineKind: String, CaseIterable, Sendable {
+    case swiftterm, ghostty
+
+    /// The engine for a new session: the setting, unless libghostty can't run
+    /// here (not started, or a GhosttyKit without manual IO) — then SwiftTerm.
+    @MainActor
+    static func makeEngine(frame: CGRect) -> any TerminalEngine {
+        let wanted = UserDefaults.standard.string(forKey: "terminalEngine").flatMap(Self.init) ?? .swiftterm
+        if wanted == .ghostty {
+            if GhosttyTerminalView.isAvailable { return GhosttyTerminalView(frame: frame) }
+            if !warnedFallback {
+                warnedFallback = true
+                let why = GhosttyRuntime.shared.failure ?? "this GhosttyKit has no manual-IO backend"
+                ghosttyLog.warning("terminal-engine = ghostty unavailable (\(why, privacy: .public)); using SwiftTerm")
+            }
+        }
+        return WirelineTerminalView(frame: frame)
+    }
+
+    @MainActor private static var warnedFallback = false
+}
+
+/// The ⌘-click path rule both engines use.
+enum TerminalPathToken {
+    static func token(in chars: [Character], at col: Int) -> String? {
+        guard col >= 0, col < chars.count, !chars[col].isWhitespace else { return nil }
+        let stop: (Character) -> Bool = { $0.isWhitespace || "'\"`()[]{}<>|,;".contains($0) }
+        var a = col, b = col
+        while a > 0, !stop(chars[a - 1]) { a -= 1 }
+        while b + 1 < chars.count, !stop(chars[b + 1]) { b += 1 }
+        var token = String(chars[a...b])
+        // Drop a trailing ":line:col" (compiler output) and sentence punctuation.
+        if let r = token.range(of: #"(:\d+)+:?$"#, options: .regularExpression) { token.removeSubrange(r) }
+        while let last = token.last, ".:".contains(last) { token.removeLast() }
+        guard !token.contains("://"), token.contains("/") || token.hasPrefix("~") else { return nil }
+        return token
+    }
+}
+
