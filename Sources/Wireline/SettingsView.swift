@@ -84,6 +84,15 @@ struct SettingsView: View {
                     Toggle(isOn: $store.useBuiltInTerminal) { rowLabel(loc("使用内置终端", "Use built-in terminal")) }
                         .toggleStyle(.wlSwitch).frame(minHeight: 38).wlConfigLocked("builtin-terminal")
                     WLFormDivider()
+                    WLFormRow(loc("终端内核", "Terminal engine"),
+                              detail: loc("对新开的标签和分屏生效；libghostty 为测试版", "Applies to new tabs and splits; libghostty is in beta")) {
+                        WLSegmented(selection: $store.terminalEngine, options: [
+                            WLOption(TerminalEngineKind.swiftterm, "SwiftTerm"),
+                            WLOption(TerminalEngineKind.ghostty, "libghostty"),
+                        ], fill: false)
+                        .wlConfigLocked("terminal-engine")
+                    }
+                    WLFormDivider()
                     Toggle(isOn: $store.terminalGPU) {
                         WLFormRow(loc("GPU 渲染", "GPU rendering"),
                                   detail: loc("用 Metal 绘制终端，大量输出时更流畅、更省 CPU", "Draw terminals with Metal — smoother, lighter on the CPU under heavy output")) { EmptyView() }

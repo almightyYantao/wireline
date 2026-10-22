@@ -11,6 +11,7 @@ struct HostItem: View {
     let isActive: Bool
     var isSelected: Bool = false
     var onSelect: () -> Void = {}
+    var onDetails: () -> Void = {}
     var onConnect: () -> Void
     var onEdit: () -> Void
     var onForward: () -> Void = {}
@@ -40,7 +41,7 @@ struct HostItem: View {
                 .padding(.bottom, isActive ? 3 : 7)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
-                // Single click selects; double click connects.
+                // Single click highlights; double click connects.
                 .onTapGesture { onSelect() }
                 .simultaneousGesture(TapGesture(count: 2).onEnded { onConnect() })
             if isActive {
@@ -79,6 +80,7 @@ struct HostItem: View {
     private var menuItems: [WLMenuItem] {
         var items: [WLMenuItem] = [
             .item(loc("连接", "Connect"), systemImage: "play.fill") { onConnect() },
+            .item(loc("详情", "Details"), systemImage: "info.circle") { onDetails() },
             .item(loc("编辑…", "Edit…"), systemImage: "pencil") { onEdit() },
             .item(loc("检测状态", "Check status"), systemImage: "arrow.clockwise") { Task { await store.check(host) } }
         ]

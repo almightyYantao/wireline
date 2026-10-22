@@ -315,6 +315,9 @@ struct LeftPanel: View {
     @Environment(Localizer.self) private var loc
     @Binding var operation: SidebarItem?
     @Binding var selectedAlias: String?
+    /// The row a single click highlighted. Only that: opening the details page
+    /// is a context-menu action, connecting is a double click.
+    @State private var highlightedAlias: String?
     var onAdd: (String?) -> Void
     var onEdit: (Host) -> Void
     var onBackup: () -> Void
@@ -515,8 +518,9 @@ struct LeftPanel: View {
             host: host,
             status: store.statuses[host.alias],
             isActive: active,
-            isSelected: selectedAlias == host.alias || highlighted,
-            onSelect: { selectedAlias = host.alias; operation = nil; sessions.activeID = nil },
+            isSelected: highlightedAlias == host.alias || highlighted,
+            onSelect: { highlightedAlias = host.alias },
+            onDetails: { highlightedAlias = host.alias; selectedAlias = host.alias; operation = nil; sessions.activeID = nil },
             onConnect: { selectedAlias = host.alias; operation = nil; connectOrFocus(host) },
             onEdit: { onEdit(host) },
             onForward: { operation = .forwarding },

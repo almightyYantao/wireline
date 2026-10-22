@@ -5,6 +5,9 @@ import WirelineCore
 struct PaletteCommand: Identifiable {
     let id = UUID()
     let title: String
+    /// Extra words it answers to — the other language's title, so a Chinese UI
+    /// still finds "Settings" and an English one finds "设置".
+    var keywords: String = ""
     var subtitle: String? = nil
     let category: String
     let systemImage: String
@@ -120,10 +123,31 @@ struct CommandPaletteView: View {
     private var results: [PaletteCommand] {
         var q = query.trimmingCharacters(in: .whitespaces).lowercased()
         if commandMode { q = String(q.dropFirst()).trimmingCharacters(in: .whitespaces) }
-        let cmds = q.isEmpty ? commands : commands.filter {
-            ($0.title + " " + $0.category + " " + ($0.subtitle ?? "")).lowercased().contains(q)
-        }
+        let cmds = q.isEmpty ? commands : commands.filter { Self.matches($0, q) }
         return commandMode ? cmds : hostCommands(q) + cmds
+    }
+
+    /// Every word of the query must appear in the command's text — titles in
+    /// both languages, category, subtitle — or in the pinyin of its Chinese
+    /// (full "shezhi" or initials "sz").
+    private static func matches(_ c: PaletteCommand, _ q: String) -> Bool {
+        let hay = searchText(c.title + " " + c.keywords + " " + c.category + " " + (c.subtitle ?? ""))
+        return q.split(separator: " ").allSatisfy { hay.contains($0) }
+    }
+
+    @MainActor private static var searchCache: [String: String] = [:]
+
+    private static func searchText(_ text: String) -> String {
+        if let hit = searchCache[text] { return hit }
+        var out = text.lowercased()
+        if text.unicodeScalars.contains(where: { (0x4E00...0x9FFF).contains($0.value) }) {
+            let latin = text.applyingTransform(.mandarinToLatin, reverse: false)?
+                .applyingTransform(.stripDiacritics, reverse: false)?.lowercased() ?? ""
+            let words = latin.split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+            out += " " + words.joined() + " " + String(words.compactMap(\.first))
+        }
+        searchCache[text] = out
+        return out
     }
 
     /// Hosts first: fuzzy-ranked when typing, most recently used when empty.
@@ -178,51 +202,51 @@ struct CommandPaletteView: View {
         func post(_ name: Notification.Name) { NotificationCenter.default.post(name: name, object: nil) }
 
         out += [
-            PaletteCommand(title: loc("新建连接", "New Connection"), category: actions,
+            PaletteCommand(title: loc("新建连接", "New Connection"), keywords: "新建连接" + " " + "New Connection", category: actions,
                            systemImage: "plus", tint: WL.green) { post(.newConnection) },
-            PaletteCommand(title: loc("新建本地终端", "New Local Terminal"), category: actions,
+            PaletteCommand(title: loc("新建本地终端", "New Local Terminal"), keywords: "新建本地终端" + " " + "New Local Terminal", category: actions,
                            systemImage: "terminal", tint: WL.green) {
                 openLocalShell(sessions: sessions, openWindow: openWindow)
             },
-            PaletteCommand(title: loc("快速连接", "Quick Connect"), category: actions,
+            PaletteCommand(title: loc("快速连接", "Quick Connect"), keywords: "快速连接" + " " + "Quick Connect", category: actions,
                            systemImage: "bolt", tint: WL.teal) { post(.showQuickConnect) },
-            PaletteCommand(title: loc("刷新状态", "Refresh Statuses"), category: actions,
+            PaletteCommand(title: loc("刷新状态", "Refresh Statuses"), keywords: "刷新状态" + " " + "Refresh Statuses", category: actions,
                            systemImage: "arrow.clockwise", tint: WL.teal) { Task { await store.checkAll() } },
-            PaletteCommand(title: loc("搜索终端", "Search Terminal"), category: actions,
+            PaletteCommand(title: loc("搜索终端", "Search Terminal"), keywords: "搜索终端" + " " + "Search Terminal", category: actions,
                            systemImage: "magnifyingglass", tint: WL.amber) {
                 post(sessions.activeSession != nil ? .searchTerminal : .focusSearch)
             },
-            PaletteCommand(title: loc("折叠 / 展开侧栏", "Toggle Sidebar"), category: actions,
+            PaletteCommand(title: loc("折叠 / 展开侧栏", "Toggle Sidebar"), keywords: "折叠 / 展开侧栏" + " " + "Toggle Sidebar", category: actions,
                            systemImage: "sidebar.left", tint: WL.textDim) { post(.toggleSidebar) },
-            PaletteCommand(title: loc("显示 / 收起 AI 面板", "Toggle AI Panel"), category: actions,
+            PaletteCommand(title: loc("显示 / 收起 AI 面板", "Toggle AI Panel"), keywords: "显示 / 收起 AI 面板" + " " + "Toggle AI Panel", category: actions,
                            systemImage: "sparkles", tint: WL.purple) { post(.toggleAI) },
-            PaletteCommand(title: loc("聚焦终端输入", "Focus Terminal"), category: actions,
+            PaletteCommand(title: loc("聚焦终端输入", "Focus Terminal"), keywords: "聚焦终端输入" + " " + "Focus Terminal", category: actions,
                            systemImage: "cursorarrow", tint: WL.textDim) { post(.focusTerminal) },
-            PaletteCommand(title: loc("向右分屏", "Split Right"), category: actions,
+            PaletteCommand(title: loc("向右分屏", "Split Right"), keywords: "向右分屏" + " " + "Split Right", category: actions,
                            systemImage: "rectangle.split.2x1", tint: WL.green) {
                 wlAnimateTerminalLayout { sessions.splitActive(.trailing) }
             },
-            PaletteCommand(title: loc("向下分屏", "Split Down"), category: actions,
+            PaletteCommand(title: loc("向下分屏", "Split Down"), keywords: "向下分屏" + " " + "Split Down", category: actions,
                            systemImage: "rectangle.split.1x2", tint: WL.green) {
                 wlAnimateTerminalLayout { sessions.splitActive(.bottom) }
             },
-            PaletteCommand(title: loc("均分分屏", "Equalize Splits"), category: actions,
+            PaletteCommand(title: loc("均分分屏", "Equalize Splits"), keywords: "均分分屏" + " " + "Equalize Splits", category: actions,
                            systemImage: "equal.square", tint: WL.textDim) {
                 wlAnimateTerminalLayout { sessions.equalizeSplits() }
             },
-            PaletteCommand(title: loc("放大 / 还原分屏", "Zoom / Restore Pane"), category: actions,
+            PaletteCommand(title: loc("放大 / 还原分屏", "Zoom / Restore Pane"), keywords: "放大 / 还原分屏" + " " + "Zoom / Restore Pane", category: actions,
                            systemImage: "arrow.up.left.and.arrow.down.right", tint: WL.textDim) {
                 wlAnimateTerminalLayout { sessions.toggleZoom() }
             },
-            PaletteCommand(title: loc("复制上一条命令的输出", "Copy Last Command Output"), category: actions,
+            PaletteCommand(title: loc("复制上一条命令的输出", "Copy Last Command Output"), keywords: "复制上一条命令的输出" + " " + "Copy Last Command Output", category: actions,
                            systemImage: "doc.on.clipboard", tint: WL.teal) { copyLastOutput(sessions) },
-            PaletteCommand(title: loc("快捷终端", "Quick Terminal"), category: actions,
+            PaletteCommand(title: loc("快捷终端", "Quick Terminal"), keywords: "快捷终端" + " " + "Quick Terminal", category: actions,
                            systemImage: "rectangle.topthird.inset.filled", tint: WL.green) {
                 QuickTerminalController.shared.toggle()
             },
-            PaletteCommand(title: loc("待办清单", "To-Do List"), category: actions,
+            PaletteCommand(title: loc("待办清单", "To-Do List"), keywords: "待办清单" + " " + "To-Do List", category: actions,
                            systemImage: "checklist", tint: WL.amber) { openWindow(id: "todos") },
-            PaletteCommand(title: loc("设置", "Settings"), category: actions,
+            PaletteCommand(title: loc("设置", "Settings"), keywords: "设置" + " " + "Settings", category: actions,
                            systemImage: "gearshape", tint: WL.textDim) { openWindow(id: "settings") },
         ]
 
