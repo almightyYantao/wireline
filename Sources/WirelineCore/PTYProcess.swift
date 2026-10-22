@@ -47,9 +47,9 @@ public struct PTYSpawnError: Error, Equatable {
 /// wrote. Main keeps its own `dup` of the master for ioctls (window size,
 /// foreground group), so it never touches an fd the queue may be closing.
 ///
-/// Spawning uses `posix_spawn` (a new session; opening the slave there makes
-/// it the controlling terminal; signals reset to default; every other fd
-/// closed), so no Swift code runs between fork and exec.
+/// Spawning uses `forkpty` (new session, slave as controlling terminal via
+/// TIOCSCTTY; signals reset to default; every other fd closed) — see
+/// `PTYSpawn.spawn` for why not `posix_spawn`.
 @MainActor
 public final class PTYProcess {
     /// Output from the child, in order, on main.
@@ -445,52 +445,51 @@ enum PTYSpawn {
     /// child's pid and the master fd (non-blocking, close-on-exec).
     static func spawn(executable: String, argv: [String], env: [String], cwd: String?,
                       size: winsize) throws -> (pid: pid_t, master: Int32) {
-        var master: Int32 = -1, slave: Int32 = -1
-        var ws = size
-        guard openpty(&master, &slave, nil, nil, &ws) == 0 else { throw PTYSpawnError(errno: errno) }
-        defer { close(slave) }      // the child opens its own (posix_spawn returns after exec)
-        // Not inherited by anything else this app spawns.
-        _ = fcntl(master, F_SETFD, FD_CLOEXEC)
-        _ = fcntl(slave, F_SETFD, FD_CLOEXEC)
-
-        var name = [CChar](repeating: 0, count: 128)
-        guard ptsname_r(master, &name, name.count) == 0 else {
-            let e = errno; close(master); throw PTYSpawnError(errno: e)
-        }
-
-        var attr: posix_spawnattr_t?
-        posix_spawnattr_init(&attr)
-        defer { posix_spawnattr_destroy(&attr) }
-        // New session (the slave opened below becomes its controlling
-        // terminal), default signal handlers, empty mask, and no fds but 0–2.
-        posix_spawnattr_setflags(&attr, Int16(POSIX_SPAWN_SETSID | POSIX_SPAWN_CLOEXEC_DEFAULT
-                                              | POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_SETSIGMASK))
-        var all = sigset_t(), none = sigset_t()
-        sigfillset(&all); sigemptyset(&none)
-        posix_spawnattr_setsigdefault(&attr, &all)
-        posix_spawnattr_setsigmask(&attr, &none)
-
-        var actions: posix_spawn_file_actions_t?
-        posix_spawn_file_actions_init(&actions)
-        defer { posix_spawn_file_actions_destroy(&actions) }
-        posix_spawn_file_actions_addopen(&actions, 0, name, O_RDWR, 0)
-        posix_spawn_file_actions_adddup2(&actions, 0, 1)
-        posix_spawn_file_actions_adddup2(&actions, 0, 2)
-        if let cwd, isDirectory(cwd) {
-            if #available(macOS 26, *) {
-                posix_spawn_file_actions_addchdir(&actions, cwd)
-            } else {
-                posix_spawn_file_actions_addchdir_np(&actions, cwd)
-            }
-        }
-
+        // fork + login_tty rather than posix_spawn: a child spawned into a new
+        // session that merely open()s the slave did not get it as its
+        // controlling terminal when launched from the app (it did from a
+        // shell), leaving it with no job control, no SIGWINCH on resize, no ^C
+        // and no foreground process group. login_tty does an explicit
+        // TIOCSCTTY. Everything the child needs is prepared before fork; the
+        // child only makes async-signal-safe calls, then execs.
+        guard access(executable, X_OK) == 0 else { throw PTYSpawnError(errno: errno) }
+        let cExe = strdup(executable)
         let cArgv = argv.map { strdup($0) } + [nil]
         let cEnv = env.map { strdup($0) } + [nil]
-        defer { cArgv.forEach { free($0) }; cEnv.forEach { free($0) } }
-        var pid: pid_t = 0
-        let rc = posix_spawn(&pid, executable, &actions, &attr, cArgv, cEnv)
-        guard rc == 0 else { close(master); throw PTYSpawnError(errno: rc) }
+        let cCwd = cwd.flatMap { isDirectory($0) ? strdup($0) : nil }
+        defer {
+            free(cExe); cArgv.forEach { free($0) }; cEnv.forEach { free($0) }; free(cCwd)
+        }
+        let maxFD = Int32(min(getdtablesize(), 65536))
+        var all = sigset_t(), none = sigset_t()
+        sigfillset(&all); sigemptyset(&none)
 
+        var master: Int32 = -1
+        var ws = size
+        // Block signals across fork so the child can't run a parent handler.
+        var saved = sigset_t()
+        pthread_sigmask(SIG_SETMASK, &all, &saved)
+        let pid = forkpty(&master, nil, nil, &ws)
+        if pid == 0 {
+            // Child: forkpty has done setsid + TIOCSCTTY + dup2 onto 0–2.
+            for sig: Int32 in 1..<32 { signal(sig, SIG_DFL) }
+            var fd: Int32 = 3
+            while fd < maxFD { close(fd); fd += 1 }
+            if let cCwd { _ = chdir(cCwd) }
+            pthread_sigmask(SIG_SETMASK, &none, nil)
+            cArgv.withUnsafeBufferPointer { av in
+                cEnv.withUnsafeBufferPointer { ev in
+                    _ = execve(cExe, av.baseAddress, ev.baseAddress)
+                }
+            }
+            _exit(127)
+        }
+        let forkErrno = errno
+        pthread_sigmask(SIG_SETMASK, &saved, nil)
+        guard pid > 0 else { throw PTYSpawnError(errno: forkErrno) }
+
+        // Not inherited by anything else this app spawns.
+        _ = fcntl(master, F_SETFD, FD_CLOEXEC)
         let flags = fcntl(master, F_GETFL)
         _ = fcntl(master, F_SETFL, flags | O_NONBLOCK)
         return (pid, master)
