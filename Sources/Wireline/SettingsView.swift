@@ -85,7 +85,7 @@ struct SettingsView: View {
                         .toggleStyle(.wlSwitch).frame(minHeight: 38).wlConfigLocked("builtin-terminal")
                     WLFormDivider()
                     WLFormRow(loc("终端内核", "Terminal engine"),
-                              detail: loc("对新开的标签和分屏生效；libghostty 为测试版", "Applies to new tabs and splits; libghostty is in beta")) {
+                              detail: loc("对新开的标签和分屏生效；SwiftTerm 为备用内核", "Applies to new tabs and splits; SwiftTerm is the fallback")) {
                         WLSegmented(selection: $store.terminalEngine, options: [
                             WLOption(TerminalEngineKind.swiftterm, "SwiftTerm"),
                             WLOption(TerminalEngineKind.ghostty, "libghostty"),

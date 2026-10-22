@@ -238,7 +238,7 @@ final class HostStore {
         self.unfocusedSplitOpacity = UserDefaults.standard.object(forKey: "unfocusedSplitOpacity") as? Double ?? 0.7
         self.terminalGPU = UserDefaults.standard.object(forKey: "terminalGPU") as? Bool ?? true
         self.terminalEngine = UserDefaults.standard.string(forKey: "terminalEngine")
-            .flatMap(TerminalEngineKind.init) ?? .swiftterm
+            .flatMap(TerminalEngineKind.init) ?? .ghostty
         self.terminalPaddingX = UserDefaults.standard.object(forKey: "terminalPaddingX") as? Double ?? 16
         self.terminalPaddingY = UserDefaults.standard.object(forKey: "terminalPaddingY") as? Double ?? 10
         self.inheritWorkingDirectory = UserDefaults.standard.object(forKey: "inheritWorkingDirectory") as? Bool ?? true

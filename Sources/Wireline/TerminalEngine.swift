@@ -135,7 +135,7 @@ enum TerminalEngineKind: String, CaseIterable, Sendable {
     /// here (not started, or a GhosttyKit without manual IO) — then SwiftTerm.
     @MainActor
     static func makeEngine(frame: CGRect) -> any TerminalEngine {
-        let wanted = UserDefaults.standard.string(forKey: "terminalEngine").flatMap(Self.init) ?? .swiftterm
+        let wanted = UserDefaults.standard.string(forKey: "terminalEngine").flatMap(Self.init) ?? .ghostty
         if wanted == .ghostty {
             if GhosttyTerminalView.isAvailable { return GhosttyTerminalView(frame: frame) }
             if !warnedFallback {
