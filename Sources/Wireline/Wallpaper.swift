@@ -23,7 +23,8 @@ struct WallpaperView: NSViewRepresentable {
         override init(frame: NSRect) {
             super.init(frame: frame)
             wantsLayer = true
-            layerContentsRedrawPolicy = .duringViewResize
+            // The layer only shows an image / video layer; nothing to redraw on resize.
+            layerContentsRedrawPolicy = .never
         }
         @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
 
@@ -33,7 +34,6 @@ struct WallpaperView: NSViewRepresentable {
             teardownVideo()
             edgeColor = nil
             layer?.contents = nil
-            layer?.backgroundColor = NSColor(red: 0.039, green: 0.055, blue: 0.039, alpha: 1).cgColor
 
             guard let path else { return }
             let ext = (path as NSString).pathExtension.lowercased()
@@ -51,10 +51,22 @@ struct WallpaperView: NSViewRepresentable {
                 player = queue
                 playerLayer = pl
                 updatePlayback()   // play only if currently visible
+                let asset = AVURLAsset(url: URL(fileURLWithPath: path))
+                Task { [weak self] in
+                    let gen = AVAssetImageGenerator(asset: asset)
+                    gen.maximumSize = CGSize(width: 64, height: 64)
+                    guard let (frame, _) = try? await gen.image(at: .zero) else { return }
+                    let color = Self.averageColor(of: frame)
+                    await MainActor.run {
+                        guard let self, self.currentPath == .some(path) else { return }
+                        self.edgeColor = color
+                        self.paintWindowBackground()
+                    }
+                }
             } else if let image = NSImage(contentsOfFile: path) {
                 layer?.contents = image
                 layer?.contentsGravity = .resizeAspectFill
-                edgeColor = Self.averageColor(of: image)
+                edgeColor = image.cgImage(forProposedRect: nil, context: nil, hints: nil).flatMap(Self.averageColor)
             }
             paintWindowBackground()
         }
@@ -67,13 +79,15 @@ struct WallpaperView: NSViewRepresentable {
             didSet { WallpaperView.edgeColor = edgeColor }
         }
 
+        /// Behind the image / video too: whatever a resize uncovers before the
+        /// wallpaper catches up is this colour, not black.
         private func paintWindowBackground() {
-            guard let window else { return }
-            window.backgroundColor = edgeColor ?? NSColor(Palette.shared.bg)
+            let color = edgeColor ?? NSColor(Palette.shared.bg)
+            layer?.backgroundColor = color.cgColor
+            window?.backgroundColor = color
         }
 
-        private static func averageColor(of image: NSImage) -> NSColor? {
-            guard let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
+        private nonisolated static func averageColor(of cg: CGImage) -> NSColor? {
             var px = [UInt8](repeating: 0, count: 4)
             guard let ctx = CGContext(data: &px, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
                                       space: CGColorSpace(name: CGColorSpace.sRGB)!,
@@ -126,7 +140,22 @@ struct WallpaperView: NSViewRepresentable {
 
         override func layout() {
             super.layout()
-            playerLayer?.frame = bounds
+            fitPlayerLayer()
+        }
+
+        // An AVPlayerLayer frame change animates implicitly (¼ s), which left
+        // the video trailing the window edge during a live resize.
+        override func setFrameSize(_ newSize: NSSize) {
+            super.setFrameSize(newSize)
+            fitPlayerLayer()
+        }
+
+        private func fitPlayerLayer() {
+            guard let playerLayer, playerLayer.frame != bounds else { return }
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            playerLayer.frame = bounds
+            CATransaction.commit()
         }
     }
 }
