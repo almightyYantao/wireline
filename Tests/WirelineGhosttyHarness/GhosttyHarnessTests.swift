@@ -156,6 +156,8 @@ final class GhosttyHarnessTests: XCTestCase {
         view.onDirectoryChange = { dirs.append($0 ?? "nil") }
         view.onCloseRequested = { closes += 1 }
         view.onOpenPath = { opened.append($0) }
+        var shellEvents: [ShellCommandEvent] = []
+        view.onShellCommand = { shellEvents.append($0) }
         wallpaper.addSubview(container)
 
         var appearance = TerminalAppearance(theme: .wireline, font: TerminalFont.preferred(size: 13)!,
@@ -286,6 +288,30 @@ final class GhosttyHarnessTests: XCTestCase {
         XCTAssertTrue(dirs.contains { $0.hasPrefix("file://wl-remote-host/") }, "\(dirs)")
         XCTAssertTrue(titles.contains("wl-title"))
 
+        // 8c. Scrollbar (TerminalScrollbar over the libghostty view, fed by SCROLLBAR).
+        try checkScrollbar(view, container: container, window: window)
+
+        // 8d. Command marks: C from the stream sniffer, D from COMMAND_FINISHED.
+        shellEvents = []
+        view.send(txt: "false\r")
+        let falseDone = wait(5) { shellEvents.contains { if case .finished = $0 { true } else { false } } }
+        let falseEvents = shellEvents
+        shellEvents = []
+        view.send(txt: "sleep 1\r")
+        let sleepDone = wait(5) { shellEvents.contains { if case .finished = $0 { true } else { false } } }
+        let sleepEvents = shellEvents
+        log("shell marks: `false` → \(falseEvents) (\(falseDone)); `sleep 1` → \(sleepEvents) (\(sleepDone))")
+        XCTAssertEqual(falseEvents.first, .started)
+        if case let .finished(code, duration)? = falseEvents.last {
+            XCTAssertEqual(code, 1)
+            XCTAssertLessThan(duration, 1)
+        } else { XCTFail("`false`: no COMMAND_FINISHED") }
+        XCTAssertEqual(sleepEvents.first, .started)
+        if case let .finished(code, duration)? = sleepEvents.last {
+            XCTAssertEqual(code, 0)
+            XCTAssertTrue((0.9...3).contains(duration), "\(duration)")
+        } else { XCTFail("`sleep 1`: no COMMAND_FINISHED") }
+
         // 9. ⌘W → onCloseRequested (this view is the focused pane).
         _ = window.performKeyEquivalent(with: NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .command,
             timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil,
@@ -344,8 +370,10 @@ final class GhosttyHarnessTests: XCTestCase {
             pump(0.3)
         }
         let gridFrozen = view.gridSize
+        let hostedViews = container.subviews.count        // terminal + scrollbar
         container.freeze()
-        let cover = container.subviews.count > 1, hidden = view.alphaValue == 0
+        let cover = container.subviews.count > hostedViews, hidden = view.alphaValue == 0
+        let barOnTop = container.subviews.last === container.scrollbar
         container.setFrameSize(NSSize(width: container.bounds.width - 200, height: container.bounds.height))
         pump(0.05)
         let heldDuringFreeze = view.gridSize.ws_col == gridFrozen.ws_col
@@ -353,8 +381,9 @@ final class GhosttyHarnessTests: XCTestCase {
         pump(0.3)
         log("container: freeze → cover \(cover), terminal hidden \(hidden) (reduce motion: \(Motion.reduce)); "
             + "grid held while frozen \(heldDuringFreeze); commit → \(gridFrozen.ws_col) → \(view.gridSize.ws_col) cols, "
-            + "visible \(view.alphaValue == 1), cover gone \(container.subviews.count == 1)")
-        if !Motion.reduce { XCTAssertTrue(cover && hidden && heldDuringFreeze) }
+            + "visible \(view.alphaValue == 1), cover gone \(container.subviews.count == hostedViews), scrollbar above cover \(barOnTop)")
+        if !Motion.reduce { XCTAssertTrue(cover && hidden && heldDuringFreeze && barOnTop) }
+        XCTAssertEqual(container.subviews.count, hostedViews)
         XCTAssertLessThan(view.gridSize.ws_col, gridFrozen.ws_col)
         XCTAssertEqual(view.alphaValue, 1)
         container.setFrameSize(wallpaper.bounds.size)
@@ -429,6 +458,146 @@ final class GhosttyHarnessTests: XCTestCase {
         window.close()
         pump(0.3)
         log("done")
+    }
+
+    /// A line-based wheel event (positive = back into history).
+    private func wheel(_ lines: Int32) -> NSEvent? {
+        CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 1, wheel1: lines, wheel2: 0, wheel3: 0)
+            .flatMap(NSEvent.init(cgEvent:))
+    }
+
+    private func mouse(_ type: NSEvent.EventType, at p: NSPoint, in view: NSView) -> NSEvent {
+        NSEvent.mouseEvent(with: type, location: view.convert(p, to: nil), modifierFlags: [],
+                           timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: view.window?.windowNumber ?? 0,
+                           context: nil, eventNumber: 0, clickCount: 1, pressure: 1)!
+    }
+
+    /// Scroll back with the wheel → the bar shows; drag its thumb → the
+    /// viewport follows; back at the bottom it fades; streaming output at the
+    /// bottom never shows it.
+    private func checkScrollbar(_ view: GhosttyTerminalView, container: TerminalContainerView, window: NSWindow) throws {
+        let bar = try XCTUnwrap(container.scrollbar)
+        // SCROLLBAR comes from draws: make sure this surface draws.
+        if let s = view.surface?.raw { ghostty_surface_set_occlusion(s, true) }
+        var changes = 0
+        let forward = view.onScrollChange
+        view.onScrollChange = { changes += 1; forward?() }
+        view.send(txt: "seq 1 400\r")
+        _ = wait(5) { screen(view).contains("\n400\n") }
+        _ = wait(2) { view.canScroll && view.scrollPosition >= 0.999 }
+        pump(1.6)                                   // any earlier reveal has faded
+        let atBottom = (view.canScroll, view.scrollPosition, bar.alphaValue)
+        log("scrollbar after `seq 1 400`: canScroll \(atBottom.0), position \(atBottom.1), thumb \(view.scrollThumbsize), "
+            + "state \(String(describing: view.scrollbar)), alpha \(atBottom.2), SCROLLBAR changes \(changes)")
+        XCTAssertTrue(atBottom.0)
+        XCTAssertEqual(atBottom.1, 1)
+        XCTAssertLessThan(atBottom.2, 0.05, "hidden while following the bottom")
+
+        // Wheel up.
+        for _ in 0..<4 { if let e = wheel(5) { view.scrollWheel(with: e) } }
+        let back = wait(2) { view.scrollPosition < 0.999 }
+        pump(0.5)                                   // reveal animation
+        let barLoc = window.contentView!.convert(bar.convert(NSPoint(x: bar.bounds.maxX - 6, y: bar.bounds.midY), to: nil), from: nil)
+        let hit = window.contentView!.hitTest(barLoc)
+        log("wheel up ×4: scrolled back \(back), position \(view.scrollPosition), bar alpha \(bar.alphaValue), "
+            + "hit-test on the thumb column → \(hit.map { String(describing: Swift.type(of: $0)) } ?? "nil")")
+        XCTAssertTrue(back)
+        XCTAssertGreaterThan(bar.alphaValue, 0.9, "revealed on scroll")
+        XCTAssertTrue(hit === bar, "the visible bar takes clicks in its column")
+
+        // Drag the thumb to the top, then to the middle.
+        func rows() -> [String] { screen(view).components(separatedBy: "\n") }
+        bar.mouseDown(with: mouse(.leftMouseDown, at: NSPoint(x: bar.bounds.maxX - 6, y: bar.bounds.midY), in: bar))
+        bar.mouseDragged(with: mouse(.leftMouseDragged, at: NSPoint(x: bar.bounds.maxX - 6, y: 0), in: bar))
+        let top = wait(2) { view.scrollbar?.offset == 0 && viewport(view).first == rows().first }
+        let topRow = viewport(view).first ?? ""
+        bar.mouseDragged(with: mouse(.leftMouseDragged, at: NSPoint(x: bar.bounds.maxX - 6, y: bar.bounds.midY), in: bar))
+        let mid = wait(2) {
+            guard let s = view.scrollbar, s.offset > 0, Int(s.offset) < rows().count else { return false }
+            return viewport(view).first == rows()[Int(s.offset)]
+        }
+        let midState = view.scrollbar, midRow = viewport(view).first ?? ""
+        bar.mouseUp(with: mouse(.leftMouseUp, at: NSPoint(x: bar.bounds.maxX - 6, y: bar.bounds.midY), in: bar))
+        log("drag thumb → top: offset 0, viewport row 0 = screen row 0 (\(topRow.debugDescription)): \(top); "
+            + "→ middle: \(String(describing: midState)), position \(view.scrollPosition), viewport row 0 \(midRow.debugDescription) "
+            + "= screen row at offset: \(mid)")
+        XCTAssertTrue(top)
+        XCTAssertTrue(mid)
+        XCTAssertTrue((0.3...0.7).contains(view.scrollPosition), "\(view.scrollPosition)")
+
+        // Drag to the bottom: follows output again, the bar fades out.
+        bar.mouseDown(with: mouse(.leftMouseDown, at: NSPoint(x: bar.bounds.maxX - 6, y: bar.bounds.maxY), in: bar))
+        bar.mouseUp(with: mouse(.leftMouseUp, at: NSPoint(x: bar.bounds.maxX - 6, y: bar.bounds.maxY), in: bar))
+        let bottom = wait(2) { view.scrollPosition >= 0.999 }
+        let faded = wait(3) { bar.alphaValue < 0.05 }
+        log("drag thumb → bottom: position \(view.scrollPosition) (\(bottom)), faded \(faded)")
+        XCTAssertTrue(bottom)
+        XCTAssertTrue(faded)
+
+        // Streaming at the bottom: SCROLLBAR keeps changing, the bar stays hidden.
+        changes = 0
+        var maxAlpha: CGFloat = 0, samples = 0
+        view.send(txt: "yes | head -2000; echo stream-done\r")
+        let streamed = wait(10) {
+            maxAlpha = max(maxAlpha, bar.alphaValue); samples += 1
+            return screen(view).contains("\nstream-done")
+        }
+        pump(0.3)
+        maxAlpha = max(maxAlpha, bar.alphaValue)
+        log("streaming `yes | head -2000` at the bottom: done \(streamed), SCROLLBAR changes \(changes), "
+            + "max bar alpha over \(samples) samples \(maxAlpha), position \(view.scrollPosition)")
+        XCTAssertTrue(streamed)
+        XCTAssertGreaterThan(changes, 0)
+        XCTAssertLessThan(maxAlpha, 0.01, "never shown while following the bottom")
+        view.onScrollChange = forward
+    }
+
+    /// The SwiftTerm engine keeps the same bar, now hosted by the container.
+    func testSwiftTermScrollbar() throws {
+        guard ProcessInfo.processInfo.environment["WIRELINE_GHOSTTY_HARNESS"] == "1" else {
+            throw XCTSkip("set WIRELINE_GHOSTTY_HARNESS=1 to run the harness (opens a window)")
+        }
+        NSApplication.shared.setActivationPolicy(.accessory)
+        let window = HarnessWindow(contentRect: NSRect(x: 160, y: 160, width: 640, height: 360),
+                                   styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let term = WirelineTerminalView(frame: NSRect(x: 0, y: 0, width: 640, height: 360))
+        let container = TerminalContainerView(term: term)
+        container.frame = window.contentView!.bounds
+        window.contentView!.addSubview(container)
+        window.orderFrontRegardless()
+        pump(0.1)
+        let bar = try XCTUnwrap(container.scrollbar)
+        var changes = 0
+        let forward = term.onScrollChange
+        term.onScrollChange = { changes += 1; forward?() }
+        var maxAlpha: CGFloat = 0
+        for i in 1...300 { term.feed(text: "line \(i)\r\n"); if i % 30 == 0 { pump(0.02); maxAlpha = max(maxAlpha, bar.alphaValue) } }
+        pump(0.3)
+        maxAlpha = max(maxAlpha, bar.alphaValue)
+        let streamChanges = changes
+        let nativeHidden = term.subviews.compactMap { $0 as? NSScroller }.allSatisfy(\.isHidden)
+        term.scroll(toPosition: 0)
+        pump(0.5)
+        let shownOnScroll = bar.alphaValue
+        let position = term.scrollPosition
+        // Drag the thumb to the middle.
+        bar.mouseDown(with: mouse(.leftMouseDown, at: NSPoint(x: bar.bounds.maxX - 6, y: bar.bounds.midY), in: bar))
+        bar.mouseUp(with: mouse(.leftMouseUp, at: NSPoint(x: bar.bounds.maxX - 6, y: bar.bounds.midY), in: bar))
+        let dragged = term.scrollPosition
+        term.scroll(toPosition: 1)
+        let faded = wait(3) { bar.alphaValue < 0.05 }
+        log("SwiftTerm: 300 lines at the bottom → onScrollChange ×\(streamChanges), max alpha \(maxAlpha); native scroller hidden \(nativeHidden); "
+            + "scroll(toPosition: 0) → position \(position), alpha \(shownOnScroll); thumb drag to middle → \(dragged); back to bottom → faded \(faded)")
+        XCTAssertGreaterThan(streamChanges, 0)
+        XCTAssertLessThan(maxAlpha, 0.01)
+        XCTAssertTrue(nativeHidden)
+        XCTAssertEqual(position, 0)
+        XCTAssertGreaterThan(shownOnScroll, 0.9)
+        XCTAssertTrue((0.3...0.7).contains(dragged), "\(dragged)")
+        XCTAssertTrue(faded)
+        window.close()
+        pump(0.2)
     }
 
     /// Mean alpha over the middle of the cursor's cell, from a fresh frame.

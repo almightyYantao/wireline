@@ -216,25 +216,39 @@ final class TerminalSession: Identifiable {
             self?.activeEditor = editor
         }
         io.onCommandFinished = { [weak self] elapsed in
-            guard let self else { return }
-            // Only ping when the app isn't frontmost — if you're watching, you
-            // already see the prompt return.
-            guard !NSApp.isActive else { return }
-            // HostStore's `notifyCommandAfter` (Settings / config file), read
-            // where it persists — the session doesn't hold the HostStore.
-            let threshold = UserDefaults.standard.object(forKey: "notifyCommandAfter") as? Double ?? 10
-            guard elapsed >= threshold else { return }
-            let loc = Localizer.shared
-            Notifier.post(title: loc.t("命令完成 · \(self.title)", "Command finished · \(self.title)"),
-                          body: loc.t("耗时 \(Int(elapsed)) 秒", "took \(Int(elapsed))s"))
+            // The engine's command marks, once seen, are the better source.
+            guard let self, !self.commandMarks.isActive else { return }
+            self.notifyCommandFinished(elapsed: elapsed, exitCode: nil)
         }
         io.onBusyChange = { [weak self] busy, elapsed in
-            guard let self else { return }
+            guard let self, !self.commandMarks.isActive else { return }
             // Local shells use reliable foreground-process polling (see
             // `pollForeground`); the output heuristic is only trustworthy enough
             // for SSH/SFTP, where the local foreground process is always `ssh`.
             if case .localShell = self.kind { return }
             self.applyBusy(busy, elapsed: elapsed)
+        }
+        // Shell-integration marks (OSC 133 C / D) from engines that report
+        // them (libghostty): exact start / end and exit code, remote hosts too.
+        // Local shells keep foreground polling for the badge either way.
+        terminalView.onShellCommand = { [weak self] event in
+            guard let self else { return }
+            let local = if case .localShell = self.kind { true } else { false }
+            switch event {
+            case .started:
+                let token = self.commandMarks.started()
+                guard !local else { return }
+                DispatchQueue.main.asyncAfter(deadline: .now() + CommandMarkTracker.busyDelay) { [weak self] in
+                    MainActor.assumeIsolated {
+                        guard let self, self.commandMarks.confirmBusy(token) else { return }
+                        self.applyBusy(true, elapsed: 0)
+                    }
+                }
+            case let .finished(exitCode, duration):
+                let wasBusy = self.commandMarks.finished()
+                if !local, wasBusy || self.isBusy { self.applyBusy(false, elapsed: duration) }
+                self.notifyCommandFinished(elapsed: duration, exitCode: exitCode)
+            }
         }
         io.onOutput = { [weak self] in self?.noteOutput() }
         io.onConnected = { [weak self] in
@@ -243,6 +257,7 @@ final class TerminalSession: Identifiable {
         }
         io.onDisconnected = { [weak self] _ in
             guard let self else { return }
+            self.commandMarks.reset()
             self.connectionState = .disconnected
             self.isRunning = false
         }
@@ -372,6 +387,23 @@ final class TerminalSession: Identifiable {
         guard !hasUnread else { return }               // already flagged; nothing to do
         let inActiveTab = store?.activeTab?.leafID(for: id) != nil
         if !inActiveTab { hasUnread = true }
+    }
+
+    /// Busy state from the engine's OSC 133 marks (see `onShellCommand`).
+    @ObservationIgnored private var commandMarks = CommandMarkTracker()
+
+    /// A command that ran at least `notifyCommandAfter` seconds finished while
+    /// the app isn't frontmost (if you're watching, you see the prompt return).
+    private func notifyCommandFinished(elapsed: TimeInterval, exitCode: Int?) {
+        guard !NSApp.isActive else { return }
+        // HostStore's `notifyCommandAfter` (Settings / config file), read
+        // where it persists — the session doesn't hold the HostStore.
+        let threshold = UserDefaults.standard.object(forKey: "notifyCommandAfter") as? Double ?? 10
+        guard elapsed >= threshold else { return }
+        let loc = Localizer.shared
+        var body = loc.t("耗时 \(Int(elapsed)) 秒", "took \(Int(elapsed))s")
+        if let exitCode, exitCode != 0 { body += loc.t(" · 退出码 \(exitCode)", " · exit \(exitCode)") }
+        Notifier.post(title: loc.t("命令完成 · \(title)", "Command finished · \(title)"), body: body)
     }
 
     /// Apply a busy-state change: update the badge and, when a run finishes in a

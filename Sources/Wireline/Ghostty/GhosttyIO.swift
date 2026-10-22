@@ -40,8 +40,9 @@ final class GhosttyIO {
     let box: GhosttyIOBox
 
     /// Escape-sequence watcher over the child's output: OSC 7 from remote
-    /// hosts (libghostty only reports local ones), focus-report and
-    /// alternate-screen modes (libghostty has no getter).
+    /// hosts (libghostty only reports local ones), OSC 133;C (libghostty
+    /// reports only the end), focus-report and alternate-screen modes
+    /// (libghostty has no getter).
     private var sniffer = TerminalStreamSniffer()
     /// The program asked for focus reports (DECSET 1004).
     private(set) var focusReporting = false
@@ -78,6 +79,7 @@ final class GhosttyIO {
         for event in sniffer.feed(bytes) {
             switch event {
             case .workingDirectory(let raw): view?.onDirectoryChange?(raw)
+            case .commandStarted: view?.onShellCommand?(.started)
             case .privateMode(1004, let on): focusReporting = on
             case .privateMode(1049, let on), .privateMode(1047, let on), .privateMode(47, let on): alternateScreen = on
             case .privateMode: break
