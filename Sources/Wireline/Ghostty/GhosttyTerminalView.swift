@@ -370,14 +370,16 @@ final class GhosttyTerminalView: NSView, TerminalEngine {
 
     // MARK: Search
     //
-    // Ghostty's search is a literal substring search on a background thread:
-    // ASCII case-insensitive unless `options.caseSensitive` (the fork's
-    // `set_search_case_sensitive`); `.regex` is not supported and ignored.
+    // Ghostty searches on a background thread: a literal substring, or an
+    // Oniguruma regex with `options.regex` (the fork's `set_search_regex`);
+    // case-insensitive unless `options.caseSensitive`. Changing either mode
+    // restarts a running search in place.
     // Match counts arrive asynchronously (SEARCH_TOTAL / SEARCH_SELECTED) —
     // `ghosttySearchDidUpdate` tells the find bar to re-read the summary.
 
     private var searchNeedle: String?
     private var searchCaseSensitive = false
+    private var searchRegex = false
     private var searchTotal: Int?
     private var searchSelected: Int?
 
@@ -390,24 +392,26 @@ final class GhosttyTerminalView: NSView, TerminalEngine {
 
     private func search(_ term: String, _ options: SearchOptions, _ direction: String) -> Bool {
         guard !term.isEmpty, let s = surface?.raw else { clearSearch(); return false }
-        if searchNeedle != term || searchCaseSensitive != options.caseSensitive {
-            // A running search keeps its matching mode: restart it.
-            if searchNeedle != nil, searchCaseSensitive != options.caseSensitive { binding("end_search") }
-            searchNeedle = term
+        let modeChanged = searchCaseSensitive != options.caseSensitive || searchRegex != options.regex
+        if searchNeedle != term || modeChanged {
             searchCaseSensitive = options.caseSensitive
+            searchRegex = options.regex
             searchTotal = nil
             searchSelected = nil
             #if WIRELINE_GHOSTTY_MANUAL_IO
             ghostty_surface_set_search_case_sensitive(s, options.caseSensitive)
+            ghostty_surface_set_search_regex(s, options.regex)
             #endif
-            binding("search:\(term)")
+            if searchNeedle != term { binding("search:\(term)") }
+            searchNeedle = term
         }
         binding("navigate_search:\(direction)")
         return searchTotal.map { $0 > 0 } ?? true
     }
 
     func searchMatchSummary(_ term: String, options: SearchOptions, limit: Int) -> (index: Int, total: Int) {
-        guard term == searchNeedle, options.caseSensitive == searchCaseSensitive else { return (0, 0) }
+        guard term == searchNeedle, options.caseSensitive == searchCaseSensitive,
+              options.regex == searchRegex else { return (0, 0) }
         return (searchSelected.map { $0 + 1 } ?? 0, min(searchTotal ?? 0, limit))
     }
 

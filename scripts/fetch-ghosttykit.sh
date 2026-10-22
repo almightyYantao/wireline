@@ -12,11 +12,11 @@
 #
 # GHOSTTYKIT_SRC is a build output dir (GhosttyKit.xcframework + share/) of
 # Wireline's Ghostty fork (branch `wireline`, wireline/build-ghosttykit.sh) —
-# the manual-IO termio the engine needs; default /tmp/libghostty-spike/out-wireline.
+# the manual-IO termio the engine needs; default /tmp/libghostty-spike/out-wireline-universal.
 # (scripts/build-ghosttykit.sh builds *stock* Ghostty: the engine stays off with it.)
 #
 # TODO: once the fork publishes releases (current: 1.3.2-wireline+6f488dfb6,
-# zip sha256 f68ab52882fba36cc775d036f9c6a2317999a71d9b6b7efdeaa5ac69b0536ce9),
+# zip sha256 065af57984318a9fdb961d02ceaa7c7d4d43cdb97a18738b7cf00ae9a04a98c1),
 # this downloads the pinned GhosttyKit.xcframework.zip + share tarball from
 # the release, checks them against the sha256 pinned below (the same value as
 # `swift package compute-checksum`), and unpacks into Vendor/. Package.swift can
@@ -26,7 +26,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-SRC="${GHOSTTYKIT_SRC:-/tmp/libghostty-spike/out-wireline}"
+SRC="${GHOSTTYKIT_SRC:-/tmp/libghostty-spike/out-wireline-universal}"
 
 if [[ "${1:-}" == "--build" ]]; then
     SRC="build/ghosttykit"
