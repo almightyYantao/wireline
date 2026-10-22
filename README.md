@@ -35,6 +35,18 @@ Wrapped in a native macOS card-and-capsule interface (light and dark themes, can
 
 ---
 
+## ⚡ GPU terminal
+
+The terminal is **libghostty** — the core of [Ghostty](https://ghostty.org) — drawn on the GPU with **Metal**.
+
+- **Drawn on the GPU**: glyphs come from a GPU atlas and every frame is composited by Metal shaders, so the CPU only parses. Fast-scrolling build logs, `tail -f`, huge `cat`s and full-screen TUIs (htop, vim, Claude Code) stay smooth, and scrolling back through long history doesn't stutter.
+- **Parsed once**: Wireline owns the PTY and feeds the byte stream straight into libghostty — no multiplexer in between re-parsing everything. What reaches the screen costs one parse.
+- **Transparent without halos**: the background is composited with premultiplied alpha, so text over your wallpaper has clean edges in light and dark themes.
+- **Resizes that stay clean**: the PTY size changes in step with the grid and the prompt is cleared before reflow (OSC 133), so dragging the window never leaves duplicated or staircased prompts.
+- **Fallback**: SwiftTerm (with its own Metal renderer) is still there under Settings → Terminal engine.
+
+---
+
 ## 🚀 Fleet
 
 The thing a single-host AI terminal can't give you: operate a whole group at once, because Wireline knows your host graph.
