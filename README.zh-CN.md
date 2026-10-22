@@ -20,7 +20,7 @@
 
 **AI 是杠杆，不是卖点。** 在这之上叠加的助手是真正能**动手**的:自然语言→命令、诊断报错、带变更评审地改远程文件、甚至帮你建隧道/加主机——全部需二次确认、发送前脱敏。
 
-外面包着原生 macOS 的终端黑客风(等宽字体 · 绿黑配色 · 可换主题),内置真实 PTY 终端、可视化 SFTP、图形化端口转发,以及整窗动态壁纸。
+外面是原生 macOS 的卡片 + 胶囊界面（深浅色主题，可跟随系统），终端内核是 GPU 渲染的 **libghostty**（Ghostty 的内核），另有可视化 SFTP、图形化端口转发和整窗动态壁纸。
 
 ## 📸 截图
 
@@ -106,7 +106,7 @@ AI 是让上面这一切变得毫不费力的杠杆,不是外挂功能。设置 
 
 ## ✅ 待办
 
-紧挨着终端的独立每日清单 —— **⌘D**(可自定义)或点菜单栏图标打开。
+紧挨着终端的独立每日清单 —— **⌥⌘D**（可自定义）或点菜单栏图标打开。
 
 - **菜单栏常驻**:实时显示未完成数,快速添加、快速勾选,不用开窗
 - **截止日期 + 时间**,逾期高亮,到点弹**系统通知**
@@ -131,30 +131,35 @@ AI 是让上面这一切变得毫不费力的杠杆,不是外挂功能。设置 
 - 🔑 认证自动识别：密钥 / 密码；密码交由 **macOS Keychain** 加密存储，配置文件不落明文
 
 **内置终端**
-- 🖥 真实 PTY 终端（[SwiftTerm](https://github.com/migueldeicaza/SwiftTerm)），无需外部 Terminal
-- 🔐 密码主机用 OpenSSH askpass **自动填充**（复用 Keychain）；标记后可**自动 `sudo -i` 并自动输入已存密码**——密钥登录的主机也一样
-- 🧩 会话标签页（带序号，双击就地重命名）；⌘1–9 切换；⌘T 开本机 shell；⌘W 关当前会话
-- 🪟 **分屏**：把一个标签拖到另一个标签的面板边缘即合并成「分屏标签」；⌘[ / ⌘] 切换焦点；可把某格拆回独立标签
-- 📡 **广播输入**：一次输入,同步发到所有会话
-- 🔎 **终端内搜索 ⌘F**：在滚动缓冲区里搜关键字并高亮
-- 🔔 **长命令完成通知**：应用在后台时,耗时命令跑完弹系统通知
-- 📼 **会话日志录制**：把会话输出录到文件,一键在访达中定位
-- ♻️ **会话恢复**：重启后自动重开(并重连)上次打开的标签
+- 🚀 **libghostty 终端内核**：Ghostty 的内核（Wireline 维护的小 fork），**GPU（Metal）渲染**，连字、Nerd Font、透明背景无白边；SwiftTerm 保留为备用内核，在 设置 → 终端内核 切换
+- 🔌 **PTY 由 Wireline 自己管理**：输出只解析一次，内核只负责解析和绘制；ZMODEM、密码 / sudo 自动应答、会话日志都在原始字节流上处理，两个内核通用
+- 📐 **缩放不留残影**：拖动窗口时 PTY 尺寸和终端网格同步更新，配合 OSC 133 先擦提示符再重排，p10k 等多行 / 右侧提示符不再重复、不再出现阶梯；侧栏、AI 面板、全屏等布局变化只重排一次并平滑过渡
+- 🛰 **SSH 连接面板**：解析 → 连接 → 认证 → 会话 四步进度和日志；失败时给出原因、一键重试；需要输入口令或验证码时自动让出终端
+- 🔐 密码主机用 OpenSSH askpass **自动填充**（复用 Keychain）；标记后可**自动 `sudo -i` 并自动输入已存密码**——密钥登录的主机也一样；**Touch ID 保护已有私钥**（内置 ssh-agent，协议栈仍是系统 OpenSSH）
+- 🧩 **标签**：与红绿灯同一行的胶囊标签，选中块会滑动；每个窗格显示正在运行的程序图标（Claude、Codex、Node、Python、Git、Docker、vim…）；单击当前标签改名（分屏标签也能命名）；⌘1–9 切换，⌘T 本机 shell，⌘W 关当前窗格
+- 🪟 **分屏**：⌘D 按两列网格自动排布，⇧⌘D 向下，⌥ + 方向键切换，拖动缝隙调整、双击均分，⇧⌘↩ 原位放大；关闭窗格回到上一个聚焦的窗格；把标签或主机拖到窗格边缘即合并 / 新开
+- ⏪ **提示符感知（OSC 133）**：⌘↑ / ⌘↓ 跳到上 / 下一个提示符，⌥⌘C 复制上一条命令的输出，命令完成通知带退出码
+- 🔎 **终端搜索 ⌘F**：高亮全部匹配，支持**正则**和区分大小写
+- ⚡ **快捷终端**：全局 ⌃` 从屏幕顶部滑出
+- 📡 **广播输入**：一次输入，同步发到所有会话
+- 📼 **会话日志**：把会话输出录到文件，一键在访达中定位
+- ♻️ **会话恢复**：重启后重开并重连上次的标签，保留分屏布局和工作目录
 - 📊 状态栏实时远端 **CPU / 内存 / 时间**（经 ControlMaster 复用连接采集，不打扰终端）
-- 📝 运行 vim/vi 时右上角弹**速查表**(可收起为浮窗图标)
-- 🎨 内置多款配色(Dracula/Nord/Solarized/Gruvbox/Tokyo Night/One Dark)，也可导入 **iTerm2 `.itermcolors`**；字体、字号可调
+- 📝 运行 vim / vi 时右上角弹**速查表**（可收起为浮窗图标）
+- 🎨 内置深浅色主题，也可导入 **iTerm2 `.itermcolors`**；**Ghostty 风格配置文件** `~/.config/wireline/config`，保存即生效，keybind 支持 Ghostty 动作名
 
 **文件与运维**
 - 📁 可视化 **SFTP**（[Citadel](https://github.com/orlandos-nl/Citadel)）：左远程/右本地双栏，拖拽/双击传输、新建/重命名/删除，**右键 AI 改文件**
 - 📥 **ZMODEM 传输**：远端敲 `sz` 自动接住，文件收到 `~/Downloads` 并在 Finder 弹出；`rz` 则弹文件选择器上传（桥接本地 `lrzsz`，需 `brew install lrzsz`）
 - ⚡ 批量 / 舰队执行：多选主机并发跑同一命令、聚合输出
 - 🔀 图形化端口转发（`ssh -L`，支持跳板机，一键启停）
-- 🧰 命令片段库：多行命令、`«占位符»` 运行时弹窗填参
+- 🧰 **快捷指令**：⚡ 浮层或 ⌘P 搜索（中英文 / 拼音），回车插入、⌘回车运行；`{{参数}}` 插入前填写并记住上次的值；按 Linux / macOS 区分，多行脚本和危险命令先确认
 - 🔑 **SSH 密钥管理**：列出 `~/.ssh` 公钥及指纹、生成(ed25519/rsa/ecdsa)、从别处导入(自动修权限)、复制公钥、一键 `ssh-copy-id` 部署到主机
 - 💾 加密备份与迁移：主机 + Keychain 密码导出为口令加密文件；支持**备份到 WebDAV**(仅上传密文),待办也一起带走
 
 **原生体验与个性化**
 - 🖼 整窗**壁纸**：图片或循环 **mp4**，面板半透明叠加(不可见时自动暂停解码)
+- 🧭 **⌘K / ⌘P 统一面板**：直接输入搜主机，`>` 开头执行命令，中英文与拼音都能搜
 - ⌨️ **可自定义快捷键**：录制式设置、冲突检测，全部动作可改键
 - 🌐 中文 / English 运行时切换；隐藏标题栏融入深色 UI；自定义设置窗口
 
@@ -177,6 +182,8 @@ AI 是让上面这一切变得毫不费力的杠杆,不是外挂功能。设置 
 swift test
 ```
 
+终端内核 libghostty 以预编译的 `GhosttyKit.xcframework` 形式放在 `Vendor/`（约 280 MB，不进 git），由 `./scripts/fetch-ghosttykit.sh` 准备。它来自 Wireline 维护的 Ghostty fork（加了「由宿主管理 PTY」的 IO 后端、上一条命令输出、正则搜索等补丁），需要 Zig 0.17 编译；fork 与预编译包会发布到 Releases，之后这一步改为自动下载并校验。
+
 `bundle.sh` 会 release 构建、组装 `build/Wireline.app`（含 Info.plist + 自动生成图标），并做 ad-hoc 签名以便本机 Keychain 正常工作。也可用 Xcode 打开 `Package.swift` 直接运行（⌘R）。
 
 ### 开发热重载
@@ -191,12 +198,19 @@ swift test
 
 - **`WirelineCore`** — 纯 Swift 库，无 UI，可单测
   - `SSHConfig` / `ConfigRepository`：解析回写标准 `~/.ssh/config`，元数据以 `# wireline:` 注释内嵌；原子写入 + 时间戳备份 + 0600 权限
-  - `KeychainService`（Security framework）· `SSHCommand` / `PortForwardManager` · `BackupService`（PBKDF2-SHA256 + AES-GCM）
-- **`Wireline`** — SwiftUI 应用
+  - `PTYProcess`：自管 PTY（forkpty，子进程拿到控制终端；有序写队列、背压、退出前读干净）
+  - `KeychainService`（Security framework）· `SSHCommand` / `PortForwardManager` · `BackupService`（PBKDF2-SHA256 + AES-GCM）· SSH 连接日志解析、快捷指令参数等纯逻辑
+- **`Wireline`** — SwiftUI + AppKit 应用
+  - 终端分三层：`TerminalIO`（PTY 与字节流处理：ZMODEM、密码应答、日志、忙碌检测）→ `TerminalEngine` 协议 → 两个实现：`GhosttyTerminalView`（libghostty，Metal）与 `WirelineTerminalView`（SwiftTerm）
   - `HostStore` / `SessionStore` / `ForwardStore` / `AIConfig` / `AIChatStore`（`@Observable`）
-  - 内置终端(SwiftTerm)、SFTP(Citadel actor 隔离)、远端指标(ControlMaster)、AI 客户端(OpenAI 兼容流式)、舰队并发执行
+  - SFTP（Citadel，actor 隔离）、远端指标（ControlMaster）、AI 客户端（OpenAI 兼容流式）、舰队并发执行
 
-依赖：SwiftTerm（终端）· Citadel（SFTP）· Inject（仅 debug 热重载）。
+```
+ssh / zsh ⇄ PTYProcess ⇄ TerminalIO ──字节──▶ 引擎（libghostty / SwiftTerm）──▶ Metal / CoreGraphics
+                          (ZMODEM · 密码 · 日志)  ◀──按键与终端应答──
+```
+
+依赖：libghostty（终端，Wireline fork）· SwiftTerm（备用终端）· Citadel（SFTP）· Sparkle（自动更新）· Inject（仅 debug 热重载）。程序图标来自 [Simple Icons](https://simpleicons.org)（CC0）。
 
 ---
 
@@ -220,4 +234,6 @@ swift test
 
 ## 许可
 
-MIT。详见 [LICENSE](LICENSE)。
+第三方：Ghostty（MIT，许可随 App 附带于 `Contents/Resources/ghostty/LICENSE`）及其静态链接的 freetype、harfbuzz、oniguruma 等；SwiftTerm（MIT）；Citadel（MIT）；Sparkle（MIT）；Simple Icons（CC0）。
+
+Wireline 本身：MIT。详见 [LICENSE](LICENSE)。

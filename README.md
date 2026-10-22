@@ -20,7 +20,7 @@
 
 **AI is the lever, not the pitch.** Layered on top is an assistant that actually *does things*: plain language → command, diagnose errors, edit remote files with a change review, even set up tunnels or add hosts for you — always with confirmation, secrets redacted before sending.
 
-Wrapped in a native macOS terminal-hacker look (monospace · green-on-black · themeable), with a real built-in PTY terminal, a visual SFTP browser, graphical port forwarding, and an app-wide animated wallpaper.
+Wrapped in a native macOS card-and-capsule interface (light and dark themes, can follow the system), with a GPU-rendered **libghostty** terminal (Ghostty's core), a visual SFTP browser, graphical port forwarding, and an app-wide animated wallpaper.
 
 ## 📸 Screenshots
 
@@ -108,7 +108,7 @@ A draggable, always-on-top little sprite that floats over your desktop the momen
 
 ## ✅ To-Do
 
-A standalone daily checklist that lives right next to your terminals — open it with **⌘D** (remappable) or from the menu-bar icon.
+A standalone daily checklist that lives right next to your terminals — open it with **⌥⌘D** (remappable) or from the menu-bar icon.
 
 - **Menu-bar extra**: a live count of open items, quick-add, and quick-toggle without opening a window
 - **Due date & time** with overdue highlighting, and **system notifications** when an item comes due
@@ -133,30 +133,35 @@ Data lives only in a local `todos.json` (plus the opt-in encrypted backup); it n
 - 🔑 Auth auto-detection: key / password; passwords stored in the **macOS Keychain**, never in plaintext
 
 **Built-in terminal**
-- 🖥 Real PTY terminal ([SwiftTerm](https://github.com/migueldeicaza/SwiftTerm)), no external Terminal needed
-- 🔐 Password hosts auto-fill via OpenSSH askpass (reusing the Keychain); optional auto `sudo -i` that auto-enters the saved password — even on key-auth hosts
-- 🧩 Session tabs (numbered, double-click to rename inline); ⌘1–9 to switch; ⌘T local shell; ⌘W close current
-- 🪟 **Split panes**: drag a tab onto another's edge to merge them into one split tab; ⌘[ / ⌘] cycle pane focus; detach a pane back to its own tab
-- 📡 **Broadcast input**: type once, send to every open session at once
-- 🔎 **In-terminal search (⌘F)** over the scrollback with match highlighting
-- 🔔 **Command-finished notifications**: get pinged when a long command completes while the app is in the background
+- 🚀 **libghostty terminal engine**: Ghostty's core (in a small Wireline fork) with **GPU (Metal) rendering**, ligatures, Nerd Fonts and halo-free transparency; SwiftTerm stays as a fallback under Settings → Terminal engine
+- 🔌 **Wireline owns the PTY**: output is parsed exactly once — the engine only parses and draws; ZMODEM, password / sudo auto-answer and session logs work on the raw byte stream, for both engines
+- 📐 **Clean resizes**: during a live window drag the PTY size changes with the grid, and with OSC 133 the prompt is cleared before reflow, so p10k-style multi-line / right prompts never duplicate or staircase; sidebar, AI panel and fullscreen changes reflow once with a smooth transition
+- 🛰 **SSH connection panel**: resolve → connect → authenticate → session progress with logs; a readable reason and Retry on failure; steps aside when a passphrase or OTP prompt needs you
+- 🔐 Password hosts auto-fill via OpenSSH askpass (reusing the Keychain); optional auto `sudo -i` with the saved password — even on key-auth hosts; **Touch ID protection for existing keys** (built-in ssh-agent, still system OpenSSH)
+- 🧩 **Tabs**: capsule tabs level with the traffic lights, with a sliding active pill; each pane shows the program it's running (Claude, Codex, Node, Python, Git, Docker, vim…); click the active tab to rename it (split tabs too); ⌘1–9, ⌘T local shell, ⌘W close pane
+- 🪟 **Splits**: ⌘D fills a two-wide grid, ⇧⌘D splits down, ⌥-arrows move focus, drag the gap to resize (double-click to even out), ⇧⌘↩ zooms in place; closing a pane returns to the one you were in; drop a tab or host on a pane edge to merge / open there
+- ⏪ **Prompt-aware (OSC 133)**: ⌘↑ / ⌘↓ jump between prompts, ⌥⌘C copies the last command's output, completion notifications include the exit code
+- 🔎 **Search (⌘F)** with highlighting, **regex** and case sensitivity
+- ⚡ **Quick terminal**: global ⌃` drops one down from the top of the screen
+- 📡 **Broadcast input**: type once, send to every open session
 - 📼 **Session logging**: record a session's output to a file, reveal in Finder
-- ♻️ **Session restore**: reopens (and reconnects) the tabs you had open at last quit
+- ♻️ **Session restore**: reopens and reconnects your tabs, keeping split layouts and working directories
 - 📊 Live remote **CPU / memory / time** in the status bar (via a reused ControlMaster connection)
 - 📝 A vim/vi cheat-sheet pops up while editing (collapsible to a floating icon)
-- 🎨 Built-in themes (Dracula/Nord/Solarized/Gruvbox/Tokyo Night/One Dark) or import **iTerm2 `.itermcolors`**; font & size adjustable
+- 🎨 Light and dark themes, or import **iTerm2 `.itermcolors`**; a **Ghostty-style config file** at `~/.config/wireline/config` with live reload and Ghostty action names in keybinds
 
 **Files & ops**
 - 📁 Visual **SFTP** ([Citadel](https://github.com/orlandos-nl/Citadel)): dual-pane, drag/double-click transfers, new/rename/delete, **right-click AI edit**
 - 📥 **ZMODEM transfer**: run `sz` on the remote and Wireline catches it automatically — files land in `~/Downloads` (revealed in Finder); `rz` uploads via a file picker (bridges the local `lrzsz` — `brew install lrzsz`)
 - ⚡ Batch / fleet execution across selected hosts, aggregated output
 - 🔀 Graphical port forwarding (`ssh -L`, jump hosts, one-click toggle)
-- 🧰 Command snippets: multi-line commands, `«placeholders»` prompt-filled at run time
+- 🧰 **Snippets**: search them from the ⚡ popover or ⌘P (English, Chinese or pinyin); Return inserts, ⌘Return runs; `{{name}}` parameters filled in place and remembered; Linux / macOS scopes; scripts and dangerous commands ask first
 - 🔑 **SSH key manager**: list `~/.ssh` keys with fingerprints, generate (ed25519/rsa/ecdsa), import keys from elsewhere (fixes permissions), copy public key, or deploy to a host via `ssh-copy-id`
 - 💾 Encrypted backup & migration to a file, or **to WebDAV** (ciphertext only) — to-dos ride along too
 
 **Native experience & personalization**
 - 🖼 App-wide **wallpaper**: image or looping **mp4**, translucent panels over it (paused when off-screen)
+- 🧭 **One palette for ⌘K / ⌘P**: type to find hosts, `>` for commands; matches English, Chinese and pinyin
 - ⌨️ **Customizable keyboard shortcuts**: recording UI, conflict detection
 - 🌐 Chinese / English runtime switch; hidden title bar; custom settings window
 
@@ -179,6 +184,8 @@ Requires **Xcode 26+ / Swift 6.2** (macOS 14+).
 swift test
 ```
 
+The libghostty engine ships as a prebuilt `GhosttyKit.xcframework` in `Vendor/` (~280 MB, not in git), put there by `./scripts/fetch-ghosttykit.sh`. It's built from Wireline's Ghostty fork (patches: a host-owned-PTY IO backend, last-command output, regex search …) with Zig 0.17; the fork and prebuilt archives will be published to Releases, after which this step downloads and verifies them automatically.
+
 `bundle.sh` does a release build, assembles `build/Wireline.app` (Info.plist + a generated icon), and ad-hoc signs it so the local Keychain works. You can also open `Package.swift` in Xcode and run (⌘R).
 
 ### Live reload for development
@@ -193,12 +200,19 @@ Two SwiftPM targets:
 
 - **`WirelineCore`** — pure Swift, no UI, unit-testable
   - `SSHConfig` / `ConfigRepository`: parse & write back the standard `~/.ssh/config`, with metadata inlined as `# wireline:` comments; atomic writes + timestamped backups + 0600 perms
-  - `KeychainService` (Security framework) · `SSHCommand` / `PortForwardManager` · `BackupService` (PBKDF2-SHA256 + AES-GCM)
-- **`Wireline`** — SwiftUI app
+  - `PTYProcess`: our own PTY (forkpty, so the child gets its controlling terminal; ordered writes, back-pressure, output drained before exit)
+  - `KeychainService` (Security framework) · `SSHCommand` / `PortForwardManager` · `BackupService` (PBKDF2-SHA256 + AES-GCM) · SSH connect-log parsing, snippet parameters and other pure logic
+- **`Wireline`** — SwiftUI + AppKit app
+  - The terminal in three layers: `TerminalIO` (PTY and byte-stream work: ZMODEM, password answers, logging, busy detection) → the `TerminalEngine` protocol → two implementations, `GhosttyTerminalView` (libghostty, Metal) and `WirelineTerminalView` (SwiftTerm)
   - `HostStore` / `SessionStore` / `ForwardStore` / `AIConfig` / `AIChatStore` (`@Observable`)
-  - built-in terminal (SwiftTerm), SFTP (Citadel, actor-isolated), remote metrics (ControlMaster), AI client (OpenAI-compatible streaming), concurrent fleet execution
+  - SFTP (Citadel, actor-isolated), remote metrics (ControlMaster), AI client (OpenAI-compatible streaming), concurrent fleet execution
 
-Dependencies: SwiftTerm (terminal) · Citadel (SFTP) · Inject (debug live reload only).
+```
+ssh / zsh ⇄ PTYProcess ⇄ TerminalIO ──bytes──▶ engine (libghostty / SwiftTerm) ──▶ Metal / CoreGraphics
+                          (ZMODEM · passwords · logs)  ◀──keys & terminal replies──
+```
+
+Dependencies: libghostty (terminal, Wireline fork) · SwiftTerm (fallback terminal) · Citadel (SFTP) · Sparkle (updates) · Inject (debug live reload only). Program icons from [Simple Icons](https://simpleicons.org) (CC0).
 
 ---
 
@@ -222,4 +236,6 @@ Dependencies: SwiftTerm (terminal) · Citadel (SFTP) · Inject (debug live reloa
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+Third-party: Ghostty (MIT; its license ships in `Contents/Resources/ghostty/LICENSE`) and the libraries it links statically (freetype, harfbuzz, oniguruma …); SwiftTerm (MIT); Citadel (MIT); Sparkle (MIT); Simple Icons (CC0).
+
+Wireline itself: MIT. See [LICENSE](LICENSE).
