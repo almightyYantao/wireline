@@ -529,12 +529,8 @@ struct SessionTab: View {
     @State private var draft = ""
     @FocusState private var focused: Bool
 
-    /// The single session in a leaf tab (nil for a merged/group tab).
-    private var soleSession: UUID? {
-        tab.sessionIDs.count == 1 ? tab.sessionIDs.first : nil
-    }
     private var title: String {
-        tab.sessionIDs.compactMap { sessions.session($0)?.title }.joined(separator: " | ")
+        sessions.tabName(tab) ?? tab.sessionIDs.compactMap { sessions.session($0)?.title }.joined(separator: " | ")
     }
     /// Tooltip text: the full working-directory path when the shell has reported
     /// one, else the tab title. Lets a short "wireline" tab reveal its full path.
@@ -617,15 +613,19 @@ struct SessionTab: View {
         .animation(Motion.state, value: running)
         .animation(Motion.state, value: unread)
         .contentShape(Rectangle())
-        .simultaneousGesture(TapGesture(count: 2).onEnded { if !isEditing, soleSession != nil { beginEdit() } })
-        .simultaneousGesture(TapGesture(count: 1).onEnded { if !isEditing { sessions.focusTab(tab.id) } })
+        // One tap handler that reads the click count: a count-2 TapGesture next
+        // to `.onDrag` and a single-tap gesture often never fires.
+        .simultaneousGesture(TapGesture(count: 1).onEnded {
+            guard !isEditing else { return }
+            if (NSApp.currentEvent?.clickCount ?? 1) >= 2 { beginEdit() } else { sessions.focusTab(tab.id) }
+        })
         .blocksWindowDrag()
         // Drag this tab onto another tab's pane to merge them into a split.
         .onDrag { NSItemProvider(object: tab.id.uuidString as NSString) }
         .wlHover($hover) { TitleBarZoomGuard.shared.pointerInNoZoomZone = $0 }
         .help("⌘\(index) · " + tooltip)
         .contextMenu {
-            if soleSession != nil { Button(loc("重命名…", "Rename…")) { beginEdit() } }
+            Button(loc("重命名…", "Rename…")) { beginEdit() }
             Button(loc("关闭", "Close"), role: .destructive) { closeTab() }
         }
     }
@@ -635,15 +635,14 @@ struct SessionTab: View {
     }
 
     private func beginEdit() {
-        guard let sid = soleSession else { return }
-        draft = sessions.session(sid)?.title ?? ""
+        draft = title
         isEditing = true
         DispatchQueue.main.async { focused = true }
     }
 
     private func commit() {
-        guard isEditing, let sid = soleSession else { isEditing = false; return }
-        sessions.rename(sid, to: draft)
+        guard isEditing else { return }
+        sessions.renameTab(tab, to: draft)
         isEditing = false
     }
 

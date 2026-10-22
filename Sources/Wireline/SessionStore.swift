@@ -749,6 +749,8 @@ struct LayoutSnapshot: Codable {
     var activeSession: Int?
     /// tab index → zoomed session index
     var zoomed: [Int: Int] = [:]
+    /// tab index → name given to a split tab (nil in older data)
+    var names: [Int: String]?
 }
 
 /// How the terminal area is split into panes.
@@ -925,6 +927,9 @@ final class SessionStore {
             built.append(PaneNode.makeLeaf(s.id))
         }
         tabs = built
+        for (ti, name) in layout?.names ?? [:] {
+            if let bt = tabIndexMap[ti], let anchor = tabs[bt].sessionIDs.first { tabNames[anchor] = name }
+        }
         for (ti, si) in layout?.zoomed ?? [:] {
             if let bt = tabIndexMap[ti], let sid = id(si) { zoomedSession[tabs[bt].id] = sid }
         }
@@ -1096,6 +1101,26 @@ final class SessionStore {
     }
 
     /// Rename a tab; the custom title is persisted and restored.
+    /// Names given to split tabs, keyed by one of the tab's sessions (a tab's
+    /// own id changes whenever its layout does). A single-pane tab's name is
+    /// its session's title instead.
+    private(set) var tabNames: [UUID: String] = [:]
+
+    func tabName(_ tab: PaneNode) -> String? {
+        tab.sessionIDs.lazy.compactMap { self.tabNames[$0] }.first
+    }
+
+    /// Rename a tab: a single pane renames its session; a split tab gets a
+    /// name of its own. An empty name on a split tab goes back to the panes' titles.
+    func renameTab(_ tab: PaneNode, to name: String) {
+        let ids = tab.sessionIDs
+        if ids.count == 1, let only = ids.first { rename(only, to: name); return }
+        for id in ids { tabNames[id] = nil }
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty, let anchor = ids.first { tabNames[anchor] = trimmed }
+        persist()
+    }
+
     func rename(_ id: UUID, to name: String) {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, let s = session(id) else { return }
@@ -1142,6 +1167,11 @@ final class SessionStore {
     func close(_ id: UUID) {
         guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
         focusHistory.removeAll { $0 == id }
+        // A split tab's name was keyed by this pane: hand it to a surviving one.
+        if let name = tabNames.removeValue(forKey: id), let ti = tabIndex(containing: id),
+           let other = tabs[ti].sessionIDs.first(where: { $0 != id }) {
+            tabNames[other] = name
+        }
         // Closing the focused pane: fall back to the pane focused before it in
         // the same tab, else its neighbour before it in layout order.
         var successor: UUID?
@@ -1257,14 +1287,17 @@ final class SessionStore {
             }
         }
         var zoomed: [Int: Int] = [:]
+        var names: [Int: String] = [:]
         for (ti, tab) in tabs.enumerated() {
             if let z = zoomedSession(inTab: tab.id), let si = index[z] { zoomed[ti] = si }
+            if tab.sessionIDs.count > 1, let name = tabName(tab) { names[ti] = name }
         }
         let layout = LayoutSnapshot(
             tabs: tabs.compactMap(encode),
             activeTab: tabs.firstIndex { $0.id == activeTabID },
             activeSession: activeID.flatMap { index[$0] },
-            zoomed: zoomed)
+            zoomed: zoomed,
+            names: names.isEmpty ? nil : names)
         if let data = try? JSONEncoder().encode(layout) {
             UserDefaults.standard.set(data, forKey: Self.layoutKey)
         }
