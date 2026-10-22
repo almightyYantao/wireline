@@ -13,8 +13,13 @@ protocol TerminalEngine: NSView {
     var io: TerminalIO? { get set }
     /// Bytes for the child: keystrokes, pastes, query replies.
     var onInput: ((ArraySlice<UInt8>) -> Void)? { get set }
-    /// The grid changed size (`TerminalIO` tells the PTY, throttled).
+    /// The grid changed size (`TerminalIO` tells the PTY, throttled — unless
+    /// `coalescesResize`).
     var onGridResize: (() -> Void)? { get set }
+    /// The engine resizes the PTY itself, in step with its grid
+    /// (`TerminalIO.ptyWindowSize`, from any thread), coalescing a drag on its
+    /// own: `TerminalIO` must not throttle or send a size of its own.
+    var coalescesResize: Bool { get }
     /// Output from the child, to parse and draw.
     func feed(_ bytes: ArraySlice<UInt8>)
     /// The grid size (and its pixel size) to report to the PTY.

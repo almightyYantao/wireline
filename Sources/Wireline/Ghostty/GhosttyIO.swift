@@ -11,12 +11,20 @@ import os
 ///
 ///   child output  → `feed` → `ghostty_surface_io_feed` (any thread, copies, in order)
 ///   keys, pastes, query / mouse / focus replies → `io_write_cb` → `onInput` → PTY
-///   grid changes  → `io_resize_cb` → `gridSize` + `onGridResize` → TIOCSWINSZ (throttled)
+///   grid changes  → `io_resize_cb` → TIOCSWINSZ right there, then `gridSize` + `onGridResize`
 ///
 /// Both callbacks run on libghostty's IO thread with the terminal lock held
 /// (the first resize: synchronously inside `ghostty_surface_new`). They get
 /// a `GhosttyIOBox` — not the view — copy what they need, and hop to main;
 /// they never call `ghostty_surface_*`.
+///
+/// The resize is the exception that doesn't wait for main: libghostty calls
+/// it just before it reflows the grid and blanks the prompt (OSC 133) for
+/// the shell to redraw. Telling the PTY right there, under the same lock,
+/// means the shell's SIGWINCH redraw is always for the width the grid has
+/// when it's parsed — what Ghostty's own pty backend does. Throttling it on
+/// main (as for SwiftTerm) let zsh redraw for stale widths during a live
+/// drag: prompts erased, or stacked and scattered right prompts.
 ///
 /// When the child exits, `ghostty_surface_io_exited` is deliberately *not*
 /// called: Wireline shows its own banner and reconnects by starting a new
@@ -133,7 +141,7 @@ final class GhosttyIO {
     // MARK: Grid
 
     /// The grid as libghostty last reported it (`io_resize_cb`), nil before.
-    var grid: winsize? { box.grid.withLock { $0 } }
+    var grid: winsize? { box.grid }
 
     fileprivate func gridResized() { view?.onGridResize?() }
 
@@ -155,11 +163,36 @@ final class GhosttyIO {
 }
 
 /// The part of a surface's IO state libghostty's IO thread may touch: the
-/// view's id (to find it again on main) and the last grid size.
+/// view's id (to find it again on main), the last grid size, and the
+/// session's PTY size to keep in step with it.
 final class GhosttyIOBox: Sendable {
     let id: Int
-    let grid = OSAllocatedUnfairLock<winsize?>(initialState: nil)
+    private struct State {
+        var grid: winsize?
+        var pty: PTYWindowSize?
+    }
+    /// One lock for both, so a size set while `attach` runs can't be lost
+    /// or overtaken by an older one.
+    private let state = OSAllocatedUnfairLock(initialState: State())
     init(id: Int) { self.id = id }
+
+    var grid: winsize? { state.withLock { $0.grid } }
+
+    /// IO thread: the grid is about to become `size` — the PTY too.
+    func gridWillResize(_ size: winsize) {
+        state.withLock { s in
+            s.grid = size
+            s.pty?.set(size)
+        }
+    }
+
+    /// Main: the session's PTY (nil to detach). It gets the current grid.
+    func attach(_ pty: PTYWindowSize?) {
+        state.withLock { s in
+            s.pty = pty
+            if let grid = s.grid { pty?.set(grid) }
+        }
+    }
 
     fileprivate static func from(_ p: UnsafeMutableRawPointer?) -> GhosttyIOBox? {
         p.map { Unmanaged<GhosttyIOBox>.fromOpaque($0).takeUnretainedValue() }
@@ -178,15 +211,14 @@ private func ghosttyIOWrite(_ userdata: UnsafeMutableRawPointer?, _ bytes: Unsaf
     }
 }
 
-/// The grid changed: store it (read from main as `gridSize`), then let
-/// `TerminalIO` tell the PTY, throttled.
+/// The grid is about to change: resize the PTY now, before the reflow (see
+/// the type comment), store the size (read from main as `gridSize`), then
+/// tell main for its bookkeeping.
 private func ghosttyIOResize(_ userdata: UnsafeMutableRawPointer?, _ cols: UInt16, _ rows: UInt16,
                              _ widthPx: UInt32, _ heightPx: UInt32) {
     guard let box = GhosttyIOBox.from(userdata) else { return }
-    box.grid.withLock {
-        $0 = winsize(ws_row: rows, ws_col: cols,
-                     ws_xpixel: UInt16(clamping: widthPx), ws_ypixel: UInt16(clamping: heightPx))
-    }
+    box.gridWillResize(winsize(ws_row: rows, ws_col: cols,
+                               ws_xpixel: UInt16(clamping: widthPx), ws_ypixel: UInt16(clamping: heightPx)))
     let id = box.id
     DispatchQueue.main.async {
         MainActor.assumeIsolated { GhosttyRuntime.shared.view(id)?.ioGlue.gridResized() }
