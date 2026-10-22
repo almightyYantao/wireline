@@ -7,6 +7,8 @@ import AppKit
 /// on top so it shows through.
 struct WallpaperView: NSViewRepresentable {
     let path: String?
+    /// The wallpaper's average colour, for window backgrounds (see paintWindowBackground).
+    @MainActor static var edgeColor: NSColor?
 
     func makeNSView(context: Context) -> WallpaperNSView { WallpaperNSView() }
     func updateNSView(_ nsView: WallpaperNSView, context: Context) { nsView.apply(path) }
@@ -29,6 +31,7 @@ struct WallpaperView: NSViewRepresentable {
             guard currentPath != .some(path) else { return }
             currentPath = .some(path)
             teardownVideo()
+            edgeColor = nil
             layer?.contents = nil
             layer?.backgroundColor = NSColor(red: 0.039, green: 0.055, blue: 0.039, alpha: 1).cgColor
 
@@ -51,7 +54,34 @@ struct WallpaperView: NSViewRepresentable {
             } else if let image = NSImage(contentsOfFile: path) {
                 layer?.contents = image
                 layer?.contentsGravity = .resizeAspectFill
+                edgeColor = Self.averageColor(of: image)
             }
+            paintWindowBackground()
+        }
+
+        /// During a live resize SwiftUI lays this view out a frame behind the
+        /// window edge, so the window's own background shows along the new
+        /// strip for a moment. Make that background the wallpaper's average
+        /// colour, so the strip blends in instead of flashing dark.
+        private var edgeColor: NSColor? {
+            didSet { WallpaperView.edgeColor = edgeColor }
+        }
+
+        private func paintWindowBackground() {
+            guard let window else { return }
+            window.backgroundColor = edgeColor ?? NSColor(Palette.shared.bg)
+        }
+
+        private static func averageColor(of image: NSImage) -> NSColor? {
+            guard let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
+            var px = [UInt8](repeating: 0, count: 4)
+            guard let ctx = CGContext(data: &px, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
+                                      space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+            ctx.interpolationQuality = .medium
+            ctx.draw(cg, in: CGRect(x: 0, y: 0, width: 1, height: 1))
+            return NSColor(srgbRed: CGFloat(px[0]) / 255, green: CGFloat(px[1]) / 255,
+                           blue: CGFloat(px[2]) / 255, alpha: 1)
         }
 
         private func teardownVideo() {
@@ -69,6 +99,8 @@ struct WallpaperView: NSViewRepresentable {
             observers.forEach { NotificationCenter.default.removeObserver($0) }
             observers.removeAll()
             guard let window else { updatePlayback(); return }
+            // After WindowChromeController, which sets the theme colour.
+            DispatchQueue.main.async { [weak self] in self?.paintWindowBackground() }
             let nc = NotificationCenter.default
             let names: [Notification.Name] = [
                 NSWindow.didChangeOcclusionStateNotification,

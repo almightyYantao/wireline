@@ -59,7 +59,7 @@ final class WindowChromeController {
         // window background (a fallback behind the wallpaper) and remove the
         // separator; these don't get clobbered.
         window.titlebarSeparatorStyle = .none
-        window.backgroundColor = NSColor(Palette.shared.bg)
+        window.backgroundColor = WallpaperView.edgeColor ?? NSColor(Palette.shared.bg)
         // Don't let dragging arbitrary content move the window — otherwise
         // dragging a session tab is swallowed as a window move instead of an
         // `.onDrag`. The title-bar strip still moves the window.
