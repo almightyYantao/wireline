@@ -47,6 +47,10 @@ let package = Package(
                 "GhosttyKit"
             ],
             exclude: ["Ghostty/LICENSE-ghostty"],
+            // The Vendor/ GhosttyKit is Wireline's Ghostty fork (manual-IO termio,
+            // last-command output, case-sensitive search). Drop this to build
+            // against stock libghostty: the ghostty engine then stays off.
+            swiftSettings: [.define("WIRELINE_GHOSTTY_MANUAL_IO")],
             // `-interposable` lets InjectionIII hot-swap functions at runtime.
             // Debug-only, so release bundles are unaffected.
             linkerSettings: ghosttyLinkerSettings + [
@@ -61,7 +65,7 @@ let package = Package(
         // WIRELINE_GHOSTTY_HARNESS=1).
         .testTarget(
             name: "WirelineGhosttyHarness",
-            dependencies: ["Wireline", "GhosttyKit"]
+            dependencies: ["Wireline", "GhosttyKit", .product(name: "SwiftTerm", package: "SwiftTerm")]
         )
     ]
 )

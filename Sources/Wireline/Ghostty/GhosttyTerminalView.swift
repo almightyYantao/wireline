@@ -9,13 +9,17 @@ import struct SwiftTerm.SearchOptions
 
 /// Owns a `ghostty_surface_t` (Ghostty.Surface's pattern): freed on the main
 /// thread when the last reference goes, whichever thread that happens on.
+/// It also keeps the surface's `io_userdata` box alive until the surface
+/// (whose IO thread calls back with it) is gone.
 final class GhosttySurfaceHandle: Sendable {
     nonisolated(unsafe) let raw: ghostty_surface_t
-    init(_ raw: ghostty_surface_t) { self.raw = raw }
+    private let ioBox: GhosttyIOBox
+    init(_ raw: ghostty_surface_t, ioBox: GhosttyIOBox) { self.raw = raw; self.ioBox = ioBox }
     deinit {
         if Thread.isMainThread { ghostty_surface_free(raw); return }
         nonisolated(unsafe) let raw = raw
-        Task.detached { @MainActor in ghostty_surface_free(raw) }
+        let box = ioBox
+        Task.detached { @MainActor in ghostty_surface_free(raw); _ = box }
     }
 }
 
@@ -67,8 +71,6 @@ final class GhosttyTerminalView: NSView, TerminalEngine {
 
     /// OSC 133 command-finished reports (exit code, seconds).
     var onCommandFinished: ((Int?, Double) -> Void)?
-    /// `.exec` mode: libghostty's child exited / the surface wants to close.
-    var onChildExited: (() -> Void)?
     /// Last scrollbar state from libghostty (rows: total, first visible, visible).
     private(set) var scrollbar: (total: UInt64, offset: UInt64, length: UInt64)?
     /// The URL under the pointer while ⌘ is held.
@@ -81,9 +83,9 @@ final class GhosttyTerminalView: NSView, TerminalEngine {
     private let id: Int
     private var terminalAppearance: TerminalAppearance?
 
-    init(frame: CGRect, mode: GhosttyIOMode = .manual) {
+    override init(frame: CGRect) {
         id = GhosttyRuntime.shared.makeID()
-        ioGlue = GhosttyIO(mode: mode)
+        ioGlue = GhosttyIO(id: id)
         super.init(frame: frame.width > 0 && frame.height > 0 ? frame : CGRect(x: 0, y: 0, width: 800, height: 480))
         ioGlue.view = self
         GhosttyRuntime.shared.register(self, id: id)
@@ -102,7 +104,7 @@ final class GhosttyTerminalView: NSView, TerminalEngine {
             ghosttyLog.error("ghostty_surface_new failed")
             return
         }
-        surface = GhosttySurfaceHandle(raw)
+        surface = GhosttySurfaceHandle(raw, ioBox: ioGlue.box)
         if Self.keepsCaretShapeWhenUnfocused { ghostty_surface_set_focus(raw, true) }
         pushSize()
         updateTrackingAreas()
@@ -125,13 +127,9 @@ final class GhosttyTerminalView: NSView, TerminalEngine {
     func didDeliverResize() {}   // libghostty handles prompt redraw on resize (OSC 133) itself
     @discardableResult func flushPendingResize() -> Bool { io?.flushPendingResize() ?? false }
 
-    var gridSize: winsize {
-        guard let s = surface?.raw else { return winsize(ws_row: 24, ws_col: 80, ws_xpixel: 0, ws_ypixel: 0) }
-        let size = ghostty_surface_size(s)
-        return winsize(ws_row: size.rows, ws_col: size.columns,
-                       ws_xpixel: UInt16(clamping: UInt32(size.columns) * size.cell_width_px),
-                       ws_ypixel: UInt16(clamping: UInt32(size.rows) * size.cell_height_px))
-    }
+    /// The grid libghostty last reported through `io_resize_cb` — the size
+    /// its parser is at, so a redraw after TIOCSWINSZ lands right.
+    var gridSize: winsize { ioGlue.grid ?? winsize(ws_row: 24, ws_col: 80, ws_xpixel: 0, ws_ypixel: 0) }
 
     /// One cell in points.
     var cellSize: CGSize {
@@ -143,28 +141,19 @@ final class GhosttyTerminalView: NSView, TerminalEngine {
     // MARK: Size and scale
 
     private var backingScale: CGFloat { window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2 }
-    private var lastGrid: (cols: UInt16, rows: UInt16) = (0, 0)
 
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
         pushSize()
     }
 
-    /// The framebuffer size goes to libghostty; a new rows×cols goes to the
-    /// PTY (via `onGridResize` → `TerminalIO`, throttled).
+    /// The framebuffer size goes to libghostty; a new rows×cols comes back
+    /// through `io_resize_cb` and goes to the PTY (`onGridResize` →
+    /// `TerminalIO`, throttled).
     private func pushSize() {
         guard let s = surface?.raw, frame.width >= 1, frame.height >= 1 else { return }
         let scale = backingScale
         ghostty_surface_set_size(s, UInt32(frame.width * scale), UInt32(frame.height * scale))
-        checkGrid()
-    }
-
-    private func checkGrid() {
-        guard let s = surface?.raw else { return }
-        let size = ghostty_surface_size(s)
-        guard size.columns != lastGrid.cols || size.rows != lastGrid.rows else { return }
-        lastGrid = (size.columns, size.rows)
-        onGridResize?()
     }
 
     override func viewDidChangeBackingProperties() {
@@ -253,7 +242,7 @@ final class GhosttyTerminalView: NSView, TerminalEngine {
         guard let s = surface?.raw else { return }
         if Self.keepsCaretShapeWhenUnfocused {
             applyConfig()
-            ioGlue.focusChanged(focused, synthesizeReports: true)
+            ioGlue.focusChanged(focused)
         } else {
             ghostty_surface_set_focus(s, focused)
         }
@@ -273,8 +262,7 @@ final class GhosttyTerminalView: NSView, TerminalEngine {
         guard let s = surface?.raw, let appearance = terminalAppearance else { return }
         let focused = Self.keepsCaretShapeWhenUnfocused ? isFocused : true
         guard let config = GhosttyRuntime.shared.config(for: appearance, focused: focused) else { return }
-        ghostty_surface_update_config(s, config)
-        checkGrid()   // a font change moves the grid
+        ghostty_surface_update_config(s, config)   // a font change → io_resize_cb
     }
 
     // MARK: Snapshot
@@ -341,24 +329,36 @@ final class GhosttyTerminalView: NSView, TerminalEngine {
 
     // MARK: Search
     //
-    // Ghostty's search is a literal, ASCII case-insensitive substring search
-    // on a background thread: `options.caseSensitive` / `.regex` are ignored,
-    // and match counts arrive asynchronously (SEARCH_TOTAL / SEARCH_SELECTED)
-    // — `ghosttySearchDidUpdate` tells the find bar to re-read the summary.
+    // Ghostty's search is a literal substring search on a background thread:
+    // ASCII case-insensitive unless `options.caseSensitive` (the fork's
+    // `set_search_case_sensitive`); `.regex` is not supported and ignored.
+    // Match counts arrive asynchronously (SEARCH_TOTAL / SEARCH_SELECTED) —
+    // `ghosttySearchDidUpdate` tells the find bar to re-read the summary.
 
     private var searchNeedle: String?
+    private var searchCaseSensitive = false
     private var searchTotal: Int?
     private var searchSelected: Int?
 
-    func findNext(_ term: String, options: SearchOptions, scrollToResult: Bool) -> Bool { search(term, "next") }
-    func findPrevious(_ term: String, options: SearchOptions, scrollToResult: Bool) -> Bool { search(term, "previous") }
+    func findNext(_ term: String, options: SearchOptions, scrollToResult: Bool) -> Bool {
+        search(term, options, "next")
+    }
+    func findPrevious(_ term: String, options: SearchOptions, scrollToResult: Bool) -> Bool {
+        search(term, options, "previous")
+    }
 
-    private func search(_ term: String, _ direction: String) -> Bool {
-        guard !term.isEmpty else { clearSearch(); return false }
-        if searchNeedle != term {
+    private func search(_ term: String, _ options: SearchOptions, _ direction: String) -> Bool {
+        guard !term.isEmpty, let s = surface?.raw else { clearSearch(); return false }
+        if searchNeedle != term || searchCaseSensitive != options.caseSensitive {
+            // A running search keeps its matching mode: restart it.
+            if searchNeedle != nil, searchCaseSensitive != options.caseSensitive { binding("end_search") }
             searchNeedle = term
+            searchCaseSensitive = options.caseSensitive
             searchTotal = nil
             searchSelected = nil
+            #if WIRELINE_GHOSTTY_MANUAL_IO
+            ghostty_surface_set_search_case_sensitive(s, options.caseSensitive)
+            #endif
             binding("search:\(term)")
         }
         binding("navigate_search:\(direction)")
@@ -366,7 +366,7 @@ final class GhosttyTerminalView: NSView, TerminalEngine {
     }
 
     func searchMatchSummary(_ term: String, options: SearchOptions, limit: Int) -> (index: Int, total: Int) {
-        guard term == searchNeedle else { return (0, 0) }
+        guard term == searchNeedle, options.caseSensitive == searchCaseSensitive else { return (0, 0) }
         return (searchSelected.map { $0 + 1 } ?? 0, min(searchTotal ?? 0, limit))
     }
 
@@ -388,13 +388,13 @@ final class GhosttyTerminalView: NSView, TerminalEngine {
     func handle(_ event: GhosttyEvent) {
         switch event {
         case .title(let t): onTitleReport?(t)
-        case .pwd(let p):
-            // Manual IO sniffs OSC 7 itself (remote hosts too); this is the
-            // local-only report from libghostty's own child.
-            if !ioGlue.isManual { onDirectoryChange?(p) }
+        case .pwd:
+            // GhosttyIO sniffs OSC 7 from the stream (remote hosts too);
+            // libghostty's local-only, decoded report would just duplicate it.
+            break
         case let .commandFinished(code, seconds): onCommandFinished?(code, seconds)
         case let .scrollbar(total, offset, length): scrollbar = (total, offset, length)
-        case .cellSize: checkGrid()
+        case .cellSize: break
         case .searchStarted: break
         case .searchEnded: searchTotal = nil; searchSelected = nil; notifySearch()
         case .searchTotal(let n): searchTotal = n; notifySearch()
@@ -404,7 +404,7 @@ final class GhosttyTerminalView: NSView, TerminalEngine {
         case .mouseOverLink(let url): hoveredLink = url
         case .openURL(let url): openLink(url)
         case .bell: NSSound.beep()
-        case .childExited: onChildExited?()
+        case .childExited: break      // manual IO: TerminalIO reports the exit
         case .rendererHealthy(let ok): if !ok { ghosttyLog.error("renderer unhealthy") }
         case .ignored: break
         }
@@ -422,10 +422,9 @@ final class GhosttyTerminalView: NSView, TerminalEngine {
         NSWorkspace.shared.open(url)
     }
 
-    func surfaceRequestedClose(processAlive: Bool) {
-        // Manual IO: the PTY (and its exit) is TerminalIO's business.
-        if !ioGlue.isManual { onChildExited?() }
-    }
+    /// libghostty asked to close the surface. Manual IO: the PTY and its exit
+    /// are TerminalIO's business, and Wireline closes panes itself.
+    func surfaceRequestedClose(processAlive: Bool) {}
 
     private func setMouseShape(_ shape: ghostty_action_mouse_shape_e) {
         let cursor: NSCursor? = switch shape {

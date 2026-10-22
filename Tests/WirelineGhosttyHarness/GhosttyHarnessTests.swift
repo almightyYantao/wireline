@@ -1,12 +1,14 @@
 import AppKit
 import XCTest
+import struct SwiftTerm.SearchOptions
 import GhosttyKit
 @testable import Wireline
 
-/// End-to-end check of the libghostty engine without the manual-IO fork: one
-/// `GhosttyTerminalView` in `.exec` mode (libghostty runs `/bin/zsh -l`
-/// itself) in a window that never takes focus, driven only through the view's
-/// own key path.
+/// End-to-end check of the libghostty engine the way a session runs it: one
+/// `GhosttyTerminalView` with manual IO, wired to a real `TerminalIO` (its
+/// `LocalProcess` PTY runs `/bin/zsh -l`) exactly as `TerminalSession.init`
+/// does, in a window that never takes focus, driven through the view's own
+/// key path.
 ///
 /// Opens a window and a shell, so it only runs when asked:
 ///
@@ -107,11 +109,15 @@ final class GhosttyHarnessTests: XCTestCase {
         // A predictable shell: login zsh, but our own tiny rc instead of the user's.
         let zdot = outDir.appendingPathComponent("zdotdir", isDirectory: true)
         try? FileManager.default.createDirectory(at: zdot, withIntermediateDirectories: true)
-        try """
-            PROMPT='wl%% '
+        // OSC 133 marks (Wireline's own zsh integration does the same), a
+        // title, and OSC 7 from a *remote-looking* host — libghostty drops
+        // those, the stream sniffer must not.
+        try #"""
+            PROMPT=$'%{\e]133;A\a%}wl%% %{\e]133;B\a%}'
             unsetopt PROMPT_SP
-            precmd() { print -n "\\e]2;wl-title\\a\\e]7;file://$HOST$PWD\\a" }
-            """.write(to: zdot.appendingPathComponent(".zshrc"), atomically: true, encoding: .utf8)
+            preexec() { print -n "\e]133;C\a" }
+            precmd() { print -n "\e]133;D;$?\a\e]2;wl-title\a\e]7;file://wl-remote-host$PWD\a" }
+            """#.write(to: zdot.appendingPathComponent(".zshrc"), atomically: true, encoding: .utf8)
 
         let window = HarnessWindow(contentRect: NSRect(x: 120, y: 120, width: 720, height: 420),
                               styleMask: [.titled, .resizable], backing: .buffered, defer: false)
@@ -123,16 +129,29 @@ final class GhosttyHarnessTests: XCTestCase {
         wallpaper.autoresizingMask = [.width, .height]
         window.contentView = wallpaper
 
-        let view = GhosttyTerminalView(frame: wallpaper.bounds, mode: .exec(
-            command: "/bin/zsh -l", workingDirectory: NSTemporaryDirectory(),
-            environment: ["ZDOTDIR": zdot.path, "LANG": "en_US.UTF-8"]))
+        let view = GhosttyTerminalView(frame: wallpaper.bounds)
         XCTAssertNotNil(view.surface, "surface created")
+        // Engine ⇄ PTY, as TerminalSession.init wires it. Every byte the
+        // child gets is also recorded.
+        let io = TerminalIO(password: nil, autoSudo: false)
+        var toChild: [UInt8] = []
+        var disconnects: [Int32?] = []
+        view.io = io
+        io.engine = view
+        view.onInput = { [weak io] bytes in toChild += bytes; io?.send(bytes) }
+        io.onDisconnected = { disconnects.append($0) }
+        let env = ["TERM=xterm-256color", "COLORTERM=truecolor", "LANG=en_US.UTF-8", "ZDOTDIR=\(zdot.path)",
+                   "HOME=\(NSHomeDirectory())", "USER=\(NSUserName())", "PATH=/usr/bin:/bin:/usr/sbin:/sbin"]
+        func launch() {
+            io.start(executable: "/bin/zsh", args: ["-l"], environment: env, execName: "-zsh",
+                     currentDirectory: NSTemporaryDirectory())
+        }
         // Hosted the way the app hosts it (freeze / snapshot / commit around layout animations).
         let container = TerminalContainerView(term: view)
         container.frame = wallpaper.bounds
         container.autoresizingMask = [.width, .height]
         var gridResizes = 0, titles: [String] = [], dirs: [String] = [], closes = 0, opened: [String] = []
-        view.onGridResize = { gridResizes += 1 }
+        view.onGridResize = { [weak io] in gridResizes += 1; io?.gridDidChange() }
         view.onTitleReport = { titles.append($0) }
         view.onDirectoryChange = { dirs.append($0 ?? "nil") }
         view.onCloseRequested = { closes += 1 }
@@ -145,6 +164,9 @@ final class GhosttyHarnessTests: XCTestCase {
         window.orderFrontRegardless()            // never activate: don't steal focus
         window.makeFirstResponder(view)
         log("window \(window.windowNumber) key=\(window.isKeyWindow) firstResponder=\(window.firstResponder === view)")
+        pump(0.1)                               // the real size reaches io_resize_cb first
+        launch()
+        log("child started via TerminalIO/LocalProcess, pid \(io.process.shellPid), grid \(view.gridSize.ws_col)×\(view.gridSize.ws_row)")
 
         // 1. The shell comes up.
         let prompt = wait(10) { screen(view).contains("wl%") }
@@ -169,7 +191,7 @@ final class GhosttyHarnessTests: XCTestCase {
         log("IME: preedit set \(preeditShown), commit '中文' echoed: \(chinese)")
         XCTAssertTrue(chinese)
 
-        // 4. send(txt:) (exec mode: the `text:` binding).
+        // 4. send(txt:) (straight to the PTY, like SwiftTerm's send).
         view.send(txt: "echo sent-ok\r")
         let sent = wait(5) { screen(view).contains("\nsent-ok") }
         log("send(txt:) → 'sent-ok': \(sent)")
@@ -198,7 +220,7 @@ final class GhosttyHarnessTests: XCTestCase {
         // 5. Resize: the grid follows and onGridResize fires.
         let before = view.gridSize, resizesBefore = gridResizes
         window.setContentSize(NSSize(width: 960, height: 560))
-        pump(0.3)
+        _ = wait(5) { view.gridSize.ws_col != before.ws_col && gridResizes > resizesBefore }
         let after = view.gridSize
         let cell = view.cellSize
         let expectCols = Int(view.bounds.width / cell.width), expectRows = Int(view.bounds.height / cell.height)
@@ -209,6 +231,8 @@ final class GhosttyHarnessTests: XCTestCase {
         XCTAssertEqual(Int(after.ws_col), expectCols)
         XCTAssertEqual(Int(after.ws_row), expectRows)
         XCTAssertGreaterThan(gridResizes, resizesBefore)
+        // TerminalIO throttles TIOCSWINSZ (50 ms); deliver it now, as a container commit does.
+        view.flushPendingResize()
         view.send(txt: "stty size\r")
         let stty = wait(5) { screen(view).contains("\n\(after.ws_row) \(after.ws_col)") }
         log("child sees `stty size` = \(after.ws_row) \(after.ws_col): \(stty)")
@@ -232,8 +256,35 @@ final class GhosttyHarnessTests: XCTestCase {
         XCTAssertTrue(found)
         view.clearSearch()
 
-        // 8. jump_to_prompt (needs OSC 133 marks; this rc emits none).
-        log("jumpToPrompt(-1) without shell integration → \(view.jumpToPrompt(-1))")
+        // 7b. Case-sensitive search (the fork's set_search_case_sensitive).
+        view.send(txt: "echo Needle needle NEEDLE\r")
+        _ = wait(5) { screen(view).contains("\nNeedle needle NEEDLE") }
+        func count(_ caseSensitive: Bool) -> Int {
+            let o = SearchOptions(caseSensitive: caseSensitive, regex: false)
+            _ = view.findNext("needle", options: o)
+            _ = wait(3) { view.searchMatchSummary("needle", options: o).total > 0 }
+            pump(0.2)
+            return view.searchMatchSummary("needle", options: o).total
+        }
+        let insensitive = count(false), sensitive = count(true), insensitiveAgain = count(false)
+        view.clearSearch()
+        log("search 'needle': case-insensitive \(insensitive), case-sensitive \(sensitive), back \(insensitiveAgain)")
+        XCTAssertEqual(insensitive, 6)       // the command line and its output
+        XCTAssertEqual(sensitive, 2)
+        XCTAssertEqual(insensitiveAgain, 6)
+
+        // 8. Last command output (OSC 133) and jump to prompt.
+        view.send(txt: "printf 'last-1\\nlast-2\\n'\r")
+        let last = wait(5) { view.lastCommandOutput() == "last-1\nlast-2" }
+        log("lastCommandOutput → \(String(reflecting: view.lastCommandOutput())) (\(last))")
+        XCTAssertTrue(last)
+        log("jumpToPrompt(-1) → \(view.jumpToPrompt(-1)), jumpToPrompt(1) → \(view.jumpToPrompt(1))")
+        _ = view.binding("scroll_to_bottom")
+
+        // 8b. OSC 7: the remote-looking host reaches onDirectoryChange (sniffer).
+        log("titles \(titles.suffix(1)), OSC 7 \(dirs.suffix(1)) → parseOSC7Path \(dirs.last.flatMap(TerminalSession.parseOSC7Path) ?? "nil")")
+        XCTAssertTrue(dirs.contains { $0.hasPrefix("file://wl-remote-host/") }, "\(dirs)")
+        XCTAssertTrue(titles.contains("wl-title"))
 
         // 9. ⌘W → onCloseRequested (this view is the focused pane).
         _ = window.performKeyEquivalent(with: NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .command,
@@ -263,6 +314,28 @@ final class GhosttyHarnessTests: XCTestCase {
         XCTAssertGreaterThan(caretFocused, 200)
         XCTAssertTrue((60...120).contains(caretUnfocused), "dimmed, not hollow (a hollow block's centre would be ~0)")
         XCTAssertFalse(NSApp.isActive, "the harness must not activate itself")
+
+        // 10a. Focus reports: a program that sets DECSET 1004 gets ESC[O / ESC[I
+        // (synthesized: libghostty itself stays "focused").
+        view.send(txt: "printf '\\e[?1004h'; echo fr-on\r")
+        _ = wait(5) { screen(view).contains("\nfr-on") }
+        let reportsOn = view.ioGlue.focusReporting
+        toChild = []
+        window.makeFirstResponder(nil)
+        _ = wait(1) { !view.isFocused }
+        window.makeFirstResponder(view)
+        _ = wait(1) { view.isFocused }
+        pump(0.1)
+        let reports = String(decoding: toChild, as: UTF8.self)
+        view.send(txt: "\u{03}printf '\\e[?1004l'; echo fr-off\r")
+        _ = wait(5) { screen(view).contains("\nfr-off") }
+        toChild = []
+        window.makeFirstResponder(nil); _ = wait(1) { !view.isFocused }
+        window.makeFirstResponder(view); _ = wait(1) { view.isFocused }
+        log("focus reports: 1004 seen \(reportsOn), sent \(reports.debugDescription); after 1004l sent \(String(decoding: toChild, as: UTF8.self).debugDescription)")
+        XCTAssertTrue(reportsOn)
+        XCTAssertEqual(reports, "\u{1b}[O\u{1b}[I")
+        XCTAssertTrue(toChild.isEmpty)
 
         // 10b. Container freeze → resize under the cover → commit.
         if !window.occlusionState.contains(.visible), let s = view.surface?.raw {
@@ -327,11 +400,31 @@ final class GhosttyHarnessTests: XCTestCase {
         // 13. No config diagnostics from any generated config.
         log("config diagnostics: \(GhosttyRuntime.diagnostics)")
         XCTAssertEqual(GhosttyRuntime.diagnostics, [])
-        log("titles \(titles.suffix(3)), OSC7/PWD \(dirs.suffix(2)), grid resizes \(gridResizes)")
+        log("grid resizes \(gridResizes)")
+
+        // 14. Reconnect into the same view (TerminalSession.reconnect), without
+        // ghostty_surface_io_exited: the old child exits, a new one feeds on.
+        view.send(txt: "exit 3\r")
+        let exited = wait(5) { !disconnects.isEmpty }
+        log("child exit → onDisconnected \(disconnects) (\(exited)); typing while dead reaches the child: \(io.isRunning)")
+        XCTAssertTrue(exited)
+        io.resetForReconnect()
+        view.feed(text: "\r\n\u{1b}[2m──────── 重新连接 / reconnecting ────────\u{1b}[0m\r\n")
+        launch()
+        let again = wait(10) { screen(view).components(separatedBy: "reconnecting").last?.contains("wl%") == true }
+        type("echo again", into: window)
+        pressReturn(window)
+        let againOut = wait(5) { screen(view).split(separator: "\n").contains { $0.trimmingCharacters(in: .whitespaces) == "again" } }
+        view.send(txt: "stty size\r")
+        let g = view.gridSize
+        let sttyAgain = wait(5) { screen(view).components(separatedBy: "reconnecting").last?.contains("\n\(g.ws_row) \(g.ws_col)") == true }
+        log("reconnect: new prompt \(again), typed 'echo again' → \(againOut), new child's stty size \(g.ws_row) \(g.ws_col) → \(sttyAgain)")
+        XCTAssertTrue(againOut)
+        XCTAssertTrue(sttyAgain)
 
         // Tear down: shell exits, view and surface go away cleanly.
         view.send(txt: "exit\r")
-        pump(0.5)
+        _ = wait(5) { disconnects.count >= 2 }
         view.removeFromSuperview()
         window.close()
         pump(0.3)

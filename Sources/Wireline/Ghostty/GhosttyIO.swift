@@ -1,42 +1,32 @@
 import AppKit
 import GhosttyKit
 import WirelineCore
+import os
 
-/// Who runs a libghostty surface's child process.
-enum GhosttyIOMode {
-    /// Wireline's `TerminalIO` owns the PTY; libghostty only parses and draws.
-    /// Needs the manual-IO termio backend from Wireline's Ghostty fork.
-    case manual
-    /// libghostty forks and owns the child itself. Debug harness only — none
-    /// of `TerminalIO` (ZMODEM, passwords, logging, …) sees its bytes.
-    case exec(command: String?, workingDirectory: String?, environment: [String: String])
-}
-
-/// All of the byte plumbing between a `GhosttyTerminalView` and its child, in
-/// one place so the switch to manual IO is one flag:
+/// All of the byte plumbing between a `GhosttyTerminalView` and its child.
 ///
-///   swiftSettings: [.define("WIRELINE_GHOSTTY_MANUAL_IO")]   (Package.swift, Wireline target)
+/// Surfaces run libghostty's manual-IO termio (Wireline's Ghostty fork,
+/// `WIRELINE_GHOSTTY_MANUAL_IO`): `TerminalIO` owns the PTY, libghostty only
+/// parses and draws.
 ///
-/// once Vendor/GhosttyKit.xcframework comes from the fork. The fork's C API, as
-/// this file expects it (adjust here if the names land differently):
+///   child output  → `feed` → `ghostty_surface_io_feed` (any thread, copies, in order)
+///   keys, pastes, query / mouse / focus replies → `io_write_cb` → `onInput` → PTY
+///   grid changes  → `io_resize_cb` → `gridSize` + `onGridResize` → TIOCSWINSZ (throttled)
 ///
-///   // ghostty_surface_config_s gains:
-///   ghostty_surface_io_mode_e  io_mode;        // GHOSTTY_SURFACE_IO_EXEC (default) | GHOSTTY_SURFACE_IO_MANUAL
-///   void (*io_write_cb)(void *userdata, const uint8_t *bytes, size_t len);   // bytes for the child
-///   void (*io_resize_cb)(void *userdata, uint16_t cols, uint16_t rows, uint32_t width_px, uint32_t height_px);
-///   void ghostty_surface_io_feed(ghostty_surface_t, const uint8_t *bytes, size_t len);  // child output
-///   bool ghostty_surface_read_last_command_output(ghostty_surface_t, ghostty_text_s *); // see lastCommandOutput
+/// Both callbacks run on libghostty's IO thread with the terminal lock held
+/// (the first resize: synchronously inside `ghostty_surface_new`). They get
+/// a `GhosttyIOBox` — not the view — copy what they need, and hop to main;
+/// they never call `ghostty_surface_*`.
 ///
-/// `userdata` in both callbacks is the surface userdata (the view's id). The
-/// callbacks may come from libghostty's IO thread; bytes are copied and
-/// delivered on the main actor in order.
+/// When the child exits, `ghostty_surface_io_exited` is deliberately *not*
+/// called: Wireline shows its own banner and reconnects by starting a new
+/// process that feeds the same surface.
 ///
-/// Until then (spike GhosttyKit, stock termio): `feed` drops the bytes,
-/// `onInput` never fires, and the engine switch refuses "ghostty" — only the
-/// harness runs a surface, in `.exec` mode.
+/// Built against a GhosttyKit without the fork, the engine switch refuses
+/// "ghostty" (`supportsManualIO` is false) and no surface is ever created.
 @MainActor
 final class GhosttyIO {
-    /// Whether this build can run a surface in `.manual` mode.
+    /// Whether this build can run a surface with manual IO.
     static var supportsManualIO: Bool {
         #if WIRELINE_GHOSTTY_MANUAL_IO
         true
@@ -45,58 +35,38 @@ final class GhosttyIO {
         #endif
     }
 
-    let mode: GhosttyIOMode
     weak var view: GhosttyTerminalView?
+    /// What the IO-thread callbacks may touch.
+    let box: GhosttyIOBox
 
-    /// Escape-sequence watcher over the child's output (manual mode): OSC 7
-    /// from remote hosts (libghostty only reports local ones), focus-report
-    /// and alternate-screen modes (libghostty has no getter).
+    /// Escape-sequence watcher over the child's output: OSC 7 from remote
+    /// hosts (libghostty only reports local ones), focus-report and
+    /// alternate-screen modes (libghostty has no getter).
     private var sniffer = TerminalStreamSniffer()
     /// The program asked for focus reports (DECSET 1004).
     private(set) var focusReporting = false
     /// A full-screen program owns the alternate screen.
     private(set) var alternateScreen = false
 
-    init(mode: GhosttyIOMode) { self.mode = mode }
-
-    var isManual: Bool { if case .manual = mode { true } else { false } }
+    init(id: Int) { box = GhosttyIOBox(id: id) }
 
     // MARK: Surface creation
 
-    /// Fill the IO half of `cfg` and create the surface inside `body`
-    /// (C strings live exactly as long as that call; libghostty copies them).
+    /// Fill the IO half of `cfg` — on every surface: an inherited config
+    /// doesn't carry it — and create the surface inside `body`.
     func withSurfaceConfig(_ cfg: inout ghostty_surface_config_s,
                            _ body: (inout ghostty_surface_config_s) -> ghostty_surface_t?) -> ghostty_surface_t? {
-        switch mode {
-        case .manual:
-            #if WIRELINE_GHOSTTY_MANUAL_IO
-            cfg.io_mode = GHOSTTY_SURFACE_IO_MANUAL
-            cfg.io_write_cb = ghosttyIOWrite
-            cfg.io_resize_cb = ghosttyIOResize
-            return body(&cfg)
-            #else
-            // Stock libghostty would fork the user's shell here: never in the app.
-            ghosttyLog.error("manual IO needs the forked GhosttyKit; not creating a surface")
-            return nil
-            #endif
-        case let .exec(command, workingDirectory, environment):
-            let keys = environment.keys.sorted()
-            let cKeys = keys.map { strdup($0) }
-            let cValues = keys.map { strdup(environment[$0] ?? "") }
-            let cCommand = command.flatMap { strdup($0) }
-            let cDirectory = workingDirectory.flatMap { strdup($0) }
-            defer {
-                (cKeys + cValues + [cCommand, cDirectory]).forEach { free($0) }
-            }
-            var env = zip(cKeys, cValues).map { ghostty_env_var_s(key: UnsafePointer($0), value: UnsafePointer($1)) }
-            cfg.command = UnsafePointer(cCommand)
-            cfg.working_directory = UnsafePointer(cDirectory)
-            return env.withUnsafeMutableBufferPointer { buf in
-                cfg.env_vars = buf.baseAddress
-                cfg.env_var_count = buf.count
-                return body(&cfg)
-            }
-        }
+        #if WIRELINE_GHOSTTY_MANUAL_IO
+        cfg.io_mode = GHOSTTY_SURFACE_IO_MANUAL
+        cfg.io_userdata = Unmanaged.passUnretained(box).toOpaque()   // the surface handle keeps it alive
+        cfg.io_write_cb = ghosttyIOWrite
+        cfg.io_resize_cb = ghosttyIOResize
+        return body(&cfg)
+        #else
+        // Stock libghostty would fork the user's shell here: never.
+        ghosttyLog.error("manual IO needs the forked GhosttyKit; not creating a surface")
+        return nil
+        #endif
     }
 
     // MARK: Child output → emulator
@@ -104,6 +74,7 @@ final class GhosttyIO {
     /// Output from the child (`TerminalIO` → `engine.feed`).
     func feed(_ bytes: ArraySlice<UInt8>) {
         guard !bytes.isEmpty else { return }
+        flushEarlyInput()
         for event in sniffer.feed(bytes) {
             switch event {
             case .workingDirectory(let raw): view?.onDirectoryChange?(raw)
@@ -114,58 +85,61 @@ final class GhosttyIO {
         }
         #if WIRELINE_GHOSTTY_MANUAL_IO
         guard let surface = view?.surface?.raw else { return }
-        bytes.withUnsafeBufferPointer { buf in
-            ghostty_surface_io_feed(surface, buf.baseAddress, buf.count)
-        }
-        #else
-        if !Self.warnedFeed {
-            Self.warnedFeed = true
-            ghosttyLog.warning("GhosttyIO.feed: no manual-IO API in this GhosttyKit; output dropped")
-        }
+        bytes.withUnsafeBufferPointer { ghostty_surface_io_feed(surface, $0.baseAddress, UInt($0.count)) }
         #endif
     }
 
-    private static var warnedFeed = false
+    // MARK: Emulator / app → child
 
-    // MARK: App → child
+    /// libghostty can write (e.g. a reply) before `TerminalIO` has started the
+    /// child; `TerminalIO.send` would drop it. Held until the child runs —
+    /// only before the first one: after an exit, typing into the dead session
+    /// is dropped, as with SwiftTerm.
+    private var earlyInput: [UInt8] = []
+    private var childHasRun = false
 
-    /// Bytes the app wants the child to see as typed (`send(txt:)`, focus
-    /// reports): straight to the PTY in manual mode, no emulator involved —
-    /// what SwiftTerm's `send` does.
+    /// Bytes for the child, from libghostty (`io_write_cb`) or the app
+    /// (`send(txt:)`, synthesized focus reports). Straight to the PTY — what
+    /// SwiftTerm's `send` does.
     func sendToChild(_ bytes: [UInt8]) {
-        guard !bytes.isEmpty else { return }
-        switch mode {
-        case .manual:
-            view?.onInput?(bytes[...])
-        case .exec:
-            // libghostty owns the PTY: its `text:` binding writes raw bytes
-            // (Zig string escapes, so escape everything non-printable).
-            guard let surface = view?.surface?.raw else { return }
-            let action = "text:" + bytes.map { b -> String in
-                switch b {
-                case UInt8(ascii: "\\"): return "\\\\"
-                case 0x20..<0x7F: return String(UnicodeScalar(b))
-                default: return String(format: "\\x%02x", b)
-                }
-            }.joined()
-            _ = action.withCString { ghostty_surface_binding_action(surface, $0, UInt(strlen($0))) }
+        guard !bytes.isEmpty, let view else { return }
+        if !childHasRun {
+            guard view.io?.isRunning == true else {
+                if earlyInput.count < 65536 { earlyInput += bytes }
+                return
+            }
+            flushEarlyInput()
         }
+        view.onInput?(bytes[...])
+    }
+
+    private func flushEarlyInput() {
+        guard !childHasRun, let view, view.io?.isRunning == true else { return }
+        childHasRun = true
+        guard !earlyInput.isEmpty else { return }
+        let pending = earlyInput
+        earlyInput = []
+        view.onInput?(pending[...])
     }
 
     /// The view's real focus changed. libghostty is kept "focused" so the
     /// caret keeps its shape (see `keepsCaretShapeWhenUnfocused`), which
-    /// would also stop it sending focus reports — send them ourselves.
-    func focusChanged(_ focused: Bool, synthesizeReports: Bool) {
-        guard synthesizeReports, focusReporting, isManual else { return }
+    /// stops it sending focus reports itself — send them here.
+    func focusChanged(_ focused: Bool) {
+        guard focusReporting else { return }
         sendToChild(Array((focused ? "\u{1b}[I" : "\u{1b}[O").utf8))
     }
 
-    // MARK: Content the fork adds
+    // MARK: Grid
+
+    /// The grid as libghostty last reported it (`io_resize_cb`), nil before.
+    var grid: winsize? { box.grid.withLock { $0 } }
+
+    fileprivate func gridResized() { view?.onGridResize?() }
+
+    // MARK: Content
 
     /// Text of the most recent finished command's output (OSC 133 C→D).
-    /// Stock libghostty has no API for it (its `copy`/`select` bindings don't
-    /// cover command output), so nil until the fork's
-    /// `ghostty_surface_read_last_command_output`.
     func lastCommandOutput() -> String? {
         #if WIRELINE_GHOSTTY_MANUAL_IO
         guard let surface = view?.surface?.raw else { return nil }
@@ -178,31 +152,42 @@ final class GhosttyIO {
         return nil
         #endif
     }
-
-    // MARK: Emulator → child (fork callbacks land here)
-
-    fileprivate func childBytes(_ bytes: [UInt8]) { view?.onInput?(bytes[...]) }
-    fileprivate func gridResized() { view?.onGridResize?() }
 }
 
-#if WIRELINE_GHOSTTY_MANUAL_IO
-/// Keystrokes, pastes and query answers libghostty encoded for the child.
-/// May run on libghostty's IO thread: copy, then deliver on main in order
-/// (always async, so a main-thread call can't overtake queued ones).
-private func ghosttyIOWrite(_ userdata: UnsafeMutableRawPointer?, _ bytes: UnsafePointer<UInt8>?, _ len: Int) {
-    guard let bytes, len > 0 else { return }
-    let id = Int(bitPattern: userdata)
-    let copy = Array(UnsafeBufferPointer(start: bytes, count: len))
-    DispatchQueue.main.async {
-        MainActor.assumeIsolated { GhosttyRuntime.shared.view(id)?.ioGlue.childBytes(copy) }
+/// The part of a surface's IO state libghostty's IO thread may touch: the
+/// view's id (to find it again on main) and the last grid size.
+final class GhosttyIOBox: Sendable {
+    let id: Int
+    let grid = OSAllocatedUnfairLock<winsize?>(initialState: nil)
+    init(id: Int) { self.id = id }
+
+    fileprivate static func from(_ p: UnsafeMutableRawPointer?) -> GhosttyIOBox? {
+        p.map { Unmanaged<GhosttyIOBox>.fromOpaque($0).takeUnretainedValue() }
     }
 }
 
-/// The grid changed size; `TerminalIO` reads `gridSize` (from
-/// `ghostty_surface_size`) and TIOCSWINSZes, throttled.
+#if WIRELINE_GHOSTTY_MANUAL_IO
+/// Bytes libghostty encoded for the child. IO thread, terminal lock held:
+/// copy, then deliver on main — always async, so order is the queue's order.
+private func ghosttyIOWrite(_ userdata: UnsafeMutableRawPointer?, _ bytes: UnsafePointer<UInt8>?, _ len: Int) {
+    guard let box = GhosttyIOBox.from(userdata), let bytes, len > 0 else { return }
+    let id = box.id
+    let copy = Array(UnsafeBufferPointer(start: bytes, count: len))
+    DispatchQueue.main.async {
+        MainActor.assumeIsolated { GhosttyRuntime.shared.view(id)?.ioGlue.sendToChild(copy) }
+    }
+}
+
+/// The grid changed: store it (read from main as `gridSize`), then let
+/// `TerminalIO` tell the PTY, throttled.
 private func ghosttyIOResize(_ userdata: UnsafeMutableRawPointer?, _ cols: UInt16, _ rows: UInt16,
                              _ widthPx: UInt32, _ heightPx: UInt32) {
-    let id = Int(bitPattern: userdata)
+    guard let box = GhosttyIOBox.from(userdata) else { return }
+    box.grid.withLock {
+        $0 = winsize(ws_row: rows, ws_col: cols,
+                     ws_xpixel: UInt16(clamping: widthPx), ws_ypixel: UInt16(clamping: heightPx))
+    }
+    let id = box.id
     DispatchQueue.main.async {
         MainActor.assumeIsolated { GhosttyRuntime.shared.view(id)?.ioGlue.gridResized() }
     }

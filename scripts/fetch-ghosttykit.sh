@@ -10,10 +10,13 @@
 #   ./scripts/fetch-ghosttykit.sh                 # copy from an existing build (GHOSTTYKIT_SRC)
 #   ./scripts/fetch-ghosttykit.sh --build         # build it with scripts/build-ghosttykit.sh (needs zig)
 #
-# GHOSTTYKIT_SRC is a build-ghosttykit.sh output dir (GhosttyKit.xcframework + share/);
-# default /tmp/libghostty-spike/out.
+# GHOSTTYKIT_SRC is a build output dir (GhosttyKit.xcframework + share/) of
+# Wireline's Ghostty fork (branch `wireline`, wireline/build-ghosttykit.sh) —
+# the manual-IO termio the engine needs; default /tmp/libghostty-spike/out-wireline.
+# (scripts/build-ghosttykit.sh builds *stock* Ghostty: the engine stays off with it.)
 #
-# TODO: once the Wireline Ghostty fork (manual-IO termio) publishes releases,
+# TODO: once the fork publishes releases (current: 1.3.2-wireline+6f488dfb6,
+# zip sha256 f68ab52882fba36cc775d036f9c6a2317999a71d9b6b7efdeaa5ac69b0536ce9),
 # this downloads the pinned GhosttyKit.xcframework.zip + share tarball from
 # the release, checks them against the sha256 pinned below (the same value as
 # `swift package compute-checksum`), and unpacks into Vendor/. Package.swift can
@@ -23,7 +26,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-SRC="${GHOSTTYKIT_SRC:-/tmp/libghostty-spike/out}"
+SRC="${GHOSTTYKIT_SRC:-/tmp/libghostty-spike/out-wireline}"
 
 if [[ "${1:-}" == "--build" ]]; then
     SRC="build/ghosttykit"
