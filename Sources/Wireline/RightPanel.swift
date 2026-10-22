@@ -231,6 +231,8 @@ struct RightPanel: View {
                     } isTargeted: { dropTargeted = $0 }
                 }
                 .wlPaneCard(opacity: store.terminalOpacity * WL.chromeOpacity)
+                // The snippet panel hangs from the info bar's button, over the terminal.
+                .overlay(alignment: .topTrailing) { SnippetPanelHost(session: session, top: 34) }
                 .padding(.horizontal, wlPaneGap)
                 StatusBar(session: session)
             } else if let host = detailHost {
@@ -746,7 +748,6 @@ struct ConnectionInfoBar: View {
     @Environment(Localizer.self) private var loc
     @Environment(\.openWindow) private var openWindow
     let session: TerminalSession
-    @State private var showSnippets = false
 
     private var host: Host? { store.hosts.first { $0.alias == session.alias } }
 
@@ -761,9 +762,7 @@ struct ConnectionInfoBar: View {
             Spacer()
             HStack(spacing: 2) {
                 recordButton
-                Button { showSnippets = true } label: {
-                    Image(systemName: "text.badge.plus").font(.system(size: 11, weight: .medium))
-                }.buttonStyle(.wlIcon).help(loc("片段", "Snippets"))
+                SnippetToolbarButton(session: session)
                 Button(action: reconnect) {
                     Image(systemName: "arrow.clockwise").font(.system(size: 11, weight: .medium))
                 }.buttonStyle(.wlIcon).help(loc("重新连接", "Reconnect"))
@@ -776,9 +775,6 @@ struct ConnectionInfoBar: View {
         // Transparent so the panel's translucent background (and the wallpaper
         // behind it) shows through here too, instead of an opaque strip.
         .background(.clear)
-        .sheet(isPresented: $showSnippets) {
-            SnippetsSheet { command in session.terminalView.send(txt: command + "\n") }
-        }
     }
 
     /// "SSH-2 · :2222 · 23 ms" — quiet metadata after the endpoint.

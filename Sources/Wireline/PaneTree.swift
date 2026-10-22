@@ -498,6 +498,7 @@ struct PaneLeafView: View {
             }
             .overlay(cardShape.fill(WL.teal.opacity(targeted ? 0.15 : 0)).allowsHitTesting(false))
             .wlPaneCard(focused: focused || zoomed, opacity: store.terminalOpacity * WL.chromeOpacity)
+            .overlay(alignment: .topTrailing) { SnippetPanelHost(session: session, top: 32) }
             .opacity(hiddenByZoom ? 0 : 1)
             .allowsHitTesting(!hiddenByZoom)
             .wlHover($hover)
@@ -515,6 +516,8 @@ struct PaneLeafView: View {
                 return dropOntoPane(str, leaf: paneID, edge: paneEdge(for: location, in: paneSize),
                                     store: store, sessions: sessions)
             } isTargeted: { targeted = $0 }
+            // An open snippet panel may hang past this pane: draw it over the neighbours.
+            .zIndex(SnippetPanel.shared.isOpen(for: sessionID) ? 1 : 0)
         } else {
             Color.clear
         }
@@ -525,8 +528,9 @@ struct PaneLeafView: View {
     }
 
     private func header(_ session: TerminalSession) -> some View {
-        PaneHeader(session: session, focused: focused, zoomed: zoomed, showActions: hover || focused,
+        PaneHeader(session: session, focused: focused, zoomed: zoomed, showActions: hover || focused || SnippetPanel.shared.isOpen(for: session.id),
                    onActivate: { sessions.activeID = session.id }) {
+            SnippetToolbarButton(session: session, size: 22)
             paneButton("rectangle.split.2x1", loc("向右分屏", "Split right")) {
                 sessions.activeID = session.id
                 wlAnimateTerminalLayout { sessions.splitActive(.trailing) }

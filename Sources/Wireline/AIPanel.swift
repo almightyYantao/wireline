@@ -633,7 +633,7 @@ struct AIPanelView: View {
             if !n.isEmpty { name = n }
             body = lines.dropFirst().joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
         }
-        snippets.add(Snippet(name: name, command: body))
+        snippets.add(Snippet(title: name, command: body))
         messages.append(AIMessage(role: .system, content: loc("已存为片段：\(name)", "Saved snippet: \(name)")))
     }
 
@@ -658,11 +658,15 @@ struct AIPanelView: View {
             NotificationCenter.default.post(name: .aiOpenFiles, object: host)
             messages.append(AIMessage(role: .system, content: loc("✓ 已打开文件浏览器：\(host)", "✓ Opened files: \(host)")))
         case let .runSnippet(name):
-            if let s = snippets.snippets.first(where: { $0.name == name })
-                ?? snippets.snippets.first(where: { $0.name.localizedCaseInsensitiveContains(name) }) {
-                if s.placeholders.isEmpty { session?.runInTerminal(s.command) }
-                else { session?.insertIntoTerminal(s.command) }   // has placeholders: let user fill
-                messages.append(AIMessage(role: .system, content: loc("✓ 已运行片段：\(s.name)", "✓ Ran snippet: \(s.name)")))
+            if let s = snippets.find(named: name) {
+                // Parameters with a default / last value are filled in; any
+                // still blank → insert as-is for the user to fill.
+                let values = s.initialValues()
+                if values.values.allSatisfy({ !$0.isEmpty }) { session?.runInTerminal(s.filled(with: values)) }
+                else { session?.insertIntoTerminal(s.command) }
+                snippets.recordUse(s.id)
+                let title = s.title(chinese: loc.isChinese)
+                messages.append(AIMessage(role: .system, content: loc("✓ 已运行片段：\(title)", "✓ Ran snippet: \(title)")))
             } else {
                 messages.append(AIMessage(role: .system, content: loc("未找到片段：\(name)", "Snippet not found: \(name)")))
             }

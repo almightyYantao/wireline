@@ -14,13 +14,19 @@ struct PaletteCommand: Identifiable {
     let tint: Color
     /// Shown instead of the category (a host's status / latency).
     var badge: (text: String, color: Color)? = nil
+    /// Set for a snippet row: Return inserts it, ⌘Return runs it (see `SnippetFlow`).
+    var snippet: Snippet? = nil
+    /// A snippet that doesn't suit the active pane (other platform / host group).
+    var dimmed = false
     let run: () -> Void
 }
 
 /// One bar for everything (Raycast-style). Typing searches hosts — Return
 /// connects — followed by matching actions; a leading ">" searches only
 /// commands (actions, snippets, themes). ⌘K opens it empty, ⌘P opens it with
-/// ">". ↑/↓ to move, Return to run, Esc to close.
+/// ">". ↑/↓ to move, Return to run, Esc to close. On a snippet, Return inserts
+/// it into the active terminal and ⌘Return runs it; parameters / scripts /
+/// dangerous commands continue inline (`SnippetStepView`) before anything is sent.
 struct CommandPaletteView: View {
     @Environment(HostStore.self) private var store
     @Environment(SessionStore.self) private var sessions
@@ -39,8 +45,30 @@ struct CommandPaletteView: View {
     /// yank the highlight back; cleared as soon as the mouse actually moves.
     @State private var keyboardNav = false
     @FocusState private var focused: Bool
+    /// A picked snippet that needs its parameters / a confirmation first.
+    @State private var snippetStep: SnippetStep?
 
     var body: some View {
+        Group {
+            if let step = snippetStep, let session = sessions.activeSession {
+                SnippetStepView(step: step, session: session,
+                                onStep: { snippetStep = $0 },
+                                onBack: { snippetStep = nil; DispatchQueue.main.async { focused = true } },
+                                onDone: onClose)
+                    .frame(maxHeight: .infinity, alignment: .top)
+            } else {
+                list
+            }
+        }
+        .background(WL.bg)
+        .preferredColorScheme(WL.colorScheme)
+        .onExitCommand {
+            if snippetStep != nil { snippetStep = nil; DispatchQueue.main.async { focused = true } }
+            else { onClose() }
+        }
+    }
+
+    private var list: some View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
                 Image(systemName: commandMode ? "command" : "magnifyingglass")
@@ -51,7 +79,7 @@ struct CommandPaletteView: View {
                     .font(WL.mono(18))
                     .foregroundStyle(WL.textPrimary)
                     .focused($focused)
-                    .onSubmit(runHighlighted)
+                    .onSubmit { runHighlighted(.insert) }
                     .onChange(of: query) { highlighted = 0 }
                     .onKeyPress(.downArrow) {
                         keyboardNav = true
@@ -66,6 +94,12 @@ struct CommandPaletteView: View {
             .padding(.horizontal, 16).padding(.vertical, 11)
             .wlSearchCapsule(focused: focused)
             .padding(10)
+            // ⌘↩ runs a snippet (a key equivalent, so it beats the field).
+            .background {
+                Button("") { runHighlighted(.run) }
+                    .keyboardShortcut(.return, modifiers: .command)
+                    .opacity(0).allowsHitTesting(false).accessibilityHidden(true)
+            }
 
             WLFormDivider()
 
@@ -102,18 +136,40 @@ struct CommandPaletteView: View {
             }
             .animation(Motion.state, value: results.isEmpty)
             .background(MouseMoveWatcher { keyboardNav = false })
+
+            WLFormDivider()
+            footer
         }
-        .background(WL.bg)
-        .preferredColorScheme(WL.colorScheme)
         .onAppear {
             focused = true
+            if let s = sessions.activeSession { snippets.probePlatform(of: s) }
             // Focusing selects all; with a prefilled ">" the first keystroke
             // would replace it. Put the caret after it instead.
             DispatchQueue.main.async {
                 (NSApp.keyWindow?.firstResponder as? NSTextView)?.moveToEndOfDocument(nil)
             }
         }
-        .onExitCommand { onClose() }
+    }
+
+    /// Keys for whatever is highlighted: a snippet inserts / runs.
+    private var footer: some View {
+        let current = results.indices.contains(highlighted) ? results[highlighted] : nil
+        return HStack(spacing: 12) {
+            KeyHint(keys: "↑↓", label: loc("选择", "Select"))
+            Spacer()
+            if let s = current?.snippet {
+                if s.isMultiLine {
+                    KeyHint(keys: "↩", label: loc("预览并运行", "Preview & run"))
+                } else {
+                    KeyHint(keys: "↩", label: loc("插入到终端", "Insert"))
+                    KeyHint(keys: "⌘↩", label: loc("运行", "Run"))
+                }
+            } else {
+                KeyHint(keys: "↩", label: loc("执行", "Open"))
+            }
+            KeyHint(keys: "esc", label: loc("关闭", "Close"))
+        }
+        .padding(.horizontal, 16).padding(.vertical, 8)
     }
 
     // MARK: - Filtering
@@ -131,23 +187,7 @@ struct CommandPaletteView: View {
     /// both languages, category, subtitle — or in the pinyin of its Chinese
     /// (full "shezhi" or initials "sz").
     private static func matches(_ c: PaletteCommand, _ q: String) -> Bool {
-        let hay = searchText(c.title + " " + c.keywords + " " + c.category + " " + (c.subtitle ?? ""))
-        return q.split(separator: " ").allSatisfy { hay.contains($0) }
-    }
-
-    @MainActor private static var searchCache: [String: String] = [:]
-
-    private static func searchText(_ text: String) -> String {
-        if let hit = searchCache[text] { return hit }
-        var out = text.lowercased()
-        if text.unicodeScalars.contains(where: { (0x4E00...0x9FFF).contains($0.value) }) {
-            let latin = text.applyingTransform(.mandarinToLatin, reverse: false)?
-                .applyingTransform(.stripDiacritics, reverse: false)?.lowercased() ?? ""
-            let words = latin.split(whereSeparator: { !$0.isLetter && !$0.isNumber })
-            out += " " + words.joined() + " " + String(words.compactMap(\.first))
-        }
-        searchCache[text] = out
-        return out
+        SearchText.matches(q, in: c.title + " " + c.keywords + " " + c.category + " " + (c.subtitle ?? ""))
     }
 
     /// Hosts first: fuzzy-ranked when typing, most recently used when empty.
@@ -178,12 +218,24 @@ struct CommandPaletteView: View {
         }
     }
 
-    private func runHighlighted() {
+    private func runHighlighted(_ mode: SnippetSendMode) {
         guard results.indices.contains(highlighted) else { return }
-        run(results[highlighted])
+        let cmd = results[highlighted]
+        if cmd.snippet == nil && mode == .run { return }   // ⌘↩ only means something on a snippet
+        run(cmd, mode)
     }
 
-    private func run(_ cmd: PaletteCommand) {
+    private func run(_ cmd: PaletteCommand, _ mode: SnippetSendMode = .insert) {
+        if let s = cmd.snippet, let session = sessions.activeSession {
+            if let next = SnippetFlow.start(s, mode) {
+                snippetStep = next          // parameters / preview, inline in the palette
+            } else {
+                onClose()
+                SnippetFlow.send(s, text: s.command, values: [:], mode: mode,
+                                 to: session, store: snippets, sessions: sessions)
+            }
+            return
+        }
         onClose()
         // Run on the next tick so this palette fully dismisses first — otherwise a
         // command that opens another overlay (e.g. Quick Connect) races with our
@@ -250,16 +302,19 @@ struct CommandPaletteView: View {
                            systemImage: "gearshape", tint: WL.textDim) { openWindow(id: "settings") },
         ]
 
-        // Run a snippet in the active session (inserts it so you can review / fill).
+        // Snippets for the active pane: the ones that suit it first, then the
+        // ones used most / lately; the rest dimmed. The title shows in the UI
+        // language — the other one (and the command) only feed the search.
         if let session = sessions.activeSession {
-            let snip = loc("片段", "Snippet")
-            for s in snippets.snippets {
+            let snip = loc("快捷指令", "Snippet")
+            let platform = snippets.platform(for: session)
+            let group = store.hosts.first { $0.alias == session.alias }?.group
+            for s in Snippet.ranked(snippets.snippets, platform: platform, hostGroup: group) {
                 out.append(PaletteCommand(
-                    title: s.name, subtitle: s.command, category: snip,
-                    systemImage: "text.alignleft", tint: WL.teal) {
-                    session.insertIntoTerminal(s.command)
-                    sessions.focusActiveTerminal()
-                })
+                    title: s.title(chinese: loc.isChinese), keywords: s.allTitles + " " + s.command + " 片段 snippet",
+                    subtitle: Snippet.commandLines(s.command).first, category: snip,
+                    systemImage: s.category.symbol, tint: s.category.tint,
+                    snippet: s, dimmed: !s.matches(platform: platform, hostGroup: group)) {})
             }
         }
 
@@ -290,11 +345,16 @@ private struct PaletteRow: View {
                 .background(command.tint.opacity(isHighlighted ? 0.16 : 0.1),
                             in: RoundedRectangle(cornerRadius: WL.radius(8), style: .continuous))
             VStack(alignment: .leading, spacing: 1) {
-                Text(command.title).font(WL.body).foregroundStyle(WL.textPrimary).lineLimit(1)
+                HStack(spacing: 6) {
+                    Text(command.title).font(WL.body).foregroundStyle(WL.textPrimary).lineLimit(1)
+                    if let s = command.snippet { SnippetBadges(snippet: s) }
+                }
                 if let sub = command.subtitle {
-                    Text(sub).font(WL.caption).foregroundStyle(WL.textDim).lineLimit(1)
+                    Text(sub).font(command.snippet == nil ? WL.caption : WL.mono(11))
+                        .foregroundStyle(WL.textDim).lineLimit(1)
                 }
             }
+            .opacity(command.dimmed ? 0.5 : 1)
             Spacer()
             if let badge = command.badge {
                 Text(badge.text).font(WL.caption.monospacedDigit()).foregroundStyle(badge.color)
