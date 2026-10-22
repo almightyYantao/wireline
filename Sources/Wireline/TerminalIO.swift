@@ -19,14 +19,15 @@ final class TerminalIO {
     /// The renderer this session's output goes to.
     weak var engine: (any TerminalEngine)?
 
-    /// The child process in its PTY. Built lazily so the delegate can capture `self`.
-    private(set) lazy var process: LocalProcess = LocalProcess(delegate: processBridge, dispatchQueue: .main)
-    private lazy var processBridge = ProcessBridge(owner: self)
+    /// The child process in its PTY.
+    private let process = PTYProcess()
 
     init(password: String?, sudoPassword: String? = nil, autoSudo: Bool) {
         self.password = password
         self.sudoPassword = sudoPassword
         self.autoSudo = autoSudo
+        process.onOutput = { [weak self] in self?.received($0) }
+        process.onExit = { [weak self] in self?.terminated(exitCode: $0.code) }
     }
 
     // MARK: Events
@@ -54,21 +55,36 @@ final class TerminalIO {
 
     // MARK: Process
 
-    var isRunning: Bool { process.running }
+    var isRunning: Bool { process.isRunning }
+    /// The child's pid (0 when none).
+    var childPID: pid_t { process.pid }
 
+    /// Start the child in a fresh PTY sized to the engine's grid. Also after a
+    /// previous child exited or was terminated (reconnect).
     func start(executable: String, args: [String], environment: [String]?,
                execName: String? = nil, currentDirectory: String? = nil) {
-        process.startProcess(executable: executable, args: args, environment: environment,
-                             execName: execName, currentDirectory: currentDirectory)
+        do {
+            try process.start(executable: executable, args: args,
+                              environment: environment ?? Terminal.getEnvironmentVariables(termName: "xterm-256color"),
+                              execName: execName, currentDirectory: currentDirectory, windowSize: windowSize)
+        } catch {
+            // Couldn't exec: report it like a child that exited 127 at once.
+            DispatchQueue.main.async { MainActor.assumeIsolated { self.terminated(exitCode: 127) } }
+        }
     }
 
+    /// Stop the child (SIGHUP, then SIGKILL). `onDisconnected` isn't called.
     func terminate() { process.terminate() }
+
+    /// What owns the terminal: the child itself or a job it's running (local
+    /// shells' busy polling).
+    func foregroundJob() -> PTYForegroundJob { process.foregroundJob() }
 
     /// Bytes for the child: keystrokes and replies from the engine, answers
     /// from the heuristics here.
     func send(_ bytes: ArraySlice<UInt8>) {
-        guard process.running else { return }
-        process.send(data: bytes)
+        guard process.isRunning else { return }
+        process.send(bytes)
     }
 
     func send(txt: String) { send(ArraySlice(Array(txt.utf8))) }
@@ -120,10 +136,7 @@ final class TerminalIO {
     }
 
     private func deliverResize() {
-        if process.running {
-            var size = windowSize
-            _ = PseudoTerminalHelpers.setWinSize(masterPtyDescriptor: process.childfd, windowSize: &size)
-        }
+        if process.isRunning { process.resize(windowSize) }
         engine?.didDeliverResize()
     }
 
@@ -208,7 +221,7 @@ final class TerminalIO {
     )
 
     /// Output from the child.
-    fileprivate func received(_ slice: ArraySlice<UInt8>) {
+    private func received(_ slice: ArraySlice<UInt8>) {
         // ZMODEM: once a transfer is live, every remote byte belongs to the
         // protocol — divert it to the local `rz`/`sz` instead of rendering it.
         if zmodem.isActive { zmodem.feedFromRemote(slice); return }
@@ -317,7 +330,7 @@ final class TerminalIO {
     }
 
     /// The child exited — the connection is gone.
-    fileprivate func terminated(exitCode: Int32?) {
+    private func terminated(exitCode: Int32?) {
         // Don't let an in-flight ZMODEM transfer's local tool hang waiting on a
         // stream that will never continue.
         zmodem.abort()
@@ -486,29 +499,5 @@ final class TerminalIO {
         guard req.count >= 2, req != lastCommentRequest else { return }
         lastCommentRequest = req
         onCommentRequest?(req)
-    }
-}
-
-/// `LocalProcess`'s delegate is non-isolated; it runs on the main queue (we
-/// pass `.main`), so hop straight into the main-actor `TerminalIO`.
-private final class ProcessBridge: LocalProcessDelegate {
-    private weak var owner: TerminalIO?
-    init(owner: TerminalIO) { self.owner = owner }
-
-    // Pull `owner` into a local (a main-actor class, hence Sendable) so the
-    // closures capture only it, not this non-isolated bridge.
-    func dataReceived(slice: ArraySlice<UInt8>) {
-        guard let owner else { return }
-        MainActor.assumeIsolated { owner.received(slice) }
-    }
-
-    func processTerminated(_ source: LocalProcess, exitCode: Int32?) {
-        guard let owner else { return }
-        MainActor.assumeIsolated { owner.terminated(exitCode: exitCode) }
-    }
-
-    func getWindowSize() -> winsize {
-        guard let owner else { return winsize(ws_row: 24, ws_col: 80, ws_xpixel: 0, ws_ypixel: 0) }
-        return MainActor.assumeIsolated { owner.windowSize }
     }
 }

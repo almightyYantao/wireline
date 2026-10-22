@@ -2,11 +2,12 @@ import AppKit
 import XCTest
 import struct SwiftTerm.SearchOptions
 import GhosttyKit
+import WirelineCore
 @testable import Wireline
 
 /// End-to-end check of the libghostty engine the way a session runs it: one
 /// `GhosttyTerminalView` with manual IO, wired to a real `TerminalIO` (its
-/// `LocalProcess` PTY runs `/bin/zsh -l`) exactly as `TerminalSession.init`
+/// `PTYProcess` PTY runs `/bin/zsh -l`) exactly as `TerminalSession.init`
 /// does, in a window that never takes focus, driven through the view's own
 /// key path.
 ///
@@ -166,7 +167,7 @@ final class GhosttyHarnessTests: XCTestCase {
         log("window \(window.windowNumber) key=\(window.isKeyWindow) firstResponder=\(window.firstResponder === view)")
         pump(0.1)                               // the real size reaches io_resize_cb first
         launch()
-        log("child started via TerminalIO/LocalProcess, pid \(io.process.shellPid), grid \(view.gridSize.ws_col)×\(view.gridSize.ws_row)")
+        log("child started via TerminalIO/PTYProcess, pid \(io.childPID), grid \(view.gridSize.ws_col)×\(view.gridSize.ws_row)")
 
         // 1. The shell comes up.
         let prompt = wait(10) { screen(view).contains("wl%") }

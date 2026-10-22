@@ -409,14 +409,11 @@ final class TerminalSession: Identifiable {
     }
 
     private func pollForeground() {
-        let proc = io.process
-        guard proc.childfd >= 0 else { return }
-        let pgid = tcgetpgrp(proc.childfd)
-        let running = pgid > 0 && pgid != proc.shellPid
-        var name: String?
-        if running {
-            var buf = [CChar](repeating: 0, count: 64)
-            if proc_name(pgid, &buf, UInt32(buf.count)) > 0 { name = String(cString: buf) }
+        let running: Bool, name: String?
+        switch io.foregroundJob() {
+        case .none: return
+        case .child: (running, name) = (false, nil)
+        case .job(_, let n): (running, name) = (true, n)
         }
         if foregroundName != name { foregroundName = name }
         if running, !isBusy {
