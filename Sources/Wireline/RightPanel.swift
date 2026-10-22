@@ -628,8 +628,11 @@ struct SessionTab: View {
         // to `.onDrag` and a single-tap gesture often never fires.
         .simultaneousGesture(TapGesture(count: 1).onEnded {
             guard !isEditing else { return }
-            let double = TitleBarZoomGuard.shared.takeDoubleClick() || (NSApp.currentEvent?.clickCount ?? 1) >= 2
-            if double { beginEdit() } else { sessions.focusTab(tab.id) }
+            // Click the tab you're on to rename it (like Finder's selected
+            // item); click another tab to switch. Double-clicks in the title
+            // row belong to the window's zoom.
+            _ = TitleBarZoomGuard.shared.takeDoubleClick()
+            if isActive { beginEdit() } else { sessions.focusTab(tab.id) }
         })
         .blocksWindowDrag()
         // Drag this tab onto another tab's pane to merge them into a split.
