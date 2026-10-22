@@ -67,12 +67,53 @@ final class GhosttyTerminalView: NSView, TerminalEngine {
         set { io?.outputObserver = newValue }
     }
 
-    // MARK: Engine extras (harness, later features)
+    /// OSC 133 C (from `GhosttyIO`'s stream sniffer) and D (libghostty's
+    /// COMMAND_FINISHED, which carries the exit code and its own timing).
+    var onShellCommand: ((ShellCommandEvent) -> Void)?
 
-    /// OSC 133 command-finished reports (exit code, seconds).
-    var onCommandFinished: ((Int?, Double) -> Void)?
-    /// Last scrollbar state from libghostty (rows: total, first visible, visible).
+    // MARK: Scrolling (TerminalScrollable)
+    //
+    // libghostty draws no scrollbar; it reports SCROLLBAR (in rows: total,
+    // the viewport's first row, visible rows) from its renderer whenever that
+    // changes — every frame while output streams. `TerminalScrollbar` stays
+    // hidden while the viewport follows the bottom, so that churn is invisible.
+
+    /// Last scrollbar state from libghostty.
     private(set) var scrollbar: (total: UInt64, offset: UInt64, length: UInt64)?
+    var onScrollChange: (() -> Void)?
+
+    var canScroll: Bool { scrollbar.map { $0.total > $0.length } ?? false }
+
+    var scrollPosition: Double {
+        guard let s = scrollbar, s.total > s.length else { return 0 }
+        return min(1, Double(s.offset) / Double(s.total - s.length))
+    }
+
+    var scrollThumbsize: CGFloat {
+        guard let s = scrollbar, s.total > 0 else { return 1 }
+        return CGFloat(s.length) / CGFloat(s.total)
+    }
+
+    /// `scroll_to_row:N` puts row N at the top; N ≥ total − rows pins the
+    /// viewport back to the live bottom.
+    func scroll(toPosition position: Double) {
+        guard let s = scrollbar, s.total > s.length else { return }
+        let maxOffset = s.total - s.length
+        let row = UInt64((min(1, max(0, position)) * Double(maxOffset)).rounded())
+        guard binding("scroll_to_row:\(row)") else { return }
+        // The real report comes with the next frame; show the move now so a
+        // drag doesn't trail the pointer by a frame.
+        scrollbar = (s.total, min(row, maxOffset), s.length)
+    }
+
+    private func scrollbarChanged(_ new: (total: UInt64, offset: UInt64, length: UInt64)) {
+        if let old = scrollbar, old == new { return }
+        scrollbar = new
+        onScrollChange?()
+    }
+
+    // MARK: Engine extras
+
     /// The URL under the pointer while ⌘ is held.
     private(set) var hoveredLink: String?
 
@@ -392,8 +433,8 @@ final class GhosttyTerminalView: NSView, TerminalEngine {
             // GhosttyIO sniffs OSC 7 from the stream (remote hosts too);
             // libghostty's local-only, decoded report would just duplicate it.
             break
-        case let .commandFinished(code, seconds): onCommandFinished?(code, seconds)
-        case let .scrollbar(total, offset, length): scrollbar = (total, offset, length)
+        case let .commandFinished(code, seconds): onShellCommand?(.finished(exitCode: code, duration: seconds))
+        case let .scrollbar(total, offset, length): scrollbarChanged((total, offset, length))
         case .cellSize: break
         case .searchStarted: break
         case .searchEnded: searchTotal = nil; searchSelected = nil; notifySearch()

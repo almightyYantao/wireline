@@ -72,9 +72,16 @@ final class TerminalContainerView: NSView {
     /// While frozen, the old frame is shown as a split snapshot (see
     /// `SplitSnapshotView`) and the live terminal sits hidden underneath.
     private var cover: SplitSnapshotView?
+    /// The themed overlay scrollbar, a sibling above the terminal (and above
+    /// the freeze cover, so it doesn't blink during a layout animation — the
+    /// frozen grid's scroll state can't change under it anyway).
+    let scrollbar: TerminalScrollbar?
+    private static let scrollbarWidth: CGFloat = 16
 
     init(term: NSView) {
         self.term = term
+        let engine = term as? any TerminalEngine
+        scrollbar = engine.map { _ in TerminalScrollbar(frame: .zero) }
         super.init(frame: .zero)
         wantsLayer = true
         clipsToBounds = true
@@ -82,6 +89,12 @@ final class TerminalContainerView: NSView {
         term.translatesAutoresizingMaskIntoConstraints = true
         term.autoresizingMask = []
         addSubview(term)
+        if let engine, let scrollbar {
+            scrollbar.term = engine
+            // The newest host of a re-embedded terminal takes it over.
+            engine.onScrollChange = { [weak scrollbar] in scrollbar?.reflectScroll() }
+            addSubview(scrollbar, positioned: .above, relativeTo: term)
+        }
         TerminalResizeGate.shared.register(self)
     }
 
@@ -126,7 +139,13 @@ final class TerminalContainerView: NSView {
     private var isCollapsed: Bool { bounds.width < 80 || bounds.height < 48 }
 
     private func layoutTerminal() {
-        guard term.superview === self else { return }
+        // A re-embedded terminal belongs to its new host — and so does its bar.
+        guard term.superview === self else { scrollbar?.isHidden = true; return }
+        scrollbar?.isHidden = false
+        // Pinned to the container's right edge — over the live terminal, the
+        // cover's trailing half, or a frozen grid alike.
+        let barFrame = CGRect(x: bounds.maxX - Self.scrollbarWidth, y: 0, width: Self.scrollbarWidth, height: bounds.height)
+        if let scrollbar, scrollbar.frame != barFrame { scrollbar.frame = barFrame }
         if frozenSize == nil, isCollapsed, settledSize != .zero {
             let origin = NSPoint(x: 0, y: bounds.height - settledSize.height)
             if term.frame.size != settledSize { term.setFrameSize(settledSize) }

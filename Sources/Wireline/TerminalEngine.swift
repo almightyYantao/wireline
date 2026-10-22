@@ -6,7 +6,7 @@ import struct SwiftTerm.SearchOptions
 /// `TerminalIO` — so SwiftTerm and libghostty can sit behind the same session.
 /// Everything the app does with a terminal view goes through here.
 @MainActor
-protocol TerminalEngine: NSView {
+protocol TerminalEngine: NSView, TerminalScrollable {
     // MARK: Byte plumbing (with TerminalIO)
 
     /// The session's PTY side (resize flushing, output observation).
@@ -41,6 +41,10 @@ protocol TerminalEngine: NSView {
     var onClickFocus: (() -> Void)? { get set }
     /// Whether this view's session is the active pane.
     var isActivePane: (() -> Bool)? { get set }
+    /// Shell-integration command boundaries (OSC 133 C / D), from engines that
+    /// report them (libghostty). Never fired by the others — the session then
+    /// falls back to `TerminalIO`'s output heuristic.
+    var onShellCommand: ((ShellCommandEvent) -> Void)? { get set }
 
     // MARK: Presentation
 
@@ -84,6 +88,29 @@ extension TerminalEngine {
     func searchMatchSummary(_ term: String, options: SearchOptions) -> (index: Int, total: Int) {
         searchMatchSummary(term, options: options, limit: 1000)
     }
+}
+
+/// What `TerminalScrollbar` draws and drives: the viewport's place in the
+/// scrollback. SwiftTerm's `TerminalView` has the first four already.
+@MainActor
+protocol TerminalScrollable: AnyObject {
+    /// There is scrollback to move through (false on the alternate screen).
+    var canScroll: Bool { get }
+    /// Viewport position: 0 = top of the scrollback, 1 = following the bottom.
+    var scrollPosition: Double { get }
+    /// Visible rows / all rows.
+    var scrollThumbsize: CGFloat { get }
+    func scroll(toPosition: Double)
+    /// The scroll state may have changed (output scrolled, the user scrolled).
+    var onScrollChange: (() -> Void)? { get set }
+}
+
+/// A shell command's boundaries, as the shell integration marks them.
+enum ShellCommandEvent: Equatable {
+    /// OSC 133;C — the command line was submitted, output begins.
+    case started
+    /// OSC 133;D — done, with its exit status and how long it ran.
+    case finished(exitCode: Int?, duration: TimeInterval)
 }
 
 /// How a terminal should look, from the app's settings and theme.

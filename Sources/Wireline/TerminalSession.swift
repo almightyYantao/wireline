@@ -415,50 +415,38 @@ final class WirelineTerminalView: TerminalView, TerminalEngine {
     /// buffer-switch refresh it too. The net effect is a scrollbar that's calm
     /// during output and correct the moment you interact with it.
     override func scrolled(source terminal: Terminal, yDisp: Int) {
-        customScrollbar?.reflectScroll()
+        onScrollChange?()
     }
 
     /// A user scroll (wheel / drag / `scrollTo`), via the delegate bridge.
-    fileprivate func userScrolled() { customScrollbar?.reflectScroll() }
+    fileprivate func userScrolled() { onScrollChange?() }
 
-    // MARK: - Custom scrollbar
+    // MARK: - Scrollbar
 
-    /// SwiftTerm's built-in overlay `NSScroller` (hidden — we draw our own).
+    /// Tells the themed `TerminalScrollbar` (hosted by `TerminalContainerView`)
+    /// to re-read `canScroll` / `scrollPosition` / `scrollThumbsize`.
+    var onScrollChange: (() -> Void)?
+
+    /// SwiftTerm's built-in overlay `NSScroller` (hidden — `TerminalScrollbar`
+    /// is drawn instead).
     private weak var nativeScroller: NSScroller?
-    private var customScrollbar: TerminalScrollbar?
 
-    /// Hide SwiftTerm's scroller and float a themed one that matches the app: a
-    /// thin rounded green thumb that widens on hover, is draggable, and fades away
-    /// while you're following the bottom.
-    private func setupCustomScrollbar() {
-        guard customScrollbar == nil else { return }
+    private func hideNativeScroller() {
         if nativeScroller == nil {
             nativeScroller = subviews.compactMap { $0 as? NSScroller }.first
         }
         nativeScroller?.isHidden = true
-        let bar = TerminalScrollbar(frame: scrollbarFrame())
-        bar.term = self
-        bar.autoresizingMask = [.minXMargin, .height]
-        addSubview(bar, positioned: .above, relativeTo: nil)
-        customScrollbar = bar
-    }
-
-    private func scrollbarFrame() -> CGRect {
-        let w: CGFloat = 16
-        return CGRect(x: bounds.maxX - w, y: 0, width: w, height: bounds.height)
     }
 
     override func layout() {
         super.layout()
-        // Keep SwiftTerm's scroller hidden even if it re-appears after a relayout,
-        // and keep our bar pinned to the right edge.
+        // Keep SwiftTerm's scroller hidden even if it re-appears after a relayout.
         nativeScroller?.isHidden = true
-        customScrollbar?.frame = scrollbarFrame()
     }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        setupCustomScrollbar()
+        hideNativeScroller()
         // Moving windows rebuilds SwiftTerm's Metal view — re-clear it.
         makeMetalLayerTransparent()
         observeFocus()
@@ -557,6 +545,10 @@ final class WirelineTerminalView: TerminalView, TerminalEngine {
     /// A click landed in this pane: make it the active split.
     var onClickFocus: (() -> Void)?
 
+    /// Never fired: OSC 133 here feeds prompt tracking only, and the session
+    /// uses `TerminalIO`'s output heuristic for busy / finished.
+    var onShellCommand: ((ShellCommandEvent) -> Void)?
+
     // SwiftTerm's mouseDown doesn't take first responder, and the click never
     // reaches SwiftUI gestures over this AppKit view — focus the pane here.
     override func mouseDown(with event: NSEvent) {
@@ -619,15 +611,18 @@ final class WirelineTerminalView: TerminalView, TerminalEngine {
 }
 
 /// A themed, self-drawn overlay scrollbar for the terminal, replacing SwiftTerm's
-/// native `NSScroller`. A thin rounded green thumb that:
+/// native `NSScroller` (and standing in for the one libghostty leaves to the
+/// app). A thin rounded green thumb that:
 ///  - stays hidden while you're following the bottom (no streaming jitter),
 ///  - reveals on scroll / hover and fades out again shortly after,
 ///  - widens on hover, and is draggable / click-to-jump.
 ///
-/// It reads the terminal's public `scrollPosition` / `scrollThumbsize` / `canScroll`
-/// and drives scrolling via `scroll(toPosition:)`.
+/// It reads the engine's `TerminalScrollable` state and drives scrolling via
+/// `scroll(toPosition:)`. `TerminalContainerView` hosts it as a sibling over
+/// the terminal (libghostty's view is layer-hosting: no subviews in there)
+/// and calls `reflectScroll()` from the engine's `onScrollChange`.
 final class TerminalScrollbar: NSView {
-    weak var term: WirelineTerminalView?
+    weak var term: (any TerminalScrollable)?
 
     private var hovering = false
     private var dragging = false
@@ -752,6 +747,10 @@ final class TerminalScrollbar: NSView {
     override func mouseDown(with event: NSEvent) {
         dragging = true; reveal(); scrollToMouse(event)
     }
+    // A sibling, not a subview: hand the terminal what the column doesn't use.
+    override func scrollWheel(with event: NSEvent) { (term as? NSView)?.scrollWheel(with: event) }
+    override func rightMouseDown(with event: NSEvent) { (term as? NSView)?.rightMouseDown(with: event) }
+    override func rightMouseUp(with event: NSEvent) { (term as? NSView)?.rightMouseUp(with: event) }
     override func mouseDragged(with event: NSEvent) { scrollToMouse(event) }
     override func mouseUp(with event: NSEvent) {
         dragging = false; needsDisplay = true

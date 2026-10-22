@@ -34,6 +34,14 @@ final class TerminalStreamSnifferTests: XCTestCase {
         XCTAssertEqual(events(["\u{1b}]7;\(big)\u{07}\u{1b}[?1004h"]), [.privateMode(1004, true)])
     }
 
+    func testCommandStart() {
+        // C (with or without options) is reported; A / B / D and look-alikes aren't.
+        XCTAssertEqual(events(["\u{1b}]133;A\u{07}wl% \u{1b}]133;B\u{07}", "\u{1b}]133;C\u{07}out\u{1b}]133;D;0\u{07}"]),
+                       [.commandStarted])
+        XCTAssertEqual(events(["\u{1b}]133;C;cmdline=ls\u{1b}", "\\"]), [.commandStarted])
+        XCTAssertEqual(events(["\u{1b}]133;Cx\u{07}\u{1b}]1133;C\u{07}"]), [])
+    }
+
     func testCancelledSequences() {
         // CAN aborts the OSC; the next one still parses.
         XCTAssertEqual(events(["\u{1b}]7;file://x/a\u{18}\u{1b}]7;file://x/b\u{07}"]), [.workingDirectory("file://x/b")])

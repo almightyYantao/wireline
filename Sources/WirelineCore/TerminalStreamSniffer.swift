@@ -2,11 +2,12 @@ import Foundation
 
 /// Watches a terminal output stream for the few control sequences the app
 /// needs to know about when the emulator itself won't say: the working
-/// directory (OSC 7), focus reporting (DECSET 1004) and the alternate screen
-/// (DECSET 1049 / 1047 / 47).
+/// directory (OSC 7), a command starting (OSC 133;C), focus reporting
+/// (DECSET 1004) and the alternate screen (DECSET 1049 / 1047 / 47).
 ///
 /// libghostty parses everything, but only reports OSC 7 from the *local*
-/// host — a remote shell's directory over SSH is dropped — and it has no API
+/// host — a remote shell's directory over SSH is dropped — it reports a
+/// command's end (COMMAND_FINISHED) but not its start, and it has no API
 /// for the private modes. This is a tiny escape-sequence state machine (no
 /// rendering, no allocation in the common case) that survives sequences split
 /// across reads.
@@ -14,6 +15,8 @@ public struct TerminalStreamSniffer: Sendable {
     public enum Event: Equatable, Sendable {
         /// The raw OSC 7 payload (`file://host/path`).
         case workingDirectory(String)
+        /// OSC 133;C: the shell ran the command line; its output follows.
+        case commandStarted
         /// A DEC private mode was set (`true`) or reset (`false`).
         case privateMode(Int, Bool)
     }
@@ -74,10 +77,18 @@ public struct TerminalStreamSniffer: Sendable {
 
     private mutating func finishOSC(into events: inout [Event]) {
         state = .ground
+        // "133;C", optionally with ";options".
+        if buffer.starts(with: Self.commandStart), buffer.count == Self.commandStart.count
+            || buffer[Self.commandStart.count] == UInt8(ascii: ";") {
+            events.append(.commandStarted)
+            return
+        }
         // "7;" then the URL.
         guard buffer.count >= 2, buffer[0] == UInt8(ascii: "7"), buffer[1] == UInt8(ascii: ";") else { return }
         events.append(.workingDirectory(String(decoding: buffer[2...], as: UTF8.self)))
     }
+
+    private static let commandStart = Array("133;C".utf8)
 
     /// `CSI ? Pm h|l` — every numeric parameter is a mode.
     private func privateModes(set: Bool, into events: inout [Event]) {
