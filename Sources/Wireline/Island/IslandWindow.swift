@@ -120,7 +120,25 @@ final class IslandController {
             MainActor.assumeIsolated { self?.pointerMoved() }
             return e
         }) { monitors.append(m) }
+        // Focus moving to another app (maybe on another screen).
+        observers.append(NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.refreshIfScreenChanged() }
+        })
+        // …and a focused window dragged to another screen.
+        let timer = Timer(timeInterval: 1.0, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.refreshIfScreenChanged() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        focusTimer = timer
         track()
+        refresh()
+    }
+
+    private var focusTimer: Timer?
+
+    private func refreshIfScreenChanged() {
+        guard !center.hovering, let s = targetScreen(), s.frame != placedScreen else { return }
         refresh()
     }
 
@@ -143,13 +161,13 @@ final class IslandController {
 
     // MARK: - Placement
 
-    /// The screen you're on: the one under the pointer. There the island hugs
-    /// the notch, or sits as a pill at the top on a screen without one. (Keyed
-    /// to Wireline's window it jumped away whenever another app had focus.)
+    /// The screen you're working on: the one holding the focused window of
+    /// whichever app is in front (Wireline or not). There the island hugs the
+    /// notch, or sits as a pill at the top of a screen without one. It moves
+    /// when focus moves to another screen, not when the pointer wanders.
     private func targetScreen() -> NSScreen? {
-        let mouse = NSEvent.mouseLocation
-        if let s = NSScreen.screens.first(where: { NSMouseInRect(mouse, $0.frame, false) }) { return s }
-        if let key = NSApp.keyWindow, key !== panel, let s = key.screen { return s }
+        if let key = NSApp.keyWindow, key !== panel, NSApp.isActive, let s = key.screen { return s }
+        if let r = Self.frontWindowRect(), let s = Self.screen(containing: r) { return s }
         return NSScreen.screens.first { $0.safeAreaInsets.top > 0 }
             ?? NSScreen.screens.first { Self.isBuiltIn($0) }
             ?? NSScreen.main
@@ -266,13 +284,32 @@ final class IslandController {
     /// The screen the island was last placed on.
     private var placedScreen: CGRect?
 
-    private func pointerMoved() {
-        // Follow the pointer to another display.
-        let mouse = NSEvent.mouseLocation
-        if let s = NSScreen.screens.first(where: { NSMouseInRect(mouse, $0.frame, false) }),
-           s.frame != placedScreen, !center.hovering {
-            refresh()
+    /// The frontmost app's top window, in AppKit screen coordinates (window
+    /// bounds need no extra permission).
+    private static func frontWindowRect() -> CGRect? {
+        guard let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier,
+              let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements],
+                                                    kCGNullWindowID) as? [[String: Any]] else { return nil }
+        let primaryTop = NSScreen.screens.first?.frame.maxY ?? 0
+        for w in list where (w[kCGWindowOwnerPID as String] as? pid_t) == pid
+                         && (w[kCGWindowLayer as String] as? Int) == 0 {
+            guard let b = w[kCGWindowBounds as String] as? [String: CGFloat],
+                  let x = b["X"], let y = b["Y"], let wd = b["Width"], let h = b["Height"],
+                  wd > 50, h > 50 else { continue }
+            // CG bounds: origin top-left of the primary display, y down.
+            return CGRect(x: x, y: primaryTop - y - h, width: wd, height: h)
         }
+        return nil
+    }
+
+    private static func screen(containing r: CGRect) -> NSScreen? {
+        NSScreen.screens.max { a, b in
+            a.frame.intersection(r).width * a.frame.intersection(r).height
+                < b.frame.intersection(r).width * b.frame.intersection(r).height
+        }.flatMap { $0.frame.intersects(r) ? $0 : nil }
+    }
+
+    private func pointerMoved() {
         guard let panel else { return }
         let inside = hotRect()?.contains(NSEvent.mouseLocation) ?? false
         if panel.ignoresMouseEvents == inside { panel.ignoresMouseEvents = !inside }
