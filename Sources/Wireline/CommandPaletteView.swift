@@ -148,6 +148,15 @@ struct CommandPaletteView: View {
             DispatchQueue.main.async {
                 (NSApp.keyWindow?.firstResponder as? NSTextView)?.moveToEndOfDocument(nil)
             }
+            // The dialog presenter clears the window's focus as the card
+            // mounts, which can land after the line above; take it back.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+                guard !(NSApp.keyWindow?.firstResponder is NSTextView) else { return }
+                focused = true
+                DispatchQueue.main.async {
+                    (NSApp.keyWindow?.firstResponder as? NSTextView)?.moveToEndOfDocument(nil)
+                }
+            }
         }
     }
 

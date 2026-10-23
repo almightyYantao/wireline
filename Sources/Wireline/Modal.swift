@@ -234,11 +234,14 @@ private struct WLModalCard: View {
                 .environment(\.wlDismiss, WLDismissAction(action: entry.dismiss))
                 .background(WLModalHook(style: entry.style, dismiss: entry.dismiss))
         }
+        // Turns in to the right, and closes by turning back the way it came.
         .modifier(WLFlipEffect(progress: Motion.reduce ? 1 : open))
-        .modifier(WLFoldEffect(progress: entry.closing && !Motion.reduce ? 0 : 1))
-        .opacity(Motion.reduce ? (entry.closing ? 0 : open) : 1)
-        .animation(Motion.reduce ? Motion.fade : Motion.flipOut, value: entry.closing)
+        .opacity(Motion.reduce ? open : 1)
         .onAppear { withAnimation(Motion.reduce ? Motion.fade : Motion.flipIn) { open = 1 } }
+        .onChange(of: entry.closing) { _, closing in
+            guard closing else { return }
+            withAnimation(Motion.reduce ? Motion.fade : Motion.flipOut) { open = 0 }
+        }
         .allowsHitTesting(!entry.closing)
         // Clear the traffic lights; the card never touches the window edge.
         .padding(.horizontal, 20).padding(.top, 30).padding(.bottom, 20)
@@ -385,8 +388,11 @@ final class WLModalRegistry {
               let hook = records.last(where: { $0.window === window && $0.hook != nil })?.hook
         else { return false }
         let composing = (window.firstResponder as? NSTextInputClient)?.hasMarkedText() ?? false
+        // A modal that handles Esc itself (the palettes) can only hear it while
+        // focus is on the card; otherwise Esc closes it from here.
+        let focusOnCard = (Self.restorable(window.firstResponder) as? NSView).map(hook.covers) ?? false
         guard Self.closesOnEscape(keyCode: event.keyCode, modifiers: event.modifierFlags,
-                                  composing: composing, escapeCloses: hook.escapeCloses)
+                                  composing: composing, escapeCloses: hook.escapeCloses || !focusOnCard)
         else { return false }
         hook.dismiss?()
         return true
