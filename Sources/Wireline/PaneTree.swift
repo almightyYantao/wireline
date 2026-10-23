@@ -252,7 +252,7 @@ struct SessionGlyph: View {
     /// else what kind of session it is.
     @MainActor
     static func look(_ s: TerminalSession, store: HostStore) -> Look {
-        if let prog = (s.activeEditor ?? s.foregroundName)?.lowercased() {
+        if let prog = (s.shownEditor ?? s.foregroundName)?.lowercased() {
             switch prog {
             case "claude":                                   return brand(.claude)
             case "codex":                                    return brand(.openai)
@@ -480,7 +480,7 @@ struct PaneLeafView: View {
                     }
                     .overlay { ConnectPanelOverlay(session: session) }
                     .overlay(alignment: .topTrailing) {
-                        if session.activeEditor == "vim" { VimHintView() }
+                        if session.shownEditor == "vim" { VimHintView() }
                     }
                     .overlay { InlineAICommandView(session: session, isActive: focused) }
                     .animation(Motion.banner, value: session.connectionState)

@@ -44,6 +44,14 @@ final class TerminalSession: Identifiable {
     /// Name of the full-screen editor currently running (`"vim"`), else nil.
     /// Drives the vim cheat-sheet overlay.
     var activeEditor: String?
+    /// `activeEditor`, unless a local shell's real foreground program says
+    /// otherwise (the byte-stream guess is only needed through `ssh`).
+    var shownEditor: String? {
+        guard let fg = foregroundName?.lowercased(),
+              !["ssh", "mosh", "vim", "vi", "nvim", "view", "vimdiff", "nvimdiff"].contains(fg)
+        else { return activeEditor }
+        return nil
+    }
 
     /// Whether a command / process is currently running in this session (the shell
     /// prompt has gone away). Drives the "running…" badge shown on a backgrounded

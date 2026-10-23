@@ -212,7 +212,7 @@ struct RightPanel: View {
                     }
                     .overlay { ConnectPanelOverlay(session: session) }
                     .overlay(alignment: .topTrailing) {
-                        if session.activeEditor == "vim" { VimHintView() }
+                        if session.shownEditor == "vim" { VimHintView() }
                     }
                     .overlay { InlineAICommandView(session: session, isActive: true) }
                     .animation(Motion.banner, value: session.connectionState)
