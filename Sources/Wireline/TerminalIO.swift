@@ -454,12 +454,14 @@ final class TerminalIO {
     }
 
     /// vim's distinctive on-screen output: a column of `~` for empty lines, or a
-    /// mode banner. `less`/`htop`/`man` don't draw these.
+    /// mode banner. `less`/`htop`/`man` don't draw these. A tilde only counts
+    /// when it stands alone at the start of a row — `~/.ssh/config` in a
+    /// TUI's output (Claude Code's, say) isn't vim.
     private func contentLooksLikeVim(_ chunk: String) -> Bool {
         let clean = Self.stripAnsi(chunk)
         if clean.contains("-- INSERT --") || clean.contains("-- VISUAL --") { return true }
-        let tildes = clean.filter { $0 == "~" }.count
-        return tildes >= 3
+        let rowTilde = /(?:\e\[\d+(?:;1)?H|\r?\n)~(?=\e|\r|\n|$)/.matchingSemantics(.unicodeScalar)
+        return chunk.matches(of: rowTilde).count >= 3
     }
 
     /// Was a vim-family editor the command that just switched to the alt screen?
