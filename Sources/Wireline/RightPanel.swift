@@ -183,8 +183,8 @@ struct RightPanel: View {
                     .padding(.leading, sidebarCollapsed ? TitleBand.shared.lightsTrailing + 44 : 8)
                     .padding(.trailing, 8)
                     .overlay(alignment: .trailing) { broadcastToggle.padding(.trailing, 12) }
+                    // Centred in the title row: the same gap above and below.
                     .frame(height: TitleBand.shared.height)
-                    .padding(.bottom, 2)
                 if showBroadcast {
                     broadcastBar
                         .clipShape(RoundedRectangle(cornerRadius: WL.radius(10), style: .continuous))
@@ -446,7 +446,7 @@ struct SessionTabBar: View {
                                    pill: pill, showSeparator: index > 0 && !active && !prevActive)
                     }
                 }
-                .wlCapsuleTrack(opaque: true)
+                .wlCapsuleTrack(padding: 2, opaque: true)
                 // Double-clicking a tab renames it; keep the window's
                 // double-click-to-zoom off this area.
                 .background(GeometryReader { g in

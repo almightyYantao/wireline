@@ -31,15 +31,16 @@ extension View {
     /// A capsule track holding segments; pair each segment with
     /// `wlSegmentPill(active:hover:in:)` and animate the selection with
     /// `Motion.slide`.
-    /// `opaque`: the theme background under the tint, for a track that sits
-    /// on the wallpaper (the tab bar) — translucent, the text over it washed out.
+    /// `opaque`: frosted glass under the tint, for a track that sits on the
+    /// wallpaper (the tab bar) — plain translucent, the text over it washed out.
     func wlCapsuleTrack(padding: CGFloat = 3, opaque: Bool = false) -> some View {
         self.padding(padding)
             .background {
                 let shape = Capsule(style: .continuous)
                 if opaque {
-                    shape.fill(WL.bg).overlay(shape.fill(WL.track))
-                        .shadow(color: .black.opacity(WL.depth(0.12)), radius: 4, y: 1)
+                    shape.fill(.regularMaterial)
+                        .overlay(shape.fill(WL.track))
+                        .overlay(shape.strokeBorder(WL.hairline, lineWidth: 1))
                 } else {
                     shape.fill(WL.track)
                 }
