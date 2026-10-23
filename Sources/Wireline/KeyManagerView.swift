@@ -243,7 +243,6 @@ struct KeyManagerView: View {
     @State private var genName = "id_ed25519"
     @State private var genComment = ""
     @State private var genPass = ""
-    @State private var passphrase = ""
     @AppStorage(TouchIDGate.graceKey) private var graceSeconds = 300
 
     var body: some View {
@@ -267,7 +266,7 @@ struct KeyManagerView: View {
             }
             model.reload()
         }
-        .sheet(item: $model.passphraseRequest) { key in passphraseSheet(key) }
+        .wlModal(item: $model.passphraseRequest) { key in passphraseSheet(key) }
     }
 
     private var existingKeys: some View {
@@ -381,33 +380,13 @@ struct KeyManagerView: View {
     }
 
     private func passphraseSheet(_ key: SSHKey) -> some View {
-        WLSheet(loc("输入 \(key.name) 的口令", "Passphrase for \(key.name)"),
-                subtitle: loc("口令只用来解密一份临时副本，导入后副本立即删除，口令不保存。",
-                              "Only decrypts a temporary copy, deleted right after import. Not stored."),
-                symbol: "touchid", width: 420, scrolls: false,
-                onClose: { passphrase = ""; model.passphraseRequest = nil }) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text(loc("口令", "Passphrase")).font(WL.small).foregroundStyle(WL.textDim)
-                SecureField("", text: $passphrase)
-                    .wlField(font: WL.body)
-                    .onSubmit { submitPassphrase(key) }
-            }
-        } footer: {
-            Spacer()
-            Button(loc("取消", "Cancel")) { passphrase = ""; model.passphraseRequest = nil }
-                .buttonStyle(.wlSecondary).keyboardShortcut(.cancelAction)
-            Button(loc("继续", "Continue")) { submitPassphrase(key) }
-                .buttonStyle(.wlPrimary).keyboardShortcut(.defaultAction)
-                .disabled(passphrase.isEmpty)
+        WLPromptSheet(title: loc("输入 \(key.name) 的口令", "Passphrase for \(key.name)"),
+                      subtitle: loc("口令只用来解密一份临时副本，导入后副本立即删除，口令不保存。",
+                                    "Only decrypts a temporary copy, deleted right after import. Not stored."),
+                      symbol: "touchid", label: loc("口令", "Passphrase"),
+                      confirmTitle: loc("继续", "Continue"), secure: true) { pass in
+            model.protect(key, passphrase: pass)
         }
-    }
-
-    private func submitPassphrase(_ key: SSHKey) {
-        guard !passphrase.isEmpty else { return }
-        let pass = passphrase
-        passphrase = ""
-        model.passphraseRequest = nil
-        model.protect(key, passphrase: pass)
     }
 
     private var agentSection: some View {

@@ -1,7 +1,7 @@
 # Wireline 界面、动效与交互规范
 
 > 适用范围：`Sources/Wireline` 下所有 SwiftUI / AppKit 界面。
-> 代码落点：[`Sources/Wireline/Motion.swift`](../../Sources/Wireline/Motion.swift)（token、转场、按钮样式、hover、脉冲）；[`Sources/Wireline/Controls.swift`](../../Sources/Wireline/Controls.swift)（卡片 / 胶囊的表面 token 与共享控件）。
+> 代码落点：[`Sources/Wireline/Motion.swift`](../../Sources/Wireline/Motion.swift)（token、转场、按钮样式、hover、脉冲）；[`Sources/Wireline/Controls.swift`](../../Sources/Wireline/Controls.swift)（卡片 / 胶囊的表面 token 与共享控件）；[`Sources/Wireline/Modal.swift`](../../Sources/Wireline/Modal.swift)（窗口内弹窗：`.wlModal` / `.wlModalHost`）。
 > 参照：Apple HIG · Motion / Accessibility，以及 macOS 自带应用（Finder、系统设置、Spotlight、菜单）的实际表现。
 
 改界面前先读一遍第 1、2 节和 4.0（卡片 / 胶囊设计语言）；新增组件时对照第 4 节；提交前过一遍第 7 节的检查清单。
@@ -34,8 +34,8 @@
 | `Motion.disclose` | spring 0.3s, bounce 0 | 展开 / 折叠：分组、箭头旋转、行内展开操作 |
 | `Motion.popIn` | spring 0.22s, bounce 0 | 菜单、气泡、小卡片出现 |
 | `Motion.popOut` | easeIn 0.12s | 上面这些消失 |
-| `Motion.modalIn` | spring 0.3s, bounce 0.05 | ⌘K / ⌘P 这类模态卡片出现 |
-| `Motion.modalOut` | easeIn 0.14s | 模态卡片消失 |
+| `Motion.flipIn` | spring 0.38s, bounce 0.16 | 弹窗卡片翻入（所有 `.wlModal`：Sheet、⌘K、⌘P） |
+| `Motion.flipOut` | easeIn 0.2s | 弹窗卡片翻回、遮罩淡出 |
 | `Motion.banner` | spring 0.36s, bounce 0.16 | 横幅、浮动条从边缘滑入 |
 | `Motion.expand` | spring 0.34s, bounce 0.12 | 用户主动召唤的浮层展开（桌宠聊天） |
 | `Motion.scroll` | smooth 0.25s | 程序触发的滚动（回到底部） |
@@ -185,8 +185,8 @@ wlAnimateTerminalLayout { showAI = true }           // 会改终端尺寸的布�
 
 ### 4.5 模态浮层（⌘K 快速连接、⌘P 命令面板）
 
-- 遮罩：黑色 40%，`wlScrim` 淡入 0.2s / 淡出 0.14s，点击遮罩关闭。
-- 卡片：16pt 连续圆角的 `wlFloating`；`wlModal`，从上方 6pt、缩放 0.97 落位；关闭时缩到 0.98 并淡出。
+- 和所有弹窗一样走 `.wlModal`（见 4.10），用 `style: .palette`：点击遮罩关闭；Esc 交给面板自己（先从子页面退回，再关闭）。
+- 卡片：18pt 连续圆角的 `wlFloating`，同样翻入 / 翻回。
 - 查询框是卡片里内缩 10pt 的胶囊（`wlSearchCapsule`），结果行用 `wlResultHighlight` 的内缩圆角块。
 - 打开的同一帧输入框获得焦点，不等动画结束。
 - 高亮行随键盘**瞬移**；鼠标 hover 某行会把高亮移过去（与键盘共用一个高亮，避免出现两个高亮）。
@@ -220,30 +220,48 @@ wlAnimateTerminalLayout { showAI = true }           // 会改终端尺寸的布�
 
 ### 4.10 弹窗（Sheet）
 
-所有 Sheet 一律用 `WLSheet`（`Controls.swift`），弹出和收起的动画交给 AppKit 系统 Sheet，不要自己再加。正文区铺 `WL.paneCanvas`，表单卡片凸起其上；头部和底栏留在主题背景上。
+**不用系统 `.sheet`。** 系统 Sheet 只能从标题栏滑下来，动画改不了，还会触发标题栏重置闪一下。所有弹窗都用窗口内的 `.wlModal`（`Modal.swift`）呈现，卡片用 `WLSheet`（`Controls.swift`）。
+
+```swift
+.wlModal(isPresented: $showEditor) { ForwardEditor(existing: editing) }
+.wlModal(item: $editing) { ctx in HostEditorView(context: ctx) }
+.wlModal(isPresented: $showPalette, style: .palette) { … }   // 点遮罩关闭，Esc 交给内容
+
+// 弹窗内部关闭自己：用 wlDismiss，不要用系统 dismiss（那会关掉整个窗口）
+@Environment(\.wlDismiss) private var dismiss
+```
+
+- **宿主。** `.wlModal` 只负责"声明"（preference），由窗口根视图上的 `.wlModalHost()` 统一画出，所以从工具页、AI 面板这种小视图里打开的弹窗也盖住整个窗口；弹窗里再开弹窗（MCP 列表 → 编辑）叠在上一层之上（最多 3 层）。主窗口、设置、待办三个窗口的根都已挂宿主；没有宿主时 `.wlModal` 自己就地当宿主。弹窗内容在宿主处渲染，环境取自窗口根（`HostStore`、`Localizer` 等已在根注入，不必再 `.environment(...)`）。
+- **遮罩。** 黑色 38%（`WL.depth`），随卡片淡入、和卡片同一条 easeIn 0.2s 淡出。遮罩带 `wlOccludesTerminal()`，弹窗在时下面的终端暂停鼠标上报。表单类弹窗点遮罩**不**关闭（防止误点丢掉输入）；`.palette` 才关闭。
+- **翻牌动画（`.wlFlip`）。** 卡片绕水平轴翻起：从后仰 70°（透视 0.55）、缩放 0.94、透明，到平放、原大、不透明；`Motion.flipIn`（spring 0.38s，bounce 0.16），弹簧的一点过冲会让卡片略微翻过平面再落定。不透明度跑在翻转前面（进度 45% 时已完全不透明），不会出现半透明的"幽灵卡"。关闭时沿同一路径翻回，`Motion.flipOut`（easeIn 0.2s）。减弱动态效果时只做 0.15s 交叉淡化。
+- **尺寸。** `WLSheet` 的 `width` / `height` 是理想尺寸：窗口放得下就用它，放不下就缩到窗口内（四周留 20pt、顶部留 30pt 让开红绿灯），正文滚动吸收差额。设置窗口只有 600pt 宽，弹窗理想宽度别超过 560。
+- **键盘。** 弹窗出现时把焦点从下面的窗口（终端、输入框）拿走，第一个输入框用 `.wlAutofocus($focus)` 获得焦点；Esc 关闭最上层的弹窗（输入法正在组字时不拦，让 Esc 取消候选）；回车触发 `.keyboardShortcut(.defaultAction)` 主按钮；关闭后焦点还给打开前的视图。
+- **仍是系统界面的：** 文件选择 / 保存（`NSOpenPanel` / `NSSavePanel`）、AI 执行前的高危命令 / 外部工具 / 文件传输二次确认（`.alert`，有意保留系统确认框的分量）、主窗口的错误提示框。
 
 ```
-┌──────────────────────────────────────────┐
-│ [图标] 标题                          [×] │  头部：28pt 图标块 + 标题 + 一行副标题
+╭──────────────────────────────────────────╮
+│ [图标] 标题                          (×) │  头部：34pt 图标块 + 标题 + 一行副标题，圆形关闭钮
 │        副标题                            │
 ├──────────────────────────────────────────┤
 │                                          │
-│  分区标题                                │  内容：20pt 内边距，分区间距 18
-│  ┌────────────────────────────────────┐  │
-│  │ 标签                        [控件] │  │  WLFormSection 卡片
+│  分区标题                                │  内容：铺 WL.paneCanvas，20pt 内边距，分区间距 18
+│  ╭────────────────────────────────────╮  │
+│  │ 标签                     (  控件  ) │  │  WLFormSection 卡片，控件是胶囊
 │  ├────────────────────────────────────┤  │  WLFormDivider 细分隔线
-│  │ 标签                        [控件] │  │
-│  └────────────────────────────────────┘  │
+│  │ 标签                     (  控件  ) │  │
+│  ╰────────────────────────────────────╯  │
 │  卡片下方的说明文字（footer）            │
 │                                          │
 ├──────────────────────────────────────────┤
-│ [次要操作]            (取消) ( 主操作 )  │  底栏：胶囊按钮
-└──────────────────────────────────────────┘
+│ (次要操作)            (取消) ( 主操作 )  │  底栏：胶囊按钮
+╰──────────────────────────────────────────╯
+   整张卡：18pt 连续圆角 + 发丝边 + 只落在形状上的阴影，浮在遮罩上
 ```
 
 - **底栏按钮**：次要或工具类操作靠左；取消（`.wlSecondary` + `.keyboardShortcut(.cancelAction)`）和主操作（`.wlPrimary` + `.keyboardShortcut(.defaultAction)`）靠右。主操作在条件不满足时禁用。危险操作用 `.wlDestructive`。
 - 回车触发主操作，Esc 取消，右上角 × 与取消等价。
-- 小胶囊（`.wlChip` / `BracketButton`）只用在内容区里的小型行内操作（如"选择…"），不放在底栏。
+- 只有一个输入框的弹窗（新建分组、新建文件夹、重命名、密钥口令）直接用 `WLPromptSheet`。
+- 内容区里的行内操作（编辑、删除、重新连接、"选择…"）用 `.wlChip` / `BracketButton`，不要用绿色文字链接；展开 / 收起用 `WLDisclosure` / `WLDisclosureChip`（胶囊 + 旋转箭头），不要用系统 `DisclosureGroup` 的三角。小胶囊不放在底栏。
 
 ### 4.11 卡片与表单
 
@@ -293,6 +311,7 @@ wlAnimateTerminalLayout { showAI = true }           // 会改终端尺寸的布�
 - ❌ hover 时把一个形状换成另一个（圆角矩形 ↔ 胶囊、有 ↔ 无背景视图）—— 会闪。保持同一个形状，只改不透明度。
 - ❌ 新写 `RoundedRectangle(cornerRadius:)` 不带 `style: .continuous`，或用 `WL.border` 画实线描边 / 分隔 —— 用 `WL.hairline` / `WLFormDivider()`。
 - ❌ 离场比进场还慢。
+- ❌ 新写 `.sheet(...)`，或在弹窗里用 `@Environment(\.dismiss)` —— 用 `.wlModal` 和 `@Environment(\.wlDismiss)`（系统 `dismiss` 在窗口内弹窗里会把整个窗口关掉）。
 
 ---
 
@@ -306,5 +325,5 @@ wlAnimateTerminalLayout { showAI = true }           // 会改终端尺寸的布�
 - [ ] 纯键盘走一遍 ⌘K、⌘P、右键菜单：高亮瞬移，回车 / Esc 都能用
 - [ ] 窗口缩到最小尺寸，右键菜单贴近右下角时不会溢出窗口
 - [ ] 切到一个浅色主题（如 GitHub Light）走一遍：没有看不见的文字、发灰的卡片、过重的阴影
-- [ ] 新增的 Sheet 用了 `WLSheet`，回车 / Esc 都能用
+- [ ] 新增的弹窗用 `.wlModal` + `WLSheet`，第一个输入框自动获得焦点，回车 / Esc 都能用，关闭后焦点回到原处
 - [ ] 新表面用了 4.0 的共享修饰符（`wlCard` / `wlFloating` / `wlCapsuleTrack` / `wlSearchCapsule` / `wlField` / `wlChip`），阴影只落在形状上

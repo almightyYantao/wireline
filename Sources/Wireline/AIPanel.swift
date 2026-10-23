@@ -132,9 +132,8 @@ struct AIPanelView: View {
         .wlFloating(cardShape,
                     fill: WL.bg.opacity(docked ? store.terminalOpacity * WL.chromeOpacity : 1),
                     shadow: docked ? 0.16 : 0.32, radius: docked ? 6 : 22, y: docked ? 2 : 6)
-        .sheet(isPresented: $showFleet) {
-            FleetView(onClose: { showFleet = false })
-                .environment(store).environment(loc)
+        .wlModal(isPresented: $showFleet) {
+            FleetView(onClose: { wlAnimate(Motion.flipOut) { showFleet = false } })
         }
         .onAppear { inputFocused = true; loadConvo() }
         .onChange(of: conversationKey) { _, _ in loadConvo() }

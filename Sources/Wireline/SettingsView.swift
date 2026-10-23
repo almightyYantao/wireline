@@ -39,12 +39,14 @@ struct SettingsView: View {
         // The system's document-window zoom-in when Settings opens.
         .background(WindowAccessor { $0.animationBehavior = .documentWindow })
         .preferredColorScheme(WL.colorScheme)
-        .sheet(isPresented: $showThemeEditor) { ThemeEditorView() }
-        .sheet(isPresented: $showMCP) {
-            MCPSettingsView(onClose: { showMCP = false }).environment(loc)
+        // In-window cards that flip in over the settings (see Modal.swift),
+        // not system sheets sliding out of the title bar.
+        .wlModal(isPresented: $showThemeEditor) { ThemeEditorView() }
+        .wlModal(isPresented: $showMCP) {
+            MCPSettingsView(onClose: { wlAnimate(Motion.flipOut) { showMCP = false } })
         }
-        .sheet(isPresented: $showSkills) {
-            SkillSettingsView(onClose: { showSkills = false }).environment(loc)
+        .wlModal(isPresented: $showSkills) {
+            SkillSettingsView(onClose: { wlAnimate(Motion.flipOut) { showSkills = false } })
         }
     }
 

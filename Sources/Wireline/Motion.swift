@@ -30,9 +30,11 @@ enum Motion {
     static let popIn: Animation = .spring(duration: 0.22, bounce: 0)
     /// …and going away. Exits are always faster than entries.
     static let popOut: Animation = .easeIn(duration: 0.12)
-    /// A modal surface (⌘K, ⌘P) appearing over a scrim.
-    static let modalIn: Animation = .spring(duration: 0.3, bounce: 0.05)
-    static let modalOut: Animation = .easeIn(duration: 0.14)
+    /// A dialog card (every `.wlModal`: sheets, ⌘K, ⌘P) flipping up into
+    /// place over its scrim.
+    static let flipIn: Animation = .spring(duration: 0.38, bounce: 0.16)
+    /// …and flipping back away — the same path reversed, faster.
+    static let flipOut: Animation = .easeIn(duration: 0.2)
     /// A banner / toast / floating bar sliding in from an edge.
     static let banner: Animation = .spring(duration: 0.36, bounce: 0.16)
     /// Expanding a floating surface the user deliberately summoned (pet chat).
@@ -81,20 +83,22 @@ extension AnyTransition {
         )
     }
 
-    /// Modal cards over a scrim: settle in from slightly above, shrink away.
-    static var wlModal: AnyTransition {
+    /// Dialog cards (`.wlModal`): the card flips up about its horizontal axis
+    /// like a card being turned over — tilted back 70° in perspective, 94%
+    /// size, transparent → flat, full size, opaque — on a spring with a
+    /// little settle. Closing runs the same path backwards, faster.
+    static var wlFlip: AnyTransition {
         if Motion.reduce { return .opacity.animation(Motion.fade) }
-        return .asymmetric(
-            insertion: .scale(scale: 0.97).combined(with: .offset(y: -6)).combined(with: .opacity)
-                .animation(Motion.modalIn),
-            removal: .scale(scale: 0.98).combined(with: .opacity).animation(Motion.modalOut)
-        )
+        let flip = AnyTransition.modifier(active: WLFlipEffect(progress: 0), identity: WLFlipEffect(progress: 1))
+        return .asymmetric(insertion: flip.animation(Motion.flipIn),
+                           removal: flip.animation(Motion.flipOut))
     }
 
-    /// Scrims behind modals.
-    static var wlScrim: AnyTransition {
-        .asymmetric(insertion: .opacity.animation(.easeOut(duration: 0.2)),
-                    removal: .opacity.animation(Motion.modalOut))
+    /// The scrim behind a flipping card: in with the card, out with it.
+    static var wlFlipScrim: AnyTransition {
+        if Motion.reduce { return .opacity.animation(Motion.fade) }
+        return .asymmetric(insertion: .opacity.animation(Motion.state),
+                           removal: .opacity.animation(Motion.flipOut))
     }
 
     /// Banners and floating bars that belong to an edge.
@@ -123,6 +127,40 @@ extension AnyTransition {
     static var wlBadge: AnyTransition {
         if Motion.reduce { return .opacity }
         return .scale(scale: 0.5).combined(with: .opacity)
+    }
+}
+
+/// The card-flip pose at `progress` (0 = put away, 1 = in place). One
+/// animatable number drives all three properties so they stay in step, and
+/// the spring's small overshoot tips the card a hair past flat before it settles.
+struct WLFlipEffect: ViewModifier, Animatable {
+    /// How far the card starts tilted back, in degrees.
+    static let tilt: Double = 70
+    /// How small it starts.
+    static let startScale: Double = 0.94
+
+    var progress: Double
+
+    nonisolated var animatableData: Double {
+        get { progress }
+        set { progress = newValue }
+    }
+
+    /// Rotation, scale and opacity at a given progress. Opacity runs ahead of
+    /// the turn so the card is solid for most of it rather than ghosting in.
+    static func pose(_ progress: Double) -> (angle: Double, scale: Double, opacity: Double) {
+        (angle: -tilt * (1 - progress),
+         scale: startScale + (1 - startScale) * progress,
+         opacity: min(1, max(0, progress * 2.2)))
+    }
+
+    func body(content: Content) -> some View {
+        let pose = Self.pose(progress)
+        content
+            .scaleEffect(pose.scale)
+            .rotation3DEffect(.degrees(pose.angle), axis: (x: 1, y: 0, z: 0),
+                              anchor: .center, perspective: 0.55)
+            .opacity(pose.opacity)
     }
 }
 

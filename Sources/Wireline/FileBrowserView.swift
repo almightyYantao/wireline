@@ -16,9 +16,7 @@ struct FileBrowserView: View {
     @State private var remoteSel: String?
     @State private var localSel: String?
     @State private var showMkdir = false
-    @State private var newName = ""
     @State private var renaming: SFTPEntry?
-    @State private var renameText = ""
     @State private var aiEditEntry: SFTPEntry?
 
     var body: some View {
@@ -52,20 +50,25 @@ struct FileBrowserView: View {
             m.connect()
         }
         .onDisappear { model?.disconnect() }
-        .alert(loc("新建文件夹", "New Folder"), isPresented: $showMkdir) {
-            TextField(loc("名称", "Name"), text: $newName)
-            Button(loc("创建", "Create")) { model?.makeDirectory(newName); newName = "" }
-            Button(loc("取消", "Cancel"), role: .cancel) { newName = "" }
+        .wlModal(isPresented: $showMkdir) {
+            WLPromptSheet(title: loc("新建文件夹", "New Folder"), subtitle: host.alias + " · " + (model?.path ?? ""),
+                          symbol: "folder.badge.plus", label: loc("名称", "Name"),
+                          confirmTitle: loc("创建", "Create")) { name in
+                model?.makeDirectory(name)
+            }
         }
-        .alert(loc("重命名", "Rename"), isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
-            TextField(loc("新名称", "New name"), text: $renameText)
-            Button(loc("确定", "OK")) { if let e = renaming { model?.rename(e, to: renameText) }; renaming = nil }
-            Button(loc("取消", "Cancel"), role: .cancel) { renaming = nil }
+        .wlModal(item: $renaming) { entry in
+            WLPromptSheet(title: loc("重命名", "Rename"), subtitle: host.alias + " · " + entry.name,
+                          symbol: "pencil", label: loc("新名称", "New name"),
+                          confirmTitle: loc("重命名", "Rename"), initial: entry.name) { name in
+                model?.rename(entry, to: name)
+            }
         }
-        .sheet(item: $aiEditEntry) { entry in
+        .wlModal(item: $aiEditEntry) { entry in
             if let m = model {
-                AIFileEditView(model: m, entry: entry, hostName: host.alias) { aiEditEntry = nil }
-                    .environment(loc)
+                AIFileEditView(model: m, entry: entry, hostName: host.alias) {
+                    wlAnimate(Motion.flipOut) { aiEditEntry = nil }
+                }
             }
         }
     }
@@ -76,7 +79,7 @@ struct FileBrowserView: View {
         VStack(spacing: 0) {
             paneHeader(title: loc("远程 · \(host.alias)", "Remote · \(host.alias)"), symbol: "server.rack", crumbs: model?.breadcrumbs.map { ($0.name, $0.path) } ?? [],
                        onCrumb: { model?.go(to: $0) }, onUp: { model?.goUp() }) {
-                BracketButton(loc("新建文件夹", "New Folder")) { newName = ""; showMkdir = true }
+                BracketButton(loc("新建文件夹", "New Folder")) { showMkdir = true }
                 BracketButton(loc("刷新", "Refresh")) { model?.refresh() }
                 BracketButton(loc("断开", "Disconnect")) { model?.disconnect(); onClose() }
             }
@@ -127,7 +130,7 @@ struct FileBrowserView: View {
                 entry.isDir
                     ? .divider
                     : .item(loc("AI 改…", "AI edit…"), systemImage: "sparkles") { aiEditEntry = entry },
-                .item(loc("重命名…", "Rename…"), systemImage: "pencil") { renameText = entry.name; renaming = entry },
+                .item(loc("重命名…", "Rename…"), systemImage: "pencil") { renaming = entry },
                 .divider,
                 .item(loc("删除", "Delete"), systemImage: "trash", destructive: true) { model.delete(entry) }
             ])

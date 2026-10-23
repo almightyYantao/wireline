@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// Management UI for MCP servers: list, connect/disconnect, add/edit/remove.
-/// Presented as a sheet from Settings → AI.
+/// Presented as a modal card from Settings → AI.
 struct MCPSettingsView: View {
     @Environment(Localizer.self) private var loc
     @State private var store = MCPStore.shared
@@ -50,13 +50,12 @@ struct MCPSettingsView: View {
             Button(loc("完成", "Done")) { onClose() }
                 .buttonStyle(.wlPrimary).keyboardShortcut(.defaultAction)
         }
-        .sheet(item: $editing) { cfg in
+        .wlModal(item: $editing) { cfg in
             MCPServerEditor(config: cfg, isNew: isNew) { saved in
                 if isNew { store.add(saved) } else { store.update(saved) }
                 if store.enabled, saved.enabled { Task { await store.connect(saved.id) } }
-                editing = nil
-            } onCancel: { editing = nil }
-            .environment(loc)
+                wlAnimate(Motion.flipOut) { editing = nil }
+            } onCancel: { wlAnimate(Motion.flipOut) { editing = nil } }
         }
     }
 
@@ -71,14 +70,14 @@ struct MCPSettingsView: View {
             }
             Text(s.kind == .http ? s.url : "\(s.command) \(s.args.joined(separator: " "))")
                 .font(WL.mono(11)).foregroundStyle(WL.textDim).lineLimit(1)
-            HStack(spacing: 14) {
-                Button(loc("重新连接", "Reconnect")) { Task { await store.connect(s.id) } }
-                Button(loc("断开", "Disconnect")) { Task { await store.disconnect(s.id) } }
-                Button(loc("编辑", "Edit")) { isNew = false; editing = s }
-                Button(loc("删除", "Delete"), role: .destructive) { store.remove(s) }
+            HStack(spacing: 6) {
+                BracketButton(loc("重新连接", "Reconnect")) { Task { await store.connect(s.id) } }
+                BracketButton(loc("断开", "Disconnect")) { Task { await store.disconnect(s.id) } }
+                BracketButton(loc("编辑", "Edit")) { isNew = false; editing = s }
                 Spacer()
+                BracketButton(loc("删除", "Delete")) { store.remove(s) }
             }
-            .font(WL.caption).buttonStyle(.wlPlain).foregroundStyle(WL.green)
+            .padding(.top, 2)
         }
         .padding(.vertical, 10)
     }
@@ -113,6 +112,7 @@ private struct MCPServerEditor: View {
     @State private var argsText = ""
     @State private var envRows: [EnvRow] = []
     @State private var headerRows: [EnvRow] = []
+    @FocusState private var nameFocused: Bool
 
     private struct EnvRow: Identifiable { let id = UUID(); var key: String; var value: String }
 
@@ -122,7 +122,10 @@ private struct MCPServerEditor: View {
                 symbol: isNew ? "plus.square.on.square" : "slider.horizontal.3",
                 width: 520, height: 520, onClose: onCancel) {
             WLFormSection(loc("基本", "General")) {
-                stacked(loc("名称", "Name")) { field("github", $config.name) }
+                stacked(loc("名称", "Name")) {
+                    TextField("", text: $config.name, prompt: Text("github").foregroundStyle(WL.textDim))
+                        .wlField(focus: $nameFocused)
+                }
                 WLFormDivider()
                 WLSegmented(selection: $config.kind, options: [
                     WLOption(MCPKind.stdio, loc("本地 stdio", "Local stdio")),
@@ -159,6 +162,7 @@ private struct MCPServerEditor: View {
                 .disabled(!canSave)
         }
         .onAppear(perform: populate)
+        .wlAutofocus($nameFocused)
     }
 
     private func keyValueSection(_ title: String, footer: String, _ rows: Binding<[EnvRow]>) -> some View {
@@ -180,10 +184,10 @@ private struct MCPServerEditor: View {
                 WLFormDivider()
             }
             Button { rows.wrappedValue.append(EnvRow(key: "", value: "")) } label: {
-                Label(loc("添加", "Add"), systemImage: "plus").font(WL.small).foregroundStyle(WL.green)
+                Label(loc("添加", "Add"), systemImage: "plus")
             }
-            .buttonStyle(.wlPlain)
-            .frame(minHeight: 34)
+            .buttonStyle(.wlChip())
+            .padding(.vertical, 8)
         }
     }
 

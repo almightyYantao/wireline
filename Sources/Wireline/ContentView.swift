@@ -50,6 +50,7 @@ struct ContentView: View {
     @State private var selectedAlias: String?
     @State private var showQuickConnect = false
     @State private var showCommandPalette = false
+    @State private var showNewGroup = false
     @State private var sidebarOpen = false
     @State private var openedByHover = false
     @State private var hoverOpenTask: DispatchWorkItem?
@@ -110,20 +111,16 @@ struct ContentView: View {
                 fileHost = host; operation = .files
             }
         }
-        .sheet(item: $editing) { ctx in
-            HostEditorView(context: ctx).environment(store)
-        }
-        .sheet(isPresented: $showBackup) {
-            BackupView().environment(store)
-        }
+        .modifier(ContentModals(editing: $editing, showBackup: $showBackup, showNewGroup: $showNewGroup,
+                                showQuickConnect: $showQuickConnect, showCommandPalette: $showCommandPalette))
         .onReceive(NotificationCenter.default.publisher(for: .showQuickConnect)) { _ in
-            wlAnimate(Motion.modalIn) { showQuickConnect = true }
+            wlAnimate(Motion.flipIn) { showQuickConnect = true }
         }
         // Global-hotkey entry points: the app was just activated by the Carbon
         // handler; bring the right window forward and open the surface.
         .onReceive(NotificationCenter.default.publisher(for: .summonQuickConnect)) { _ in
             openWindow(id: "main")
-            wlAnimate(Motion.modalIn) { showQuickConnect = true }
+            wlAnimate(Motion.flipIn) { showQuickConnect = true }
         }
         .onReceive(NotificationCenter.default.publisher(for: .summonPet)) { _ in
             openWindow(id: "pet")
@@ -148,44 +145,11 @@ struct ContentView: View {
         return alias.flatMap { a in store.hosts.first { $0.alias == a } }
     }
 
-    /// The keyboard-driven overlays (Quick Connect, Command Palette) — in-window
-    /// overlays, not sheets, so they never trigger the AppKit title-bar reset /
-    /// flash. Scrim and card are separate children of the `if` so each gets its
-    /// own transition (scrim fades, card settles in).
-    @ViewBuilder
+    /// Floating bits that aren't dialogs (the config toast). Dialogs — Quick
+    /// Connect and the Command Palette included — are `.wlModal`s, see
+    /// `ContentModals`.
     private var overlays: some View {
-        ZStack {
-            ConfigToast()
-            if showQuickConnect {
-                scrim { wlAnimate(Motion.modalOut) { showQuickConnect = false } }
-                modalCard(width: 620, height: 420) {
-                    CommandPaletteView(onClose: { wlAnimate(Motion.modalOut) { showQuickConnect = false } })
-                }
-            }
-            if showCommandPalette {
-                scrim { wlAnimate(Motion.modalOut) { showCommandPalette = false } }
-                modalCard(width: 640, height: 460) {
-                    CommandPaletteView(initialQuery: ">", onClose: { wlAnimate(Motion.modalOut) { showCommandPalette = false } })
-                }
-            }
-        }
-    }
-
-    private func scrim(onTap: @escaping () -> Void) -> some View {
-        Color.black.opacity(WL.depth(0.4))
-            .ignoresSafeArea()
-            .onTapGesture(perform: onTap)
-            .transition(.wlScrim)
-    }
-
-    private func modalCard<C: View>(width: CGFloat, height: CGFloat,
-                                    @ViewBuilder _ content: () -> C) -> some View {
-        let shape = RoundedRectangle(cornerRadius: WL.radius(16), style: .continuous)
-        return content()
-            .frame(width: width, height: height)
-            .clipShape(shape)
-            .wlFloating(shape, shadow: 0.5, radius: 28, y: 10)
-            .transition(.wlModal)
+        ConfigToast()
     }
 
     private func toggleSidebar() { setSidebar(!sidebarOpen) }
@@ -245,6 +209,7 @@ struct ContentView: View {
                           onAdd: { editing = HostEditContext(host: nil, defaultGroup: $0) },
                           onEdit: { editing = HostEditContext(host: $0) },
                           onBackup: { showBackup = true },
+                          onNewGroup: { showNewGroup = true },
                           onOpenFiles: { fileHost = $0; operation = .files; setSidebar(false) },
                           onCollapse: { setSidebar(false) })
                     .frame(width: 340)
@@ -281,7 +246,7 @@ private struct PaletteTabHandlers: ViewModifier {
     func body(content: Content) -> some View {
         content
             .onReceive(NotificationCenter.default.publisher(for: .showCommandPalette)) { _ in
-                wlAnimate(Motion.modalIn) { showCommandPalette = true }
+                wlAnimate(Motion.flipIn) { showCommandPalette = true }
             }
             .onReceive(NotificationCenter.default.publisher(for: .cycleTab)) { note in
                 if let d = note.object as? Int { sessions.focusAdjacentTab(d) }
@@ -298,7 +263,52 @@ private struct PaletteTabHandlers: ViewModifier {
     }
 }
 
-/// Wraps an optional host so `.sheet(item:)` can present both add and edit.
+/// The main window's dialogs, all in-window cards that flip in (Modal.swift).
+/// The new-group dialog lives here rather than in the drawer: a drawer opened
+/// by hover closes when the pointer moves onto the card, and would take a
+/// dialog it owned with it. (A modifier to keep `ContentView.body` within the
+/// type-checker's budget.)
+private struct ContentModals: ViewModifier {
+    @Environment(HostStore.self) private var store
+    @Binding var editing: HostEditContext?
+    @Binding var showBackup: Bool
+    @Binding var showNewGroup: Bool
+    @Binding var showQuickConnect: Bool
+    @Binding var showCommandPalette: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .wlModal(item: $editing) { ctx in HostEditorView(context: ctx) }
+            .wlModal(isPresented: $showBackup) { BackupView() }
+            .wlModal(isPresented: $showNewGroup) {
+                NewGroupSheet { name in store.createGroup(name) }
+            }
+            // The keyboard launchers: Esc is theirs (it steps back out of a
+            // sub-page first), a click outside closes them.
+            .wlModal(isPresented: $showQuickConnect, style: .palette) {
+                paletteCard(width: 620, height: 420) {
+                    CommandPaletteView(onClose: { wlAnimate(Motion.flipOut) { showQuickConnect = false } })
+                }
+            }
+            .wlModal(isPresented: $showCommandPalette, style: .palette) {
+                paletteCard(width: 640, height: 460) {
+                    CommandPaletteView(initialQuery: ">",
+                                       onClose: { wlAnimate(Motion.flipOut) { showCommandPalette = false } })
+                }
+            }
+    }
+
+    private func paletteCard<C: View>(width: CGFloat, height: CGFloat,
+                                      @ViewBuilder _ content: () -> C) -> some View {
+        let shape = RoundedRectangle(cornerRadius: WL.radius(18), style: .continuous)
+        return content()
+            .frame(idealWidth: width, maxWidth: width, idealHeight: height, maxHeight: height)
+            .clipShape(shape)
+            .wlFloating(shape, shadow: 0.5, radius: 30, y: 14)
+    }
+}
+
+/// Wraps an optional host so `.wlModal(item:)` can present both add and edit.
 struct HostEditContext: Identifiable {
     let id = UUID()
     let host: Host?
@@ -321,12 +331,12 @@ struct LeftPanel: View {
     var onAdd: (String?) -> Void
     var onEdit: (Host) -> Void
     var onBackup: () -> Void
+    var onNewGroup: () -> Void
     var onOpenFiles: (Host) -> Void
     var onCollapse: () -> Void
 
     @State private var collapsed: Set<String> =
         Set(UserDefaults.standard.stringArray(forKey: "collapsedGroups") ?? ["未分组"])
-    @State private var showNewGroup = false
     @State private var searchHighlight = 0
     @FocusState private var searchFocused: Bool
     @Namespace private var segment
@@ -356,12 +366,9 @@ struct LeftPanel: View {
             Rectangle().fill(WL.border.opacity(0.5)).frame(height: 1)
             bottomBar
         }
-        .sheet(isPresented: $showNewGroup) {
-            NewGroupSheet { name in store.createGroup(name) }
-        }
     }
 
-    private func presentNewGroup() { showNewGroup = true }
+    private func presentNewGroup() { onNewGroup() }
 
     /// Title row, level with the traffic lights; actions are quiet icons.
     private var header: some View {
@@ -599,41 +606,19 @@ struct BracketButton: View {
     }
 }
 
-/// Themed sheet for creating a new group.
+/// The dialog for creating a new group.
 struct NewGroupSheet: View {
     @Environment(Localizer.self) private var loc
-    @Environment(\.dismiss) private var dismiss
     var onCreate: (String) -> Void
-    @State private var name = ""
-
-    private var trimmed: String { name.trimmingCharacters(in: .whitespaces) }
 
     var body: some View {
-        WLSheet(loc("新建分组", "New Group"),
-                subtitle: loc("创建后把主机拖进去即可", "Create it, then drag hosts in"),
-                symbol: "folder.badge.plus", width: 400, scrolls: false,
-                onClose: { dismiss() }) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text(loc("分组名称", "Group name")).font(WL.small).foregroundStyle(WL.textDim)
-                TextField("", text: $name,
-                          prompt: Text(loc("如 生产环境", "e.g. Production")).foregroundStyle(WL.textDim))
-                    .wlField(font: WL.body)
-                    .onSubmit(create)
-            }
-        } footer: {
-            Spacer()
-            Button(loc("取消", "Cancel")) { dismiss() }
-                .buttonStyle(.wlSecondary).keyboardShortcut(.cancelAction)
-            Button(loc("创建", "Create"), action: create)
-                .buttonStyle(.wlPrimary).keyboardShortcut(.defaultAction)
-                .disabled(trimmed.isEmpty)
-        }
-    }
-
-    private func create() {
-        guard !trimmed.isEmpty else { return }
-        onCreate(trimmed)
-        dismiss()
+        WLPromptSheet(title: loc("新建分组", "New Group"),
+                      subtitle: loc("创建后把主机拖进去即可", "Create it, then drag hosts in"),
+                      symbol: "folder.badge.plus",
+                      label: loc("分组名称", "Group name"),
+                      prompt: loc("如 生产环境", "e.g. Production"),
+                      confirmTitle: loc("创建", "Create"),
+                      onConfirm: onCreate)
     }
 }
 

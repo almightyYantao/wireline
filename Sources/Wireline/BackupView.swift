@@ -5,7 +5,7 @@ import WirelineCore
 struct BackupView: View {
     @Environment(HostStore.self) private var store
     @Environment(Localizer.self) private var loc
-    @Environment(\.dismiss) private var dismiss
+    @Environment(\.wlDismiss) private var dismiss
     @State private var mode: Mode = .export
     @State private var passphrase = ""
     @State private var confirm = ""

@@ -26,6 +26,7 @@ struct WirelineApp: App {
         // than spawning a duplicate.
         Window("Wireline", id: "main") {
             ContentView()
+                .wlModalHost()
                 .environment(store)
                 .environment(forwards)
                 .environment(sessions)
@@ -206,6 +207,7 @@ struct WirelineApp: App {
         // dark chrome) rather than the native preferences window.
         Window("Wireline Settings", id: "settings") {
             SettingsView()
+                .wlModalHost()
                 .environment(store)
                 .environment(todos)
                 .environment(loc)
@@ -220,6 +222,7 @@ struct WirelineApp: App {
         // it instead of spawning duplicates.
         Window("Wireline To-Do", id: "todos") {
             TodoWindowView()
+                .wlModalHost()
                 .environment(todos)
                 .environment(store)
                 .environment(loc)
