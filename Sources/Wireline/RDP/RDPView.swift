@@ -23,7 +23,7 @@ import WirelineCore
 final class RDPView: NSView, @preconcurrency NSTextInputClient, NSMenuItemValidation {
     /// Set by `RDPSession` while a connection is up (nil = input is dropped).
     var connection: RDPConnection?
-    var commandKeyMode: RDPCommandKeyMode = .controlShortcuts
+    var commandKeyMode: RDPCommandKeyMode = .windowsKey
     /// Left-click: focus this pane.
     var onClickFocus: (() -> Void)?
     /// The view's size or backing scale changed (debounced by the session).

@@ -120,7 +120,9 @@ struct HostOverview: View {
                             .item(loc("连接", "Connect"), systemImage: "play.fill") {
                                 connectHost(host, store: store, sessions: sessions, openWindow: openWindow)
                             },
+                        ] + (host.isRDP ? [] : [
                             .item(loc("文件 (SFTP)", "Files (SFTP)"), systemImage: "folder") { onFiles(host) },
+                        ]) + [
                             .item(loc("详情", "Details"), systemImage: "info.circle") { onDetails(host) },
                             .item(loc("编辑…", "Edit…"), systemImage: "pencil") { onEdit(host) },
                         ])

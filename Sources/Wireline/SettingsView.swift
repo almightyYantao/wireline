@@ -18,6 +18,11 @@ struct SettingsView: View {
     @State private var showMCP = false
     @State private var showSkills = false
     @State private var config = ConfigStore.shared
+    // Remote desktop (read by `RDPPreferences` when a pane connects).
+    @AppStorage("rdpCommandKeyMode") private var rdpCommandKeyMode = RDPCommandKeyMode.windowsKey.rawValue
+    @AppStorage("rdpHiDPI") private var rdpHiDPI = true
+    @AppStorage("rdpClipboard") private var rdpClipboard = true
+    @AppStorage("rdpAudio") private var rdpAudio = true
 
     var body: some View {
         if embedded { card } else { window }
@@ -307,6 +312,26 @@ struct SettingsView: View {
                     WLFormDivider()
                     Toggle(isOn: $store.quickTerminalAutohide) { rowLabel(loc("失去焦点时自动收起", "Hide when it loses focus")) }
                         .toggleStyle(.wlSwitch).frame(minHeight: 38).wlConfigLocked("quick-terminal-autohide")
+                }
+
+                section(loc("远程桌面", "Remote Desktop"),
+                        footer: loc("Windows 主机在新建主机时选「远程桌面 (RDP)」。更改在下次连接时生效。",
+                                    "Add Windows machines as Remote Desktop (RDP) hosts. Changes apply to the next connection.")) {
+                    WLFormRow(loc("⌘ 键", "⌘ key")) {
+                        WLMenuPicker(selection: $rdpCommandKeyMode, options: [
+                            WLOption(RDPCommandKeyMode.windowsKey.rawValue, loc("当作 Windows 键", "Windows key")),
+                            WLOption(RDPCommandKeyMode.controlShortcuts.rawValue, loc("⌘ 字母快捷键当作 Ctrl", "⌘-letter shortcuts act as Ctrl")),
+                        ], minWidth: 200)
+                    }
+                    WLFormDivider()
+                    Toggle(isOn: $rdpHiDPI) { rowLabel(loc("Retina 全分辨率（Windows 缩放 200%）", "Full Retina resolution (Windows at 200%)")) }
+                        .toggleStyle(.wlSwitch).frame(minHeight: 38)
+                    WLFormDivider()
+                    Toggle(isOn: $rdpClipboard) { rowLabel(loc("共享剪贴板（文本）", "Share the clipboard (text)")) }
+                        .toggleStyle(.wlSwitch).frame(minHeight: 38)
+                    WLFormDivider()
+                    Toggle(isOn: $rdpAudio) { rowLabel(loc("在本机播放远程声音", "Play remote sound on this Mac")) }
+                        .toggleStyle(.wlSwitch).frame(minHeight: 38)
                 }
 
                 section(loc("连通性", "Connectivity"),

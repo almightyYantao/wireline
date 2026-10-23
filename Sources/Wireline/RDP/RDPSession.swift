@@ -37,7 +37,9 @@ struct RDPTarget: Sendable {
 /// RDP preferences (Settings → 远程桌面 / config file), read where they persist.
 enum RDPPreferences {
     static var commandKeyMode: RDPCommandKeyMode {
-        UserDefaults.standard.string(forKey: "rdpCommandKeyMode").flatMap(RDPCommandKeyMode.init) ?? .controlShortcuts
+        // ⌘ is the Windows key; ⌘C / ⌘V / ⌘X / ⌘A still reach Windows as
+        // Ctrl+key through the Edit menu (RDPView.copy etc.).
+        UserDefaults.standard.string(forKey: "rdpCommandKeyMode").flatMap(RDPCommandKeyMode.init) ?? .windowsKey
     }
     /// Render at the Mac's full Retina resolution (Windows scaled to 200%).
     static var hiDPI: Bool { UserDefaults.standard.object(forKey: "rdpHiDPI") as? Bool ?? true }

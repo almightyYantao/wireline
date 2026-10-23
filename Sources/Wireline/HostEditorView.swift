@@ -21,6 +21,12 @@ struct HostEditorView: View {
     @State private var autoSudo = false
     @State private var launchArgs = ""
     @State private var availableKeys: [String] = []
+    @State private var hostProtocol: HostProtocol = .ssh
+    @State private var rdpDomain = ""
+    /// SSH host alias to tunnel through ("" = connect directly).
+    @State private var rdpVia = ""
+    /// `1920x1080`, or "" to follow the pane's size.
+    @State private var rdpResolution = ""
     @FocusState private var aliasFocused: Bool
 
     private var isEditing: Bool { context.host != nil }
@@ -29,8 +35,18 @@ struct HostEditorView: View {
     var body: some View {
         WLSheet(isEditing ? loc("编辑主机", "Edit Host") : loc("新建主机", "New Host"),
                 subtitle: isEditing ? originalAlias : loc("填写连接信息与认证方式", "Connection details and authentication"),
-                symbol: "server.rack", width: 480, height: 580,
+                symbol: isRDP ? "squareshape.split.2x2" : "server.rack", width: 480, height: 580,
                 onClose: { dismiss() }) {
+            WLSegmented(selection: $hostProtocol.animation(Motion.state), options: [
+                WLOption(HostProtocol.ssh, "SSH", symbol: "terminal"),
+                WLOption(HostProtocol.rdp, loc("远程桌面 (RDP)", "Remote Desktop (RDP)"), symbol: "squareshape.split.2x2"),
+            ])
+            .onChange(of: hostProtocol) { old, new in
+                // Follow the protocol's default port unless one was typed.
+                if portText == (old == .rdp ? "3389" : "22") || portText.isEmpty {
+                    portText = new == .rdp ? "3389" : "22"
+                }
+            }
             WLFormSection(loc("身份", "Identity")) {
                 row(loc("别名", "Alias")) {
                     TextField("", text: $alias,
@@ -42,6 +58,9 @@ struct HostEditorView: View {
                 WLFormDivider()
                 row(loc("描述", "Description")) { input("", $descriptionText) }
             }
+            if isRDP {
+                rdpSections
+            } else {
             WLFormSection(loc("连接", "Connection")) {
                 row(loc("主机 / IP", "HostName / IP")) { input("", $hostname) }
                 WLFormDivider()
@@ -80,6 +99,7 @@ struct HostEditorView: View {
                     .frame(minHeight: 38).padding(.vertical, 4)
                 }
             }
+            }
         } footer: {
             if isEditing {
                 Button(loc("删除", "Delete")) {
@@ -99,7 +119,46 @@ struct HostEditorView: View {
         .wlAutofocus($aliasFocused)
     }
 
-    private var canSave: Bool { !alias.trimmingCharacters(in: .whitespaces).isEmpty }
+    private var canSave: Bool {
+        !alias.trimmingCharacters(in: .whitespaces).isEmpty && (!isRDP || !hostname.isEmpty)
+    }
+
+    private var isRDP: Bool { hostProtocol == .rdp }
+
+    /// A Windows machine: address, account, display, and an optional SSH host
+    /// to tunnel through. Password only (NLA); it goes to the Keychain.
+    @ViewBuilder
+    private var rdpSections: some View {
+        WLFormSection(loc("连接", "Connection")) {
+            row(loc("主机 / IP", "HostName / IP")) { input("", $hostname) }
+            WLFormDivider()
+            row(loc("端口", "Port")) { input("3389", $portText) }
+            WLFormDivider()
+            row(loc("经 SSH 主机", "Via SSH host")) {
+                WLMenuPicker(selection: $rdpVia, options: [WLOption("", loc("直连", "Direct"))]
+                             + store.sshHosts.map { WLOption($0.alias, $0.alias) }, minWidth: 240)
+            }
+            WLFormDivider()
+            row(loc("分辨率", "Resolution")) {
+                WLMenuPicker(selection: $rdpResolution, options: [WLOption("", loc("跟随窗格大小", "Fit the pane"))]
+                             + resolutionOptions, minWidth: 240)
+            }
+        }
+        WLFormSection(loc("登录", "Logon"),
+                      footer: loc("密码存入 Keychain。留空则连接时询问。", "The password is stored in the Keychain. Leave it empty to be asked when connecting.")) {
+            row(loc("用户", "User")) { input("Administrator", $user) }
+            WLFormDivider()
+            row(loc("域", "Domain")) { input(loc("可选，如 CORP", "optional, e.g. CORP"), $rdpDomain) }
+            WLFormDivider()
+            row(loc("密码", "Password")) { secure($password) }
+        }
+    }
+
+    private var resolutionOptions: [WLOption<String>] {
+        var all = RDPResolution.presets.map(\.description)
+        if !rdpResolution.isEmpty, !all.contains(rdpResolution) { all.append(rdpResolution) }
+        return all.map { WLOption($0, $0.replacingOccurrences(of: "x", with: " × ")) }
+    }
 
     /// Label on the left, field on the right.
     private func row<V: View>(_ label: String, @ViewBuilder _ content: () -> V) -> some View {
@@ -201,7 +260,11 @@ struct HostEditorView: View {
         descriptionText = h.descriptionText ?? ""
         autoSudo = h.autoSudo
         launchArgs = h.launchArgs ?? ""
-        if authMethod == .password {
+        hostProtocol = h.hostProtocol
+        rdpDomain = h.rdpDomain ?? ""
+        rdpVia = h.rdpVia ?? ""
+        rdpResolution = h.rdpResolution ?? ""
+        if authMethod == .password || h.isRDP {
             password = (try? store.keychain.password(for: h.alias)) ?? ""
         }
     }
@@ -211,6 +274,27 @@ struct HostEditorView: View {
         host.alias = alias.trimmingCharacters(in: .whitespaces)
         host.hostname = hostname.isEmpty ? nil : hostname
         host.user = user.isEmpty ? nil : user
+        host.hostProtocol = hostProtocol
+        if isRDP {
+            host.port = Int(portText) ?? 3389
+            host.rdpDomain = rdpDomain.isEmpty ? nil : rdpDomain
+            host.rdpVia = rdpVia.isEmpty ? nil : rdpVia
+            host.rdpResolution = rdpResolution.isEmpty ? nil : rdpResolution
+            host.group = group.isEmpty ? nil : group
+            host.descriptionText = descriptionText.isEmpty ? nil : descriptionText
+            // SSH-only settings don't apply to a Windows desktop.
+            host.authMethod = .password
+            host.identityFile = nil
+            host.proxyJump = nil
+            host.autoSudo = false
+            host.launchArgs = nil
+            store.upsert(host, password: password, originalAlias: originalAlias)
+            dismiss()
+            return
+        }
+        host.rdpDomain = nil
+        host.rdpVia = nil
+        host.rdpResolution = nil
         host.port = Int(portText) ?? 22
         host.proxyJump = proxyJump.isEmpty ? nil : proxyJump
         host.group = group.isEmpty ? nil : group

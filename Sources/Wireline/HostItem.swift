@@ -27,7 +27,9 @@ struct HostItem: View {
         case .unknown: return loc("空闲", "idle")
         }
     }
-    private var authSymbol: String { host.resolvedAuthMethod == .key ? "key.fill" : "lock.fill" }
+    private var authSymbol: String {
+        host.isRDP ? "squareshape.split.2x2" : host.resolvedAuthMethod == .key ? "key.fill" : "lock.fill"
+    }
     private var rowBackground: Color {
         if isActive { return WL.green.opacity(WL.isLight ? 0.12 : 0.14) }
         if isSelected { return WL.textPrimary.opacity(WL.isLight ? 0.07 : 0.09) }
@@ -44,7 +46,8 @@ struct HostItem: View {
                 // Single click highlights; double click connects.
                 .onTapGesture { onSelect() }
                 .simultaneousGesture(TapGesture(count: 2).onEnded { onConnect() })
-            if isActive {
+            // Forwards and SFTP need a shell: not for a Windows desktop.
+            if isActive, !host.isRDP {
                 HStack(spacing: 16) {
                     InlineAction(symbol: "arrow.left.arrow.right", label: "端口转发",
                                  tint: WL.green, action: onForward)
