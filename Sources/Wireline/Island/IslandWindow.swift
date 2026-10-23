@@ -143,12 +143,12 @@ final class IslandController {
 
     // MARK: - Placement
 
-    /// The notched display, always — the island lives in the notch, and
-    /// following focus made it jump away (or vanish) whenever you clicked on
-    /// another screen. Without a notch: the screen with Wireline's window,
-    /// else the built-in, else the main screen.
+    /// The screen you're on: the one under the pointer. There the island hugs
+    /// the notch, or sits as a pill at the top on a screen without one. (Keyed
+    /// to Wireline's window it jumped away whenever another app had focus.)
     private func targetScreen() -> NSScreen? {
-        if let notched = NSScreen.screens.first(where: { $0.safeAreaInsets.top > 0 }) { return notched }
+        let mouse = NSEvent.mouseLocation
+        if let s = NSScreen.screens.first(where: { NSMouseInRect(mouse, $0.frame, false) }) { return s }
         if let key = NSApp.keyWindow, key !== panel, let s = key.screen { return s }
         return NSScreen.screens.first { $0.safeAreaInsets.top > 0 }
             ?? NSScreen.screens.first { Self.isBuiltIn($0) }
@@ -172,6 +172,7 @@ final class IslandController {
                                       auxiliaryLeft: screen.auxiliaryTopLeftArea,
                                       auxiliaryRight: screen.auxiliaryTopRightArea)
         geometry = g
+        placedScreen = screen.frame
         let frame = g.panelFrame(cardSize: IslandLayout.panelSize, in: screen.frame)
         let core = g.hasNotch ? g.anchor.size
             : CGSize(width: g.anchor.width - 2 * IslandLayout.ear, height: g.anchor.height)
@@ -262,7 +263,16 @@ final class IslandController {
         }
     }
 
+    /// The screen the island was last placed on.
+    private var placedScreen: CGRect?
+
     private func pointerMoved() {
+        // Follow the pointer to another display.
+        let mouse = NSEvent.mouseLocation
+        if let s = NSScreen.screens.first(where: { NSMouseInRect(mouse, $0.frame, false) }),
+           s.frame != placedScreen, !center.hovering {
+            refresh()
+        }
         guard let panel else { return }
         let inside = hotRect()?.contains(NSEvent.mouseLocation) ?? false
         if panel.ignoresMouseEvents == inside { panel.ignoresMouseEvents = !inside }
