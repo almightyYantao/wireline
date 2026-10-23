@@ -72,6 +72,9 @@ struct WirelineApp: App {
                     // It grabs key status when opened, so re-assert terminal focus
                     // afterwards — otherwise a restored session starts unfocused.
                     if AIConfig.shared.petEnabled { openWindow(id: "pet") }
+                    // The notch island: AI / agent activity around the notch.
+                    IslandController.shared.start(sessions: sessions)
+                    IslandPreview.runIfRequested()
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [sessions] in
                         sessions.focusActiveTerminal()
                     }
@@ -208,6 +211,11 @@ struct WirelineApp: App {
             CommandGroup(after: .appInfo) {
                 Button("检查更新…") { Updater.shared.checkForUpdates() }
             }
+            #if DEBUG
+            CommandMenu("Debug") {
+                Button("Preview Notch Island") { IslandPreview.run() }
+            }
+            #endif
         }
 
         // Custom settings window styled like the main window (hidden title bar,

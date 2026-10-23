@@ -3,7 +3,10 @@ import Foundation
 /// Watches a terminal output stream for the few control sequences the app
 /// needs to know about when the emulator itself won't say: the working
 /// directory (OSC 7), a command starting (OSC 133;C), focus reporting
-/// (DECSET 1004) and the alternate screen (DECSET 1049 / 1047 / 47).
+/// (DECSET 1004) and the alternate screen (DECSET 1049 / 1047 / 47) — and the
+/// ways a program asks for the user's attention: BEL and the desktop
+/// notification OSCs (9, 777;notify, 99), which coding agents such as Claude
+/// Code send when they are waiting for you.
 ///
 /// libghostty parses everything, but only reports OSC 7 from the *local*
 /// host — a remote shell's directory over SSH is dropped — it reports a
@@ -19,6 +22,12 @@ public struct TerminalStreamSniffer: Sendable {
         case commandStarted
         /// A DEC private mode was set (`true`) or reset (`false`).
         case privateMode(Int, Bool)
+        /// A bare BEL (not an OSC terminator).
+        case bell
+        /// A desktop notification: OSC 9 (iTerm2), OSC 777;notify (urxvt,
+        /// Ghostty) or OSC 99 (kitty). `title` is empty when the sequence
+        /// carries only a body.
+        case notification(title: String, body: String)
     }
 
     private enum State: Sendable { case ground, escape, csi, osc, oscEscape, oscIgnore, oscIgnoreEscape }
@@ -32,6 +41,9 @@ public struct TerminalStreamSniffer: Sendable {
 
     public init() {}
 
+    /// Mid-sequence: the next chunk must be fed even if it has no ESC / BEL.
+    public var isInsideSequence: Bool { state != .ground }
+
     /// Feed a chunk; returns the events completed within it, in order.
     public mutating func feed<C: Collection>(_ bytes: C) -> [Event] where C.Element == UInt8 {
         var events: [Event] = []
@@ -39,6 +51,7 @@ public struct TerminalStreamSniffer: Sendable {
             switch state {
             case .ground:
                 if b == 0x1B { state = .escape }
+                else if b == 0x07 { events.append(.bell) }
             case .escape:
                 switch b {
                 case UInt8(ascii: "["): state = .csi; buffer.removeAll(keepingCapacity: true)
@@ -84,8 +97,49 @@ public struct TerminalStreamSniffer: Sendable {
             return
         }
         // "7;" then the URL.
-        guard buffer.count >= 2, buffer[0] == UInt8(ascii: "7"), buffer[1] == UInt8(ascii: ";") else { return }
-        events.append(.workingDirectory(String(decoding: buffer[2...], as: UTF8.self)))
+        if buffer.count >= 2, buffer[0] == UInt8(ascii: "7"), buffer[1] == UInt8(ascii: ";") {
+            events.append(.workingDirectory(String(decoding: buffer[2...], as: UTF8.self)))
+            return
+        }
+        if let note = Self.notification(buffer) { events.append(note) }
+    }
+
+    /// OSC 9 / 777 / 99 payloads as a notification, else nil.
+    static func notification(_ payload: [UInt8]) -> Event? {
+        let text = String(decoding: payload, as: UTF8.self)
+        if text.hasPrefix("9;") {
+            let body = String(text.dropFirst(2))
+            // ConEmu reuses OSC 9 for numbered sub-commands (9;4 is the
+            // progress bar Ghostty and Windows Terminal draw): not a message.
+            let head = body.prefix { $0 != ";" }
+            if !head.isEmpty, head.allSatisfy(\.isNumber), let n = Int(head), (1...12).contains(n),
+               head.count == body.count || body.dropFirst(head.count).hasPrefix(";") {
+                return nil
+            }
+            guard !body.isEmpty else { return nil }
+            return .notification(title: "", body: body)
+        }
+        if text.hasPrefix("777;notify;") {
+            // 777;notify;<title>;<body> — the body may itself contain ';'.
+            let rest = text.dropFirst("777;notify;".count)
+            let parts = rest.split(separator: ";", maxSplits: 1, omittingEmptySubsequences: false)
+            let title = parts.first.map(String.init) ?? ""
+            let body = parts.count > 1 ? String(parts[1]) : ""
+            guard !title.isEmpty || !body.isEmpty else { return nil }
+            return .notification(title: title, body: body)
+        }
+        if text.hasPrefix("99;") {
+            // kitty: 99;<metadata>;<payload>. Only plain (unencoded) title / body
+            // chunks are read; `p=title` marks the title, the default is body.
+            let rest = text.dropFirst(3)
+            guard let semi = rest.firstIndex(of: ";") else { return nil }
+            let meta = rest[..<semi], payload = String(rest[rest.index(after: semi)...])
+            guard !payload.isEmpty, !meta.contains("e=1") else { return nil }
+            return meta.contains("p=title") ? .notification(title: payload, body: "")
+                 : meta.contains("p=") && !meta.contains("p=body") ? nil
+                 : .notification(title: "", body: payload)
+        }
+        return nil
     }
 
     private static let commandStart = Array("133;C".utf8)

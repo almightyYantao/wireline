@@ -213,7 +213,10 @@ final class TerminalSession: Identifiable {
         // come back to the PTY.
         terminalView.io = io
         io.engine = terminalView
-        terminalView.onInput = { [weak io] bytes in io?.send(bytes) }
+        terminalView.onInput = { [weak io, weak self] bytes in
+            io?.send(bytes)
+            if let self { IslandCenter.shared.sessionInput(self) }
+        }
         terminalView.onGridResize = { [weak io] in io?.gridDidChange() }
         io.onEditorChange = { [weak self] editor in
             self?.activeEditor = editor
@@ -222,6 +225,7 @@ final class TerminalSession: Identifiable {
             // The engine's command marks, once seen, are the better source.
             guard let self, !self.commandMarks.isActive else { return }
             self.notifyCommandFinished(elapsed: elapsed, exitCode: nil)
+            IslandCenter.shared.commandFinished(self, exitCode: nil, duration: elapsed)
         }
         io.onBusyChange = { [weak self] busy, elapsed in
             guard let self, !self.commandMarks.isActive else { return }
@@ -251,11 +255,18 @@ final class TerminalSession: Identifiable {
                 let wasBusy = self.commandMarks.finished()
                 if !local, wasBusy || self.isBusy { self.applyBusy(false, elapsed: duration) }
                 self.notifyCommandFinished(elapsed: duration, exitCode: exitCode)
+                IslandCenter.shared.commandFinished(self, exitCode: exitCode, duration: duration)
             }
         }
         io.onOutput = { [weak self] in
             self?.noteOutput()
             self?.connect.noteOutput()
+            if let self { IslandCenter.shared.sessionOutput(self) }
+        }
+        // Bells and desktop notifications (OSC 9 / 777 / 99): a coding agent
+        // waiting for you, for the notch island.
+        io.onAttention = { [weak self] message in
+            if let self { IslandCenter.shared.sessionAttention(self, message: message) }
         }
         io.onConnected = { [weak self] in
             guard let self, self.connectionState == .connecting else { return }
@@ -267,12 +278,14 @@ final class TerminalSession: Identifiable {
             self.commandMarks.reset()
             self.connectionState = .disconnected
             self.isRunning = false
+            IslandCenter.shared.sessionGone(self.id)
         }
         terminalView.onDirectoryChange = { [weak self] dir in
             self?.applyReportedDirectory(dir)
         }
         terminalView.onTitleReport = { [weak self] title in
             self?.applyReportedTitle(title)
+            if let self { IslandCenter.shared.sessionTitle(self, title) }
         }
         terminalView.onOpenPath = { [weak self] path in self?.openPath(path) }
         terminalView.onClickFocus = { [weak self] in
@@ -467,7 +480,10 @@ final class TerminalSession: Identifiable {
         case .child: (running, name) = (false, nil)
         case .job(let pgid, let n): (running, name) = (true, ForegroundProcess.identify(pgid) ?? n)
         }
-        if foregroundName != name { foregroundName = name }
+        if foregroundName != name {
+            foregroundName = name
+            IslandCenter.shared.foregroundChanged(self)
+        }
         if running, !isBusy {
             busyStartedAt = Date()
             applyBusy(true, elapsed: 0)
@@ -1238,6 +1254,7 @@ final class SessionStore {
 
     func close(_ id: UUID) {
         guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
+        IslandCenter.shared.sessionGone(id)
         focusHistory.removeAll { $0 == id }
         // A split tab's name was keyed by this pane: hand it to a surviving one.
         if let name = tabNames.removeValue(forKey: id), let ti = tabIndex(containing: id),
