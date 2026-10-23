@@ -360,6 +360,10 @@ extension ConfigStore {
                  get: { $0?.backgroundMonitor ?? false }, set: { $0?.backgroundMonitor = $1 }),
             number("monitor-interval", g, "Seconds between background checks", 15...3600, default: 60,
                    get: { $0?.monitorInterval ?? 60 }, set: { $0?.monitorInterval = $1 }),
+            flag("notch-island", g, "Show AI and agent activity in an island around the notch", default: true,
+                 get: { _ in IslandSettings.shared.enabled }, set: { IslandSettings.shared.enabled = $1 }),
+            flag("notch-island-always", g, "Keep the notch island up even with nothing going on", default: false,
+                 get: { _ in IslandSettings.shared.alwaysShow }, set: { IslandSettings.shared.alwaysShow = $1 }),
 
             // AI
             flag("ai-enabled", m, "Enable the AI assistant", default: false,
