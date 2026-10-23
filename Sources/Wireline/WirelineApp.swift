@@ -192,7 +192,10 @@ struct WirelineApp: App {
             }
             // Route ⌘, to our own settings window instead of the native one.
             CommandGroup(replacing: .appSettings) {
-                Button(loc("设置…", "Settings…")) { openWindow(id: "settings") }
+                Button(loc("设置…", "Settings…")) {
+                    NSApp.activate(ignoringOtherApps: true)
+                    NotificationCenter.default.post(name: .showSettings, object: nil)
+                }
                     .keyboardShortcut(",", modifiers: [.command])
                 Button(loc("打开配置文件…", "Open Config File…")) { ConfigStore.shared.openInEditor() }
                 Button(loc("重新加载配置", "Reload Configuration")) { ConfigStore.shared.reload() }

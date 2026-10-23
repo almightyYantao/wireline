@@ -5,6 +5,8 @@ import WirelineCore
 extension Notification.Name {
     static let focusSearch = Notification.Name("wireline.focusSearch")
     static let showQuickConnect = Notification.Name("wireline.showQuickConnect")
+    /// Open Settings as a card over the main window.
+    static let showSettings = Notification.Name("wireline.showSettings")
     static let toggleSidebar = Notification.Name("wireline.toggleSidebar")
     static let editHost = Notification.Name("wireline.editHost")
     static let newConnection = Notification.Name("wireline.newConnection")
@@ -111,6 +113,7 @@ struct ContentView: View {
                 fileHost = host; operation = .files
             }
         }
+        .modifier(SettingsModal())
         .modifier(ContentModals(editing: $editing, showBackup: $showBackup, showNewGroup: $showNewGroup,
                                 showQuickConnect: $showQuickConnect, showCommandPalette: $showCommandPalette))
         .onReceive(NotificationCenter.default.publisher(for: .showQuickConnect)) { _ in
@@ -268,6 +271,16 @@ private struct PaletteTabHandlers: ViewModifier {
 /// by hover closes when the pointer moves onto the card, and would take a
 /// dialog it owned with it. (A modifier to keep `ContentView.body` within the
 /// type-checker's budget.)
+/// Settings, as a card that flips in over the window (⌘, / the gear / ⌘P).
+struct SettingsModal: ViewModifier {
+    @State private var show = false
+    func body(content: Content) -> some View {
+        content
+            .onReceive(NotificationCenter.default.publisher(for: .showSettings)) { _ in show = true }
+            .wlModal(isPresented: $show) { SettingsView(embedded: true) }
+    }
+}
+
 private struct ContentModals: ViewModifier {
     @Environment(HostStore.self) private var store
     @Binding var editing: HostEditContext?
@@ -556,7 +569,7 @@ struct LeftPanel: View {
             }
             .buttonStyle(.wlPlain).foregroundStyle(WL.green)
             Spacer()
-            Button { openWindow(id: "settings") } label: {
+            Button { NotificationCenter.default.post(name: .showSettings, object: nil) } label: {
                 Image(systemName: "gearshape").font(.system(size: 12, weight: .medium))
             }.buttonStyle(.wlIcon).help(loc("设置", "Settings"))
         }

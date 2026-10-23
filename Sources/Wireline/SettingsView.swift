@@ -4,6 +4,10 @@ import UniformTypeIdentifiers
 import WirelineCore
 
 struct SettingsView: View {
+    /// Shown as a card over the main window (the usual way) rather than as
+    /// its own window.
+    var embedded = false
+    @Environment(\.wlDismiss) private var dismiss
     @Environment(HostStore.self) private var store
     @Environment(TodoStore.self) private var todos
     @Environment(Localizer.self) private var loc
@@ -16,6 +20,69 @@ struct SettingsView: View {
     @State private var config = ConfigStore.shared
 
     var body: some View {
+        if embedded { card } else { window }
+    }
+
+    /// The settings as a dialog card, like every other dialog.
+    private var card: some View {
+        let shape = RoundedRectangle(cornerRadius: WL.radius(18), style: .continuous)
+        return VStack(spacing: 0) {
+            cardHeader
+            WLFormDivider()
+            Group {
+                if tab == 0 { general }
+                else if tab == 1 { ShortcutSettingsView() }
+                else { aiSettings }
+            }
+            .id(tab)
+            .transition(.opacity.animation(Motion.fade))
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(WL.paneCanvas)
+        }
+        .frame(idealWidth: 640, maxWidth: 640, idealHeight: 700, maxHeight: 700)
+        .background {
+            shape.fill(WL.bg)
+                .shadow(color: .black.opacity(WL.depth(0.3)), radius: 28, y: 12)
+        }
+        .clipShape(shape)
+        .overlay(shape.strokeBorder(WL.textPrimary.opacity(WL.isLight ? 0.08 : 0.12), lineWidth: 1).allowsHitTesting(false))
+        .wlModal(isPresented: $showThemeEditor) { ThemeEditorView() }
+        .wlModal(isPresented: $showMCP) {
+            MCPSettingsView(onClose: { wlAnimate(Motion.flipOut) { showMCP = false } })
+        }
+        .wlModal(isPresented: $showSkills) {
+            SkillSettingsView(onClose: { wlAnimate(Motion.flipOut) { showSkills = false } })
+        }
+    }
+
+    private var cardHeader: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "gearshape")
+                .font(.system(size: 14, weight: .semibold)).foregroundStyle(WL.green)
+                .frame(width: 34, height: 34)
+                .background(WL.green.opacity(0.12), in: RoundedRectangle(cornerRadius: WL.radius(10), style: .continuous))
+            VStack(alignment: .leading, spacing: 1) {
+                Text(loc("设置", "Settings")).font(WL.mono(14, .semibold)).foregroundStyle(WL.textPrimary)
+                Text(loc("改动立即生效", "Changes apply right away")).font(WL.caption).foregroundStyle(WL.textDim)
+            }
+            Spacer(minLength: 12)
+            WLSegmented(selection: $tab, options: [
+                WLOption(0, loc("常规", "General"), symbol: "gearshape"),
+                WLOption(1, loc("快捷键", "Shortcuts"), symbol: "keyboard"),
+                WLOption(2, "AI", symbol: "sparkles"),
+            ], fill: false)
+            Button { dismiss() } label: {
+                Image(systemName: "xmark").font(.system(size: 10, weight: .bold))
+                    .frame(width: 24, height: 24)
+                    .background(WL.textPrimary.opacity(0.07), in: Circle())
+            }
+            .buttonStyle(.wlPlain).foregroundStyle(WL.textDim)
+            .help(loc("关闭 (Esc)", "Close (Esc)"))
+        }
+        .padding(.horizontal, 18).padding(.vertical, 14)
+    }
+
+    private var window: some View {
         ZStack(alignment: .top) {
             // Opaque base covering the whole window, including any strip the window
             // reserves beyond the content (otherwise the translucent window

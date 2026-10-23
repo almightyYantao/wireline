@@ -299,7 +299,7 @@ struct CommandPaletteView: View {
             PaletteCommand(title: loc("待办清单", "To-Do List"), keywords: "待办清单" + " " + "To-Do List", category: actions,
                            systemImage: "checklist", tint: WL.amber) { openWindow(id: "todos") },
             PaletteCommand(title: loc("设置", "Settings"), keywords: "设置" + " " + "Settings", category: actions,
-                           systemImage: "gearshape", tint: WL.textDim) { openWindow(id: "settings") },
+                           systemImage: "gearshape", tint: WL.textDim) { post(.showSettings) },
         ]
 
         // Snippets for the active pane: the ones that suit it first, then the

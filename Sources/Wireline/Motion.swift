@@ -32,9 +32,9 @@ enum Motion {
     static let popOut: Animation = .easeIn(duration: 0.12)
     /// A dialog card (every `.wlModal`: sheets, ⌘K, ⌘P) flipping up into
     /// place over its scrim.
-    static let flipIn: Animation = .spring(duration: 0.38, bounce: 0.16)
+    static let flipIn: Animation = .spring(duration: 0.28, bounce: 0.12)
     /// …and flipping back away — the same path reversed, faster.
-    static let flipOut: Animation = .easeIn(duration: 0.2)
+    static let flipOut: Animation = .timingCurve(0.4, 0, 0.7, 0.2, duration: 0.26)
     /// A banner / toast / floating bar sliding in from an edge.
     static let banner: Animation = .spring(duration: 0.36, bounce: 0.16)
     /// Expanding a floating surface the user deliberately summoned (pet chat).
@@ -90,8 +90,10 @@ extension AnyTransition {
     static var wlFlip: AnyTransition {
         if Motion.reduce { return .opacity.animation(Motion.fade) }
         let flip = AnyTransition.modifier(active: WLFlipEffect(progress: 0), identity: WLFlipEffect(progress: 1))
+        // Closing folds the card shut over its top edge, like a lid.
+        let fold = AnyTransition.modifier(active: WLFoldEffect(progress: 0), identity: WLFoldEffect(progress: 1))
         return .asymmetric(insertion: flip.animation(Motion.flipIn),
-                           removal: flip.animation(Motion.flipOut))
+                           removal: fold.animation(Motion.flipOut))
     }
 
     /// The scrim behind a flipping card: in with the card, out with it.
@@ -135,7 +137,7 @@ extension AnyTransition {
 /// the spring's small overshoot tips the card a hair past flat before it settles.
 struct WLFlipEffect: ViewModifier, Animatable {
     /// How far the card starts tilted back, in degrees.
-    static let tilt: Double = 70
+    static let tilt: Double = 55
     /// How small it starts.
     static let startScale: Double = 0.94
 
@@ -161,6 +163,27 @@ struct WLFlipEffect: ViewModifier, Animatable {
             .rotation3DEffect(.degrees(pose.angle), axis: (x: 1, y: 0, z: 0),
                               anchor: .center, perspective: 0.55)
             .opacity(pose.opacity)
+    }
+}
+
+/// A dialog card closing: it folds back over its top edge until it's edge-on
+/// and gone. `progress` 1 = open, 0 = folded. It stays solid for most of the
+/// fold, so the motion reads as folding rather than fading.
+struct WLFoldEffect: ViewModifier, Animatable {
+    var progress: Double
+
+    nonisolated var animatableData: Double {
+        get { progress }
+        set { progress = newValue }
+    }
+
+    func body(content: Content) -> some View {
+        let p = progress
+        content
+            .scaleEffect(0.96 + 0.04 * p, anchor: .top)
+            .rotation3DEffect(.degrees(85 * (1 - p)), axis: (x: 1, y: 0, z: 0),
+                              anchor: .top, perspective: 0.6)
+            .opacity(min(1, p * 3.5))
     }
 }
 

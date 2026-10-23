@@ -584,7 +584,8 @@ struct PaneHeader<Actions: View>: View {
         if case .localShell = session.kind {
             guard let d = session.currentDirectory else { return nil }
             let short = (d as NSString).abbreviatingWithTildeInPath
-            return short == session.title ? nil : short
+            // The title already names it ("~", or "user@host: ~").
+            return short == session.title || session.title.hasSuffix(": " + short) ? nil : short
         }
         return nil
     }

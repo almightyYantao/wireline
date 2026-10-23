@@ -1,4 +1,5 @@
 import AppKit
+import SystemConfiguration
 import Observation
 import SwiftTerm
 import WirelineCore
@@ -385,9 +386,17 @@ final class TerminalSession: Identifiable {
 
     /// The tab title for a working directory: the last path component, with the
     /// home directory shown as `~` and the filesystem root as `/`.
+    /// This Mac's short host name (Bonjour name, no `.local`), read once.
+    static let localHostName: String = {
+        if let n = SCDynamicStoreCopyLocalHostName(nil) as String?, !n.isEmpty { return n }
+        return ProcessInfo.processInfo.hostName.split(separator: ".").first.map(String.init) ?? "mac"
+    }()
+
     static func tabTitle(forPath path: String) -> String {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
-        if path == home { return "~" }
+        // At home a bare "~" says little (every new tab is "~"); name the
+        // machine instead, like a shell's default title: user@host: ~
+        if path == home { return "\(NSUserName())@\(localHostName): ~" }
         if path == "/" { return "/" }
         let base = (path as NSString).lastPathComponent
         return base.isEmpty ? path : base
