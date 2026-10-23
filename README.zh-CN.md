@@ -164,6 +164,10 @@ AI 是让上面这一切变得毫不费力的杠杆,不是外挂功能。设置 
 需要 **Xcode 26+ / Swift 6.2**（macOS 14+）。
 
 ```bash
+# 首次：把原生依赖准备到 Vendor/（不进 git）
+./scripts/fetch-ghosttykit.sh        # 从 fork 的 Release 下载预编译 libghostty，并校验 sha256
+./scripts/fetch-freerdp.sh --build   # 从源码编译 FreeRDP 3 + OpenSSL（需要 cmake + ninja）
+
 # 生成可运行的 .app 并打开
 ./scripts/bundle.sh --run
 
@@ -174,7 +178,7 @@ AI 是让上面这一切变得毫不费力的杠杆,不是外挂功能。设置 
 swift test
 ```
 
-终端内核 libghostty 以预编译的 `GhosttyKit.xcframework` 形式放在 `Vendor/`（约 280 MB，不进 git），由 `./scripts/fetch-ghosttykit.sh` 准备。它来自 Wireline 维护的 Ghostty fork（加了「由宿主管理 PTY」的 IO 后端、上一条命令输出、正则搜索等补丁），需要 Zig 0.17 编译；fork 与预编译包会发布到 Releases，之后这一步改为自动下载并校验。
+终端内核 libghostty 是放在 `Vendor/` 的 `GhosttyKit.xcframework`（约 280 MB，不进 git），来自 Wireline 维护的 Ghostty fork：[almightyYantao/ghostty](https://github.com/almightyYantao/ghostty)（`wireline` 分支，补丁有「由宿主管理 PTY」的 IO 后端、上一条命令输出、正则搜索、重排前清提示符）。`./scripts/fetch-ghosttykit.sh` 下载固定到某个 fork 提交的预编译包并校验 sha256；加 `--build` 则用 Zig 0.17 自己编译同一个提交。
 
 RDP 分屏静态链接 **FreeRDP 3**（含 OpenSSL），放在 `Vendor/FreeRDP/`（通用二进制约 35 MB，不进 git）：`./scripts/fetch-freerdp.sh --build` 用 `scripts/build-freerdp.sh` 编译（需要 cmake + ninja；自动拉取 FreeRDP 与 OpenSSL 源码，按 macOS 14、arm64 + x86_64 编译；不带 FFmpeg，因此没有 H.264，改用 RemoteFX / progressive）。
 
@@ -223,6 +227,12 @@ ssh / zsh ⇄ PTYProcess ⇄ TerminalIO ──字节──▶ 引擎（libghostt
 <a href="https://star-history.com/#almightyYantao/wireline&Date">
   <img src="https://api.star-history.com/svg?repos=almightyYantao/wireline&type=Date" alt="Star History Chart" width="600">
 </a>
+
+---
+
+## 友情链接
+
+- [LINUX DO](https://linux.do)：真诚、友善、团结、专业的开发者社区
 
 ---
 

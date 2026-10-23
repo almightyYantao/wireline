@@ -164,6 +164,10 @@ A draggable, always-on-top little sprite that floats over your desktop the momen
 Requires **Xcode 26+ / Swift 6.2** (macOS 14+).
 
 ```bash
+# One-time: fetch the native dependencies into Vendor/ (not in git)
+./scripts/fetch-ghosttykit.sh        # prebuilt libghostty from the fork's release, sha256-checked
+./scripts/fetch-freerdp.sh --build   # FreeRDP 3 + OpenSSL from source (cmake + ninja)
+
 # Build a runnable .app and open it
 ./scripts/bundle.sh --run
 
@@ -174,7 +178,7 @@ Requires **Xcode 26+ / Swift 6.2** (macOS 14+).
 swift test
 ```
 
-The libghostty engine ships as a prebuilt `GhosttyKit.xcframework` in `Vendor/` (~280 MB, not in git), put there by `./scripts/fetch-ghosttykit.sh`. It's built from Wireline's Ghostty fork (patches: a host-owned-PTY IO backend, last-command output, regex search …) with Zig 0.17; the fork and prebuilt archives will be published to Releases, after which this step downloads and verifies them automatically.
+The libghostty engine is a `GhosttyKit.xcframework` in `Vendor/` (~280 MB, not in git) built from Wireline's Ghostty fork, [almightyYantao/ghostty](https://github.com/almightyYantao/ghostty) (branch `wireline`; patches: a host-owned-PTY IO backend, last-command output, regex search, prompt clear on reflow). `./scripts/fetch-ghosttykit.sh` downloads the prebuilt release pinned to a fork commit and checks its sha256; `--build` compiles the same commit yourself (Zig 0.17).
 
 RDP panes link a static **FreeRDP 3** (+ OpenSSL) from `Vendor/FreeRDP/` (~35 MB universal, not in git): `./scripts/fetch-freerdp.sh --build` builds it with `scripts/build-freerdp.sh` (cmake + ninja; FreeRDP and OpenSSL are fetched and compiled for macOS 14, arm64 + x86_64, no FFmpeg — so no H.264, RemoteFX / progressive instead).
 
@@ -223,6 +227,12 @@ Dependencies: libghostty (terminal, Wireline fork) · SwiftTerm (fallback termin
 <a href="https://star-history.com/#almightyYantao/wireline&Date">
   <img src="https://api.star-history.com/svg?repos=almightyYantao/wireline&type=Date" alt="Star History Chart" width="600">
 </a>
+
+---
+
+## Friends
+
+- [LINUX DO](https://linux.do) — a friendly Chinese developer community
 
 ---
 
