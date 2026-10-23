@@ -142,6 +142,14 @@ public struct IslandBoard: Equatable, Sendable {
     public var attentionPeek: TimeInterval = 8
     /// How long a completion pulse shows.
     public var pulseLength: TimeInterval = 2.6
+    /// A row pulses at most once per this long — an agent that pauses
+    /// mid-task reads as "done" several times, and each pulse drops a black
+    /// strip from the top of the screen.
+    public var pulseCooldown: TimeInterval = 30
+    /// …and nothing pulses more often than this.
+    public var pulseSpacing: TimeInterval = 8
+    private var lastPulse: [String: Date] = [:]
+    private var lastAnyPulse: Date?
 
     public init() {}
 
@@ -182,10 +190,20 @@ public struct IslandBoard: Equatable, Sendable {
         item.detail = detail
         item.confirmation = nil
         upsert(item, at: now)
-        if let text {
+        if let text, pulseAllowed(id, at: now) {
+            lastPulse[id] = now
+            lastAnyPulse = now
             pulse = IslandPulse(itemID: id, source: item.source, text: text,
                                 tone: item.tone, until: now.addingTimeInterval(pulseLength))
         }
+    }
+
+    /// Failures always get through; successes respect the cooldowns.
+    private func pulseAllowed(_ id: String, at now: Date) -> Bool {
+        if item(id)?.tone == .failure { return true }
+        if let t = lastPulse[id], now.timeIntervalSince(t) < pulseCooldown { return false }
+        if let t = lastAnyPulse, now.timeIntervalSince(t) < pulseSpacing { return false }
+        return true
     }
 
     public mutating func remove(_ id: String) {

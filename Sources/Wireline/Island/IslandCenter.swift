@@ -371,7 +371,8 @@ final class IslandCenter {
                           sessionID: sid, persistent: true, at: Date()))
         let viewing = isViewing(sid)
         if viewing { board.dismiss(id) }
-        if case .finished(let ran)? = change, !viewing, ran >= 3 {
+        // Only a real turn: a pause mid-task also reads as "finished".
+        if case .finished(let ran)? = change, !viewing, ran >= 10 {
             now = Date()
             board.finish(id, success: true, detail: detail,
                          pulse: "✓ " + w.agent.displayName + " · " + islandDuration(ran), at: now)
