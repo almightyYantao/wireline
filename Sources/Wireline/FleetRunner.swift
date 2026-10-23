@@ -14,9 +14,11 @@ struct FleetResult: Identifiable, Sendable {
 /// reusing each host's ssh config, and auto-filling Keychain passwords via an
 /// askpass helper (so password-auth hosts work without BatchMode).
 enum FleetRunner {
+    /// `onEach` hears each host's result as it lands (the notch island's progress).
     static func run(command: String, on aliases: [String],
                     keychain: KeychainService = KeychainService(),
-                    timeout: Int = 20, maxConcurrent: Int = 8) async -> [FleetResult] {
+                    timeout: Int = 20, maxConcurrent: Int = 8,
+                    onEach: (@MainActor @Sendable (FleetResult) -> Void)? = nil) async -> [FleetResult] {
         // Snapshot passwords up front (Keychain access) so the workers are pure.
         let creds: [(alias: String, password: String?)] = aliases.map { alias in
             (alias, (try? keychain.password(for: alias)) ?? nil)
@@ -35,6 +37,7 @@ enum FleetRunner {
             for _ in 0..<min(maxConcurrent, creds.count) { addNext() }
             while let r = await group.next() {
                 results.append(r)
+                if let onEach { await onEach(r) }
                 addNext()
             }
         }

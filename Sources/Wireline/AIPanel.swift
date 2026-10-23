@@ -135,8 +135,8 @@ struct AIPanelView: View {
         .wlModal(isPresented: $showFleet) {
             FleetView(onClose: { wlAnimate(Motion.flipOut) { showFleet = false } })
         }
-        .onAppear { inputFocused = true; loadConvo() }
-        .onChange(of: conversationKey) { _, _ in loadConvo() }
+        .onAppear { inputFocused = true; loadConvo(); bindIsland() }
+        .onChange(of: conversationKey) { _, _ in loadConvo(); bindIsland() }
         .onChange(of: convo.messages) { persistConvo() }
         // No `task?.cancel()` here: the panel disappears on a host switch and on
         // close, and an answer in flight must survive both (see `AIConvoState`).
@@ -144,27 +144,17 @@ struct AIPanelView: View {
         .alert(loc("确认执行高危命令？", "Run this risky command?"),
                isPresented: Binding(get: { pendingDanger != nil },
                                     set: { if !$0 { pendingDanger = nil } })) {
-            Button(loc("取消", "Cancel"), role: .cancel) { declineDanger() }
-            Button(loc("仍然执行", "Run anyway"), role: .destructive) {
-                if let c = pendingDanger { pendingDanger = nil; executeAndContinue(c) }
-            }
+            Button(loc("取消", "Cancel"), role: .cancel) { resolvePending(.deny) }
+            Button(loc("仍然执行", "Run anyway"), role: .destructive) { resolvePending(.allow) }
         } message: {
             Text((pendingDanger ?? "") + (dangerReview.isEmpty ? "" : "\n\n" + dangerReview))
         }
         .alert(loc("调用外部工具？", "Call this external tool?"),
                isPresented: Binding(get: { pendingMCP != nil },
                                     set: { if !$0 { pendingMCP = nil } })) {
-            Button(loc("取消", "Cancel"), role: .cancel) { declineMCP() }
-            Button(loc("调用", "Call")) {
-                if let p = pendingMCP { pendingMCP = nil; executeMCPAndContinue(p) }
-            }
-            Button(loc("始终允许并调用", "Always allow & call")) {
-                if let p = pendingMCP {
-                    pendingMCP = nil
-                    MCPStore.shared.approve("\(p.server).\(p.tool)")
-                    executeMCPAndContinue(p)
-                }
-            }
+            Button(loc("取消", "Cancel"), role: .cancel) { resolvePending(.deny) }
+            Button(loc("调用", "Call")) { resolvePending(.allow) }
+            Button(loc("始终允许并调用", "Always allow & call")) { resolvePending(.allowAlways) }
         } message: {
             if let p = pendingMCP {
                 Text("\(p.server).\(p.tool)" + (p.argsJSON == "{}" ? "" : "\n\n" + p.argsJSON))
@@ -174,13 +164,46 @@ struct AIPanelView: View {
                                                  : loc("确认下载？", "Confirm download?"),
                isPresented: Binding(get: { pendingTransfer != nil },
                                     set: { if !$0 { pendingTransfer = nil } })) {
-            Button(loc("取消", "Cancel"), role: .cancel) { declineTransfer() }
-            Button(loc("传输", "Transfer")) {
-                if let t = pendingTransfer { pendingTransfer = nil; executeTransfer(t) }
-            }
+            Button(loc("取消", "Cancel"), role: .cancel) { resolvePending(.deny) }
+            Button(loc("传输", "Transfer")) { resolvePending(.allow) }
         } message: {
             if let t = pendingTransfer { Text(t.summary(loc)) }
         }
+    }
+
+    /// Answer whichever confirmation is pending. The dialog's buttons and the
+    /// notch island's (through `AIConvoState.decide`) both land here, so the
+    /// first answer wins: it clears the pending value, which dismisses the
+    /// dialog and folds the island's row, and a second answer finds nothing.
+    /// On allow, the turn is marked running *before* the request is cleared,
+    /// so the island sees one continuous run rather than an end and a restart.
+    private func resolvePending(_ decision: IslandDecision) {
+        if let c = pendingDanger {
+            if decision == .deny { declineDanger(); return }
+            isStreaming = true
+            pendingDanger = nil
+            executeAndContinue(c)
+        } else if let p = pendingMCP {
+            if decision == .deny { declineMCP(); return }
+            if decision == .allowAlways { MCPStore.shared.approve("\(p.server).\(p.tool)") }
+            isStreaming = true
+            pendingMCP = nil
+            executeMCPAndContinue(p)
+        } else if let t = pendingTransfer {
+            if decision == .deny { declineTransfer(); return }
+            isStreaming = true
+            pendingTransfer = nil
+            executeTransfer(t)
+        }
+    }
+
+    /// Tell the notch island where this conversation runs and how to answer
+    /// its confirmations.
+    private func bindIsland() {
+        let c = convo
+        c.islandTitle = host?.alias ?? loc("本地", "Local")
+        c.islandSessionID = session?.id
+        c.onDecision = { decision in resolvePending(decision) }
     }
 
     private func declineTransfer() {
@@ -734,6 +757,8 @@ struct AIPanelView: View {
     }
 
     private func startTurn() {
+        bindIsland()
+        convo.currentStep = nil          // the island reads "thinking…"
         isStreaming = true
         streaming = ""
         let client = AIClient(config: ai)
@@ -828,6 +853,7 @@ struct AIPanelView: View {
     private func executeTransfer(_ t: PendingTransfer) {
         if t.continueAgent { agentSteps += 1 }
         isStreaming = true
+        convo.currentStep = t.summary(loc)
         messages.append(AIMessage(role: .system, content: "▶︎ " + t.summary(loc)))
         let local = (t.localPath as NSString).expandingTildeInPath
         task = Task {
@@ -897,6 +923,7 @@ struct AIPanelView: View {
         messages.append(AIMessage(role: .system,
             content: loc("▶︎ 调用 MCP 工具：\(call.server).\(call.tool)", "▶︎ Calling MCP tool: \(call.server).\(call.tool)")))
         isStreaming = true
+        convo.currentStep = loc("调用 \(call.server).\(call.tool)", "Calling \(call.server).\(call.tool)")
         let cap = mcpResultCap
         let redact = ai.redact
         task = Task {
@@ -933,6 +960,7 @@ struct AIPanelView: View {
         }
         agentSteps += 1
         isStreaming = true
+        convo.currentStep = loc("执行 \(cmd) @ \(convo.islandTitle)", "Running \(cmd) @ \(convo.islandTitle)")
         messages.append(AIMessage(role: .system, content: "▶︎ \(cmd)"))
         task = Task {
             let output = ai.agentInTerminal

@@ -195,9 +195,21 @@ struct FleetView: View {
         results = []
         let cmd = command
         let hosts = store.hosts.map(\.alias).filter { selected.contains($0) }
+        // The run shows on the notch island too: n/total, failures, a pulse at the end.
+        let islandID = "fleet:\(UUID().uuidString)"
+        let island = IslandCenter.shared
+        island.fleetStarted(islandID, command: cmd, total: hosts.count)
+        var done = 0, failed = 0
         task = Task {
-            let r = await FleetRunner.run(command: cmd, on: hosts)
-            await MainActor.run { results = r; running = false }
+            let r = await FleetRunner.run(command: cmd, on: hosts) { one in
+                done += 1
+                if !one.ok { failed += 1 }
+                island.fleetProgress(islandID, done: done, failed: failed)
+            }
+            await MainActor.run {
+                results = r; running = false
+                island.fleetFinished(islandID, total: hosts.count, failed: r.filter { !$0.ok }.count)
+            }
         }
     }
 

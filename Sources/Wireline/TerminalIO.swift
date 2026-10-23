@@ -45,6 +45,9 @@ final class TerminalIO {
     var onBusyChange: ((Bool, TimeInterval) -> Void)?
     /// Every chunk of output (a backgrounded tab flags unread output).
     var onOutput: (() -> Void)?
+    /// The program rang the bell (nil) or posted a desktop notification
+    /// (OSC 9 / 777 / 99; its text) — coding agents do when they wait for you.
+    var onAttention: ((String?) -> Void)?
     /// The first byte from the host arrived — dialing → connected.
     var onConnected: (() -> Void)?
     /// The process exited (ssh dropped, logout, killed).
@@ -230,6 +233,28 @@ final class TerminalIO {
         }
     )
 
+    /// Watches for BEL and the notification OSCs, for every engine (libghostty
+    /// beeps on BEL but doesn't report notifications; SwiftTerm reports neither
+    /// reliably). The gate keeps the common chunk — no BEL, no ESC ] — cheap.
+    private var attentionSniffer = TerminalStreamSniffer()
+    private var attentionPending = false
+
+    private func sniffAttention(_ slice: ArraySlice<UInt8>) {
+        guard onAttention != nil, attentionPending || slice.contains(0x07) || slice.contains(0x1B) else { return }
+        attentionPending = false
+        for event in attentionSniffer.feed(slice) {
+            switch event {
+            case .bell: onAttention?(nil)
+            case let .notification(title, body):
+                let text = [title, body].filter { !$0.isEmpty }.joined(separator: ": ")
+                onAttention?(text.isEmpty ? nil : text)
+            default: break
+            }
+        }
+        // A sequence split across reads must see its tail even without an ESC.
+        attentionPending = attentionSniffer.isInsideSequence
+    }
+
     /// Output from the child.
     private func received(_ slice: ArraySlice<UInt8>) {
         // ZMODEM: once a transfer is live, every remote byte belongs to the
@@ -246,6 +271,7 @@ final class TerminalIO {
 
         engine?.feed(slice)
         outputObserver?()
+        sniffAttention(slice)
         let chunk = String(decoding: slice, as: UTF8.self)
         detectFullScreenApp(chunk)
         let clean = Self.stripAnsi(chunk)

@@ -189,6 +189,20 @@ final class IslandBoardTests: XCTestCase {
         b.upsert(item("ai", .working), at: at(103))
         XCTAssertEqual(b.mode(at: at(103), hovering: false, alwaysShow: false), .collapsed)
         XCTAssertEqual(b.item("ai")?.startedAt, t0)          // same row throughout
+        // Finished, then a new turn: same place, fresh start time.
+        b.finish("ai", success: true, detail: "", pulse: nil, at: at(110))
+        b.upsert(item("ai", .working, at: 120), at: at(120))
+        XCTAssertEqual(b.item("ai")?.startedAt, at(120))
+        XCTAssertNil(b.item("ai")?.finishedAt)
+    }
+
+    func testDismissOneRow() {
+        var b = IslandBoard()
+        b.upsert(item("viewed", .attention), at: t0)
+        b.dismiss("viewed")
+        XCTAssertEqual(b.mode(at: at(1), hovering: false, alwaysShow: false), .collapsed)
+        b.upsert(item("other", .attention), at: at(1))
+        XCTAssertEqual(b.mode(at: at(2), hovering: false, alwaysShow: false), .expanded)
     }
 
     func testAttentionWithoutConfirmationPeeksThenFolds() {

@@ -279,6 +279,16 @@ wlAnimateTerminalLayout { showAI = true }           // 会改终端尺寸的布�
 - 禁止写死 `.white` / `.black` 作为文字或底色；AppKit 侧用 `NSColor.labelColor` 这类会随外观变化的颜色。
 - 主题的光标色同时就是界面强调色，所以浅色主题要选饱和、够深的光标色。
 
+### 4.13 刘海岛（Notch Island）
+
+代码：`Sources/Wireline/Island/`（`IslandCenter` 汇总活动，`IslandController` 管窗口，`IslandView` 画界面）；显示规则在 `WirelineCore/IslandBoard.swift`。
+
+- **它是硬件刘海的延伸，所以永远是黑底浅字**，不跟主题深浅色走——这是全应用唯一允许写死颜色的地方（`IslandInk`）。按钮用自己的 `IslandButtonStyle`（胶囊，按下变暗 + 0.97），不用跟主题的 `.wlChip` / `.wlPrimary`。
+- **一个形状变形，不换形状。** `IslandShape`（顶部内凹的"肩"贴着屏幕上沿，底部圆角）的宽高和三个圆角一起动画：收起（刘海 + 左右耳朵）→ 脉冲（下方多一条 30pt 的"✓ 完成 · 12s"）→ 展开（400pt 宽的卡片）。变大用 `Motion.expand`，变小用 `Motion.popIn`（离场更快）；内容只淡入淡出，列表比形状晚 0.06s 出现。左右耳朵在各个状态里位置不变，变形时不跳。
+- **减弱动态效果：** 不做变形，旧形状淡出、新形状淡入（`Motion.fade`）；转圈的进度改为静止。
+- **焦点：** 窗口是不激活的 `NSPanel`，永远不成为 key / main，点岛上的按钮不会把焦点从终端抢走；只有点一行"跳到终端"才把 Wireline 带到前台。形状以外的区域忽略鼠标，菜单栏照常可点。
+- **悬停：** 指针进入 0.08s 后展开，离开 0.45s 后收起（滑出边缘一点不会立刻合上）。
+
 ---
 
 ## 5. 减弱动态效果

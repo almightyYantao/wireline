@@ -16,7 +16,15 @@ final class InlineAIController {
     /// Whether the inline card is showing at all.
     var active = false
     /// A request is in flight (streaming) — show the "thinking" state.
-    var thinking = false
+    var thinking = false {
+        didSet {
+            guard thinking != oldValue else { return }
+            // Next turn of the run loop, once the result / error is in place.
+            DispatchQueue.main.async { [weak self] in
+                MainActor.assumeIsolated { if let self { IslandCenter.shared.inlineAIChanged(self) } }
+            }
+        }
+    }
     /// The natural-language request being typed / just sent.
     var query = ""
     /// The model's short explanation shown above the command.

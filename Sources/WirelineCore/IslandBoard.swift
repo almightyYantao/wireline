@@ -44,8 +44,16 @@ public struct IslandConfirmation: Equatable, Sendable {
     public var subject: String
     /// Whether "always allow" is offered (MCP tools).
     public var canAlwaysAllow: Bool
-    public init(kind: Kind, subject: String, canAlwaysAllow: Bool = false) {
-        self.kind = kind; self.subject = subject; self.canAlwaysAllow = canAlwaysAllow
+    /// Extra context that can arrive later (the AI's impact assessment).
+    public var note: String?
+    public init(kind: Kind, subject: String, canAlwaysAllow: Bool = false, note: String? = nil) {
+        self.kind = kind; self.subject = subject; self.canAlwaysAllow = canAlwaysAllow; self.note = note
+    }
+
+    /// The same question (a late `note` doesn't make it a new one).
+    public func asks(_ other: IslandConfirmation?) -> Bool {
+        guard let other else { return false }
+        return kind == other.kind && subject == other.subject
     }
 }
 
@@ -147,13 +155,16 @@ public struct IslandBoard: Equatable, Sendable {
         }
         let old = items[i]
         var merged = new
-        merged.startedAt = old.startedAt
-        merged.updatedAt = now
         let finishedNow = new.tone == .success || new.tone == .failure
+        // A finished row that starts again is a new run: it keeps its place,
+        // not its old start time.
+        merged.startedAt = old.finishedAt != nil && !finishedNow ? now : old.startedAt
+        merged.updatedAt = now
         merged.finishedAt = finishedNow ? (old.tone == new.tone ? old.finishedAt ?? now : now) : nil
         if new.needsUser {
             // A new request (or a different question) re-opens the card.
-            let same = old.needsUser && old.confirmation == new.confirmation && old.detail == new.detail
+            let same = old.needsUser && (old.confirmation == nil && new.confirmation == nil
+                ? old.detail == new.detail : old.confirmation?.asks(new.confirmation) == true)
             merged.attentionAt = same ? old.attentionAt : now
             if !same { dismissed.remove(new.id) }
         } else {
@@ -187,6 +198,12 @@ public struct IslandBoard: Equatable, Sendable {
     public mutating func dismissAttention() {
         for item in items where item.needsUser { dismissed.insert(item.id) }
         pulse = nil
+    }
+
+    /// Don't force the card open for this row's current request (the user is
+    /// already looking at it). It's forgotten once the row stops asking.
+    public mutating func dismiss(_ id: String) {
+        if item(id)?.needsUser == true { dismissed.insert(id) }
     }
 
     /// Drop expired pulses and finished rows past their linger.

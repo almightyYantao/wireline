@@ -41,6 +41,9 @@ public struct TerminalStreamSniffer: Sendable {
 
     public init() {}
 
+    /// Mid-sequence: the next chunk must be fed even if it has no ESC / BEL.
+    public var isInsideSequence: Bool { state != .ground }
+
     /// Feed a chunk; returns the events completed within it, in order.
     public mutating func feed<C: Collection>(_ bytes: C) -> [Event] where C.Element == UInt8 {
         var events: [Event] = []
