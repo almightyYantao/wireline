@@ -434,6 +434,8 @@ final class GhosttyTerminalView: NSView, TerminalEngine {
     /// Set while a click is being released, to learn whether libghostty
     /// opened a link (then ⌘-click path detection stays out of it).
     private var openedURLDuringClick = false
+    /// A ⌘-click that landed on a link (opened on release, never sent on).
+    private var linkClick: String?
     @MainActor private static var lastOpenAt: CFTimeInterval = 0
     private var mouseCursor: NSCursor = .iBeam
 
@@ -737,12 +739,26 @@ final class GhosttyTerminalView: NSView, TerminalEngine {
     override func mouseDown(with event: NSEvent) {
         if window?.firstResponder !== self { window?.makeFirstResponder(self) }
         onClickFocus?()
+        // ⌘-click on a link is ours, whatever runs in the pane: open it on
+        // release, and keep the click from the program (Claude Code would
+        // open it too, a couple of seconds later).
+        linkClick = nil
+        if event.modifierFlags.contains(.command), event.clickCount == 1,
+           let link = linkSpan(at: convert(event.locationInWindow, from: nil)) {
+            linkClick = link.url
+            return
+        }
         guard allowMouseReporting, let s = surface?.raw else { return }
         sendMousePos(event)
         _ = ghostty_surface_mouse_button(s, GHOSTTY_MOUSE_PRESS, GHOSTTY_MOUSE_LEFT, GhosttyInput.mods(event.modifierFlags))
     }
 
     override func mouseUp(with event: NSEvent) {
+        if let url = linkClick {
+            linkClick = nil
+            openLink(url)
+            return
+        }
         guard let s = surface?.raw else { return }
         // ⌘-click: libghostty opens a URL under the pointer (OPEN_URL, sent
         // synchronously from the release); otherwise look for a path.
@@ -752,13 +768,7 @@ final class GhosttyTerminalView: NSView, TerminalEngine {
             _ = ghostty_surface_mouse_button(s, GHOSTTY_MOUSE_RELEASE, GHOSTTY_MOUSE_LEFT, GhosttyInput.mods(event.modifierFlags))
             ghostty_surface_mouse_pressure(s, 0, 0)
         }
-        // A program that captures the mouse (Claude Code, vim, tmux …) gets
-        // the click itself and opens its own links — opening it here too
-        // gave two windows.
         if event.modifierFlags.contains(.command), event.clickCount == 1, !openedURLDuringClick,
-           let url = hoverURL, !ghostty_surface_mouse_captured(s) {
-            openLink(url)
-        } else if event.modifierFlags.contains(.command), event.clickCount == 1, !openedURLDuringClick,
            let token = pathToken(at: convert(event.locationInWindow, from: nil)) {
             onOpenPath?(token)
         }
