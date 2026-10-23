@@ -752,7 +752,11 @@ final class GhosttyTerminalView: NSView, TerminalEngine {
             _ = ghostty_surface_mouse_button(s, GHOSTTY_MOUSE_RELEASE, GHOSTTY_MOUSE_LEFT, GhosttyInput.mods(event.modifierFlags))
             ghostty_surface_mouse_pressure(s, 0, 0)
         }
-        if event.modifierFlags.contains(.command), event.clickCount == 1, !openedURLDuringClick, let url = hoverURL {
+        // A program that captures the mouse (Claude Code, vim, tmux …) gets
+        // the click itself and opens its own links — opening it here too
+        // gave two windows.
+        if event.modifierFlags.contains(.command), event.clickCount == 1, !openedURLDuringClick,
+           let url = hoverURL, !ghostty_surface_mouse_captured(s) {
             openLink(url)
         } else if event.modifierFlags.contains(.command), event.clickCount == 1, !openedURLDuringClick,
            let token = pathToken(at: convert(event.locationInWindow, from: nil)) {
