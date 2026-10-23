@@ -57,6 +57,9 @@ struct IslandLayout: Equatable {
 private final class IslandPanel: NSPanel {
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
+    // AppKit pushes windows below the menu bar; the island belongs *in* it,
+    // hugging the notch, so take the frame exactly as given.
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
 }
 
 /// Lets the first click on a non-key panel land on its buttons.
@@ -140,9 +143,12 @@ final class IslandController {
 
     // MARK: - Placement
 
-    /// The screen with Wireline's key window, else the built-in (notched)
-    /// display, else the main screen.
+    /// The notched display, always — the island lives in the notch, and
+    /// following focus made it jump away (or vanish) whenever you clicked on
+    /// another screen. Without a notch: the screen with Wireline's window,
+    /// else the built-in, else the main screen.
     private func targetScreen() -> NSScreen? {
+        if let notched = NSScreen.screens.first(where: { $0.safeAreaInsets.top > 0 }) { return notched }
         if let key = NSApp.keyWindow, key !== panel, let s = key.screen { return s }
         return NSScreen.screens.first { $0.safeAreaInsets.top > 0 }
             ?? NSScreen.screens.first { Self.isBuiltIn($0) }
