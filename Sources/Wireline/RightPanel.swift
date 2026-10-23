@@ -821,7 +821,7 @@ struct ConnectionInfoBar: View {
                 .lineLimit(1).truncationMode(.middle)
             Text(meta).font(WL.caption).foregroundStyle(WL.textDim).lineLimit(1)
                 .contentTransition(.numericText())
-                .animation(Motion.state, value: latency)
+                .animation(Motion.state, value: meta)
             Spacer()
             HStack(spacing: 2) {
                 if session.rdp == nil {
@@ -850,6 +850,9 @@ struct ConnectionInfoBar: View {
             if rdp.target.port != 3389 { parts.append(":\(rdp.target.port)") }
             if let size = rdp.desktopSize { parts.append(size) }
             if let via = rdp.target.via { parts.append(loc("经 \(via)", "via \(via)")) }
+            // Behind a jump host the desktop itself can't be probed from
+            // here; the jump host's leg is the network part of the delay.
+            parts.append(latency(of: rdp.target.via ?? session.alias))
             return parts.joined(separator: " · ")
         }
         // A local shell has no protocol or latency — show where it is instead.
@@ -895,8 +898,10 @@ struct ConnectionInfoBar: View {
         }
     }
 
-    private var latency: String {
-        if case .online(let ms)? = store.statuses[session.alias] { return "\(ms) ms" }
+    private var latency: String { latency(of: session.alias) }
+
+    private func latency(of alias: String) -> String {
+        if case .online(let ms)? = store.statuses[alias] { return "\(ms) ms" }
         return "-- ms"
     }
 
