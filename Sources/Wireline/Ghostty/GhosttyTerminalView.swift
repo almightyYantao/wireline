@@ -495,6 +495,12 @@ final class GhosttyTerminalView: NSView, TerminalEngine {
         guard let cursor, cursor != mouseCursor else { return }
         mouseCursor = cursor
         window?.invalidateCursorRects(for: self)
+        // Cursor rects only re-apply when the pointer crosses one; the pointer
+        // is already inside, so show the new shape now (⌘ over a link → hand).
+        if let w = window, w.isKeyWindow,
+           bounds.contains(convert(w.mouseLocationOutsideOfEventStream, from: nil)) {
+            cursor.set()
+        }
     }
 
     override func resetCursorRects() { addCursorRect(bounds, cursor: mouseCursor) }
@@ -543,6 +549,7 @@ final class GhosttyTerminalView: NSView, TerminalEngine {
     }
 
     override func keyDown(with event: NSEvent) {
+        clearLinkHover()
         guard let s = surface?.raw else { interpretKeyEvents([event]); return }
         // ⌘-keys no menu claimed don't reach the program (as with SwiftTerm).
         if event.modifierFlags.contains(.command) { return }
@@ -606,6 +613,9 @@ final class GhosttyTerminalView: NSView, TerminalEngine {
     }
 
     override func flagsChanged(with event: NSEvent) {
+        // ⌘ held: libghostty underlines the link itself; released: ours again.
+        if event.modifierFlags.contains(.command) { clearLinkHover() }
+        else if let w = window { updateLinkHover(at: convert(w.mouseLocationOutsideOfEventStream, from: nil), mods: event.modifierFlags) }
         let mod: UInt32
         switch event.keyCode {
         case 0x39: mod = GHOSTTY_MODS_CAPS.rawValue
@@ -761,7 +771,10 @@ final class GhosttyTerminalView: NSView, TerminalEngine {
                                          GhosttyInput.mods(event.modifierFlags))
     }
 
-    override func mouseMoved(with event: NSEvent) { sendMousePos(event) }
+    override func mouseMoved(with event: NSEvent) {
+        sendMousePos(event)
+        updateLinkHover(at: convert(event.locationInWindow, from: nil), mods: event.modifierFlags)
+    }
     override func mouseDragged(with event: NSEvent) { sendMousePos(event) }
     override func rightMouseDragged(with event: NSEvent) { sendMousePos(event) }
     override func otherMouseDragged(with event: NSEvent) { sendMousePos(event) }
@@ -769,12 +782,14 @@ final class GhosttyTerminalView: NSView, TerminalEngine {
     override func mouseEntered(with event: NSEvent) { sendMousePos(event) }
 
     override func mouseExited(with event: NSEvent) {
+        clearLinkHover()
         // A drag keeps reporting outside the view.
         guard allowMouseReporting, NSEvent.pressedMouseButtons == 0, let s = surface?.raw else { return }
         ghostty_surface_mouse_pos(s, -1, -1, GhosttyInput.mods(event.modifierFlags))
     }
 
     override func scrollWheel(with event: NSEvent) {
+        clearLinkHover()
         guard let s = surface?.raw else { return }
         var x = event.scrollingDeltaX, y = event.scrollingDeltaY
         let precise = event.hasPreciseScrollingDeltas
@@ -785,6 +800,105 @@ final class GhosttyTerminalView: NSView, TerminalEngine {
     override func pressureChange(with event: NSEvent) {
         guard let s = surface?.raw else { return }
         ghostty_surface_mouse_pressure(s, UInt32(event.stage), Double(event.pressure))
+    }
+
+    // MARK: Link hover
+    //
+    // libghostty underlines a URL and shows the hand only while ⌘ is held
+    // (⌘-click opens it; a plain click selects text). Without ⌘ nothing told
+    // you a link was there, so a plain hover gets a quiet underline of our
+    // own and a "⌘-click to open" hint; holding ⌘ hands over to libghostty.
+
+    private var hoverKey: (row: Int, start: Int, end: Int)?
+    private lazy var linkUnderline: CALayer = {
+        let l = CALayer()
+        l.actions = ["position": NSNull(), "bounds": NSNull(), "opacity": NSNull()]
+        l.opacity = 0
+        return l
+    }()
+    private lazy var linkHint: CATextLayer = {
+        let t = CATextLayer()
+        t.actions = ["position": NSNull(), "bounds": NSNull(), "contents": NSNull()]
+        t.cornerRadius = 9
+        t.masksToBounds = true
+        t.alignmentMode = .left
+        t.truncationMode = .middle
+        t.fontSize = 11
+        t.opacity = 0
+        return t
+    }()
+
+    private static let urlRE = try? NSRegularExpression(
+        pattern: #"(?:https?|ftp|file|ssh|sftp)://[^\s"'<>`]+|mailto:[^\s"'<>`]+"#)
+
+    private func updateLinkHover(at point: NSPoint, mods: NSEvent.ModifierFlags) {
+        guard allowMouseReporting, !mods.contains(.command), NSEvent.pressedMouseButtons == 0,
+              let link = linkSpan(at: point) else { clearLinkHover(); return }
+        if let k = hoverKey, k == (link.row, link.start, link.end) { return }
+        hoverKey = (link.row, link.start, link.end)
+        showLinkHover(link)
+    }
+
+    /// The URL under `point`: its viewport row, cell range and text.
+    private func linkSpan(at point: NSPoint) -> (row: Int, start: Int, end: Int, url: String)? {
+        guard let s = surface?.raw, let re = Self.urlRE else { return nil }
+        let size = ghostty_surface_size(s)
+        let cell = cellSize
+        guard cell.width > 0, cell.height > 0 else { return nil }
+        let row = Int((bounds.height - point.y) / cell.height), col = Int(point.x / cell.width)
+        guard row >= 0, row < Int(size.rows), col >= 0,
+              let line = viewportLine(row, columns: Int(size.columns)), line.contains(":") else { return nil }
+        let ns = line as NSString
+        for m in re.matches(in: line, range: NSRange(location: 0, length: ns.length)) {
+            var url = ns.substring(with: m.range)
+            // Sentence punctuation and an unbalanced closing bracket aren't part of it.
+            while let last = url.last, ".,;:!?".contains(last) || (")]}".contains(last)
+                    && url.filter({ $0 == "(" || $0 == "[" || $0 == "{" }).count
+                       < url.filter({ $0 == ")" || $0 == "]" || $0 == "}" }).count) {
+                url.removeLast()
+            }
+            // UTF-16 offset → cells (wide characters take two).
+            let prefix = ns.substring(to: m.range.location)
+            let start = prefix.reduce(0) { $0 + Self.cellWidth($1) }
+            let end = start + url.reduce(0) { $0 + Self.cellWidth($1) }
+            if col >= start, col < end { return (row, start, end, url) }
+        }
+        return nil
+    }
+
+    private func showLinkHover(_ link: (row: Int, start: Int, end: Int, url: String)) {
+        guard let host = layer else { return }
+        let cell = cellSize
+        let scale = window?.backingScaleFactor ?? 2
+        if linkUnderline.superlayer !== host { host.addSublayer(linkUnderline) }
+        if linkHint.superlayer !== host { host.addSublayer(linkHint) }
+        let theme = (terminalAppearance?.theme ?? .wireline)
+        let fg = theme.foregroundNS
+        // Layer-hosting view: the layer's own geometry (origin bottom-left).
+        let y = bounds.height - CGFloat(link.row + 1) * cell.height + 2
+        linkUnderline.frame = CGRect(x: CGFloat(link.start) * cell.width, y: y,
+                                     width: CGFloat(link.end - link.start) * cell.width, height: 1)
+        linkUnderline.backgroundColor = fg.withAlphaComponent(0.7).cgColor
+        linkUnderline.opacity = 1
+
+        let hint = "  " + Localizer.shared.t("⌘ 点击打开  ", "⌘-click to open  ") + link.url + "  "
+        let font = NSFont.systemFont(ofSize: 11, weight: .medium)
+        linkHint.string = NSAttributedString(string: hint, attributes: [
+            .font: font, .foregroundColor: theme.backgroundNS, .baselineOffset: -2])
+        linkHint.contentsScale = scale
+        linkHint.backgroundColor = fg.withAlphaComponent(0.88).cgColor
+        let width = min(bounds.width - 16, (hint as NSString).size(withAttributes: [.font: font]).width + 4)
+        // Bottom-left like a browser's status bubble; top-left if the link is down there.
+        let nearBottom = y < 40
+        linkHint.frame = CGRect(x: 8, y: nearBottom ? bounds.height - 26 : 6, width: max(40, width), height: 18)
+        linkHint.opacity = 1
+    }
+
+    private func clearLinkHover() {
+        guard hoverKey != nil else { return }
+        hoverKey = nil
+        linkUnderline.opacity = 0
+        linkHint.opacity = 0
     }
 
     // MARK: ⌘-click paths
