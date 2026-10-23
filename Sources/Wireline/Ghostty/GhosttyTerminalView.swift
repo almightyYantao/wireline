@@ -613,9 +613,8 @@ final class GhosttyTerminalView: NSView, TerminalEngine {
     }
 
     override func flagsChanged(with event: NSEvent) {
-        // ⌘ held: libghostty underlines the link itself; released: ours again.
-        if event.modifierFlags.contains(.command) { clearLinkHover() }
-        else if let w = window { updateLinkHover(at: convert(w.mouseLocationOutsideOfEventStream, from: nil), mods: event.modifierFlags) }
+        // ⌘ pressed / released over a link: switch the hover between "hint" and "will open".
+        if let w = window { updateLinkHover(at: convert(w.mouseLocationOutsideOfEventStream, from: nil), mods: event.modifierFlags) }
         let mod: UInt32
         switch event.keyCode {
         case 0x39: mod = GHOSTTY_MODS_CAPS.rawValue
@@ -740,7 +739,9 @@ final class GhosttyTerminalView: NSView, TerminalEngine {
             _ = ghostty_surface_mouse_button(s, GHOSTTY_MOUSE_RELEASE, GHOSTTY_MOUSE_LEFT, GhosttyInput.mods(event.modifierFlags))
             ghostty_surface_mouse_pressure(s, 0, 0)
         }
-        if event.modifierFlags.contains(.command), event.clickCount == 1, !openedURLDuringClick,
+        if event.modifierFlags.contains(.command), event.clickCount == 1, !openedURLDuringClick, let url = hoverURL {
+            openLink(url)
+        } else if event.modifierFlags.contains(.command), event.clickCount == 1, !openedURLDuringClick,
            let token = pathToken(at: convert(event.locationInWindow, from: nil)) {
             onOpenPath?(token)
         }
@@ -809,7 +810,9 @@ final class GhosttyTerminalView: NSView, TerminalEngine {
     // you a link was there, so a plain hover gets a quiet underline of our
     // own and a "⌘-click to open" hint; holding ⌘ hands over to libghostty.
 
-    private var hoverKey: (row: Int, start: Int, end: Int)?
+    private var hoverKey: (row: Int, start: Int, end: Int, armed: Bool)?
+    /// The URL under the pointer while hovering (⌘-click opens it).
+    private var hoverURL: String?
     private lazy var linkUnderline: CALayer = {
         let l = CALayer()
         l.actions = ["position": NSNull(), "bounds": NSNull(), "opacity": NSNull()]
@@ -832,11 +835,15 @@ final class GhosttyTerminalView: NSView, TerminalEngine {
         pattern: #"(?:https?|ftp|file|ssh|sftp)://[^\s"'<>`]+|mailto:[^\s"'<>`]+"#)
 
     private func updateLinkHover(at point: NSPoint, mods: NSEvent.ModifierFlags) {
-        guard allowMouseReporting, !mods.contains(.command), NSEvent.pressedMouseButtons == 0,
+        guard allowMouseReporting, NSEvent.pressedMouseButtons == 0,
               let link = linkSpan(at: point) else { clearLinkHover(); return }
-        if let k = hoverKey, k == (link.row, link.start, link.end) { return }
-        hoverKey = (link.row, link.start, link.end)
-        showLinkHover(link)
+        let armed = mods.contains(.command)
+        if let k = hoverKey, k == (link.row, link.start, link.end, armed) { return }
+        hoverKey = (link.row, link.start, link.end, armed)
+        hoverURL = link.url
+        showLinkHover(link, armed: armed)
+        // ⌘ held: the hand says a click opens it.
+        (armed ? NSCursor.pointingHand : mouseCursor).set()
     }
 
     /// The URL under `point`: its viewport row, cell range and text.
@@ -866,7 +873,7 @@ final class GhosttyTerminalView: NSView, TerminalEngine {
         return nil
     }
 
-    private func showLinkHover(_ link: (row: Int, start: Int, end: Int, url: String)) {
+    private func showLinkHover(_ link: (row: Int, start: Int, end: Int, url: String), armed: Bool) {
         guard let host = layer else { return }
         let cell = cellSize
         let scale = window?.backingScaleFactor ?? 2
@@ -877,16 +884,18 @@ final class GhosttyTerminalView: NSView, TerminalEngine {
         // Layer-hosting view: the layer's own geometry (origin bottom-left).
         let y = bounds.height - CGFloat(link.row + 1) * cell.height + 2
         linkUnderline.frame = CGRect(x: CGFloat(link.start) * cell.width, y: y,
-                                     width: CGFloat(link.end - link.start) * cell.width, height: 1)
-        linkUnderline.backgroundColor = fg.withAlphaComponent(0.7).cgColor
+                                     width: CGFloat(link.end - link.start) * cell.width, height: armed ? 1.5 : 1)
+        let accent = NSColor(WL.green)
+        linkUnderline.backgroundColor = (armed ? accent : fg.withAlphaComponent(0.7)).cgColor
         linkUnderline.opacity = 1
 
-        let hint = "  " + Localizer.shared.t("⌘ 点击打开  ", "⌘-click to open  ") + link.url + "  "
+        let lead = armed ? Localizer.shared.t("点击打开  ", "Click to open  ") : Localizer.shared.t("⌘ 点击打开  ", "⌘-click to open  ")
+        let hint = "  " + lead + link.url + "  "
         let font = NSFont.systemFont(ofSize: 11, weight: .medium)
         linkHint.string = NSAttributedString(string: hint, attributes: [
             .font: font, .foregroundColor: theme.backgroundNS, .baselineOffset: -2])
         linkHint.contentsScale = scale
-        linkHint.backgroundColor = fg.withAlphaComponent(0.88).cgColor
+        linkHint.backgroundColor = (armed ? accent : fg.withAlphaComponent(0.88)).cgColor
         let width = min(bounds.width - 16, (hint as NSString).size(withAttributes: [.font: font]).width + 4)
         // Bottom-left like a browser's status bubble; top-left if the link is down there.
         let nearBottom = y < 40
@@ -895,8 +904,10 @@ final class GhosttyTerminalView: NSView, TerminalEngine {
     }
 
     private func clearLinkHover() {
-        guard hoverKey != nil else { return }
+        guard let k = hoverKey else { return }
         hoverKey = nil
+        hoverURL = nil
+        if k.armed { mouseCursor.set() }
         linkUnderline.opacity = 0
         linkHint.opacity = 0
     }
