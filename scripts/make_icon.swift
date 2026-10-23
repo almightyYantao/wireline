@@ -85,7 +85,7 @@ ctx.saveGState()
 ctx.addPath(chev); ctx.setLineWidth(46); ctx.setLineCap(.round); ctx.setLineJoin(.round)
 ctx.replacePathWithStrokedPath(); ctx.clip()
 let g2 = CGGradient(colorsSpace: cs, colors: [c(0x6E63FF), c(0x1FC8D6)] as CFArray, locations: [0,1])!
-ctx.drawLinearGradient(g2, start: CGPoint(x: 300, y: 520), end: CGPoint(x: 400, y: 380), options: [])
+ctx.drawLinearGradient(g2, start: CGPoint(x: 300, y: 520), end: CGPoint(x: 400, y: 380), options: [.drawsBeforeStartLocation, .drawsAfterEndLocation])
 ctx.restoreGState()
 ctx.addPath(rr(CGRect(x: 440, y: 358, width: 150, height: 40), 20)); ctx.setFillColor(ink); ctx.fillPath()
 
