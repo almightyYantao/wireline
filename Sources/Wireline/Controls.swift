@@ -666,9 +666,10 @@ extension View {
 
 // MARK: - Sheets
 
-/// The frame every sheet / dialog uses: header (title, subtitle, close),
-/// scrolling body, and a footer bar for actions. Esc closes via the cancel
-/// button the footer provides (`.keyboardShortcut(.cancelAction)`).
+/// The card every dialog is: header (icon tile, title, subtitle, close),
+/// a body on the canvas where form cards sit, and a footer of capsule
+/// buttons. Present it with `.wlModal` (it flips in over a scrim); Esc and the
+/// close button dismiss it, Return presses the `.defaultAction` button.
 struct WLSheet<Content: View, Footer: View>: View {
     let title: String
     var subtitle: String?
@@ -690,6 +691,7 @@ struct WLSheet<Content: View, Footer: View>: View {
     }
 
     var body: some View {
+        let shape = RoundedRectangle(cornerRadius: WL.radius(18), style: .continuous)
         VStack(spacing: 0) {
             header
             WLFormDivider()
@@ -705,16 +707,19 @@ struct WLSheet<Content: View, Footer: View>: View {
             .frame(maxHeight: .infinity, alignment: .top)
             .background(WL.paneCanvas)
             WLFormDivider()
-            HStack(spacing: 10) { footer }
-                .padding(.horizontal, 20).padding(.vertical, 12)
+            HStack(spacing: 8) { footer }
+                .padding(.horizontal, 18).padding(.vertical, 12)
         }
-        // `height` is the *ideal* height, never a hard one: a sheet can't be
-        // taller than its parent window, and a fixed frame would get centred and
-        // clipped (header and footer cut off). The body scrolls to absorb it.
-        .frame(width: width)
-        .frame(minHeight: 220, idealHeight: height, maxHeight: height ?? .infinity)
+        // `width` / `height` are *ideal* sizes, never hard ones: the presenter
+        // shrinks the card to the window (Settings is only 600pt wide) and the
+        // body scrolls to absorb it — a fixed frame would get clipped instead.
+        .frame(idealWidth: width, maxWidth: width)
+        .frame(minHeight: 200, idealHeight: height, maxHeight: height ?? .infinity)
         .background(WL.bg)
-        .preferredColorScheme(WL.colorScheme)
+        .clipShape(shape)
+        // A floating card: hairline edge, shadow on the shape only.
+        .wlFloating(shape, shadow: 0.45, radius: 30, y: 14)
+        .environment(\.colorScheme, WL.colorScheme)
     }
 
     private var body_: some View {
@@ -722,27 +727,163 @@ struct WLSheet<Content: View, Footer: View>: View {
     }
 
     private var header: some View {
-        HStack(alignment: .center, spacing: 10) {
+        HStack(alignment: .center, spacing: 12) {
             if let symbol {
-                Image(systemName: symbol).font(.system(size: 13, weight: .semibold))
+                Image(systemName: symbol).font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(WL.green)
-                    .frame(width: 30, height: 30)
-                    .background(WL.green.opacity(0.12), in: RoundedRectangle(cornerRadius: WL.radius(9), style: .continuous))
+                    .frame(width: 34, height: 34)
+                    .background(WL.green.opacity(WL.isLight ? 0.12 : 0.15),
+                                in: RoundedRectangle(cornerRadius: WL.radius(10), style: .continuous))
             }
             VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(WL.mono(14, .semibold)).foregroundStyle(WL.textPrimary)
+                Text(title).font(WL.mono(14, .semibold)).foregroundStyle(WL.textPrimary).lineLimit(1)
                 if let subtitle {
                     Text(subtitle).font(WL.caption).foregroundStyle(WL.textDim).lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
-            Spacer()
+            Spacer(minLength: 8)
             if let onClose {
-                Button(action: onClose) { Image(systemName: "xmark").font(.system(size: 10, weight: .semibold)) }
-                    .buttonStyle(.wlIcon(size: 24))
-                    .help(Localizer.shared.t("关闭", "Close"))
+                Button(action: onClose) { Image(systemName: "xmark").font(.system(size: 9, weight: .bold)) }
+                    .buttonStyle(WLRoundButtonStyle())
+                    .help(Localizer.shared.t("关闭 (Esc)", "Close (Esc)"))
             }
         }
-        .padding(.horizontal, 20).padding(.top, 18).padding(.bottom, 14)
+        .padding(.leading, 18).padding(.trailing, 14).padding(.vertical, 14)
+    }
+}
+
+/// A small round icon button (a dialog's close ×): a faint disc of the text
+/// colour that deepens on hover and press — one circle, only its opacity moves.
+struct WLRoundButtonStyle: ButtonStyle {
+    var size: CGFloat = 24
+
+    func makeBody(configuration: Configuration) -> some View {
+        RoundBody(configuration: configuration, size: size)
+    }
+
+    private struct RoundBody: View {
+        let configuration: ButtonStyleConfiguration
+        let size: CGFloat
+        @Environment(\.isEnabled) private var enabled
+        @State private var hover = false
+
+        var body: some View {
+            let pressed = configuration.isPressed
+            configuration.label
+                .foregroundStyle(hover ? WL.textPrimary : WL.textDim)
+                .frame(width: size, height: size)
+                .background(Circle().fill(WL.textPrimary.opacity(pressed ? 0.15 : hover ? 0.1 : 0.055)))
+                .contentShape(Circle())
+                .scaleEffect(pressed && !Motion.reduce ? 0.94 : 1)
+                .opacity(enabled ? 1 : 0.4)
+                .animation(pressed ? Motion.press : Motion.release, value: pressed)
+                .wlHover($hover)
+        }
+    }
+}
+
+/// A one-field dialog (new group, new folder, rename, a key's passphrase): a
+/// label, a capsule field that takes focus, Cancel, and a primary action that
+/// needs a value. The text lives in the dialog; `onConfirm` gets it (trimmed,
+/// except a secure field's).
+struct WLPromptSheet: View {
+    let title: String
+    var subtitle: String?
+    var symbol: String
+    let label: String
+    var prompt: String
+    let confirmTitle: String
+    var secure: Bool
+    var onConfirm: (String) -> Void
+    @State private var text: String
+    @Environment(\.wlDismiss) private var dismiss
+    @FocusState private var focused: Bool
+    /// Return can reach both the field's submit and the default button.
+    @State private var done = false
+
+    init(title: String, subtitle: String? = nil, symbol: String, label: String, prompt: String = "",
+         confirmTitle: String, initial: String = "", secure: Bool = false,
+         onConfirm: @escaping (String) -> Void) {
+        self.title = title; self.subtitle = subtitle; self.symbol = symbol
+        self.label = label; self.prompt = prompt; self.confirmTitle = confirmTitle
+        self.secure = secure; self.onConfirm = onConfirm
+        self._text = State(initialValue: initial)
+    }
+
+    private var value: String { secure ? text : text.trimmingCharacters(in: .whitespaces) }
+
+    var body: some View {
+        WLSheet(title, subtitle: subtitle, symbol: symbol, width: 420, scrolls: false,
+                onClose: { dismiss() }) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(label).font(WL.small).foregroundStyle(WL.textDim).padding(.leading, 4)
+                Group {
+                    if secure {
+                        SecureField("", text: $text, prompt: Text(prompt).foregroundStyle(WL.textDim))
+                    } else {
+                        TextField("", text: $text, prompt: Text(prompt).foregroundStyle(WL.textDim))
+                    }
+                }
+                .wlField(font: WL.body, focus: $focused)
+                .onSubmit(confirm)
+            }
+        } footer: {
+            Spacer()
+            Button(Localizer.shared.t("取消", "Cancel")) { dismiss() }
+                .buttonStyle(.wlSecondary).keyboardShortcut(.cancelAction)
+            Button(confirmTitle, action: confirm)
+                .buttonStyle(.wlPrimary).keyboardShortcut(.defaultAction)
+                .disabled(value.isEmpty)
+        }
+        .wlAutofocus($focused)
+    }
+
+    private func confirm() {
+        guard !done, !value.isEmpty else { return }
+        done = true
+        onConfirm(value)
+        dismiss()
+    }
+}
+
+/// An inline disclosure ("Advanced", "View steps"): a capsule chip whose
+/// chevron turns, revealing the content below it.
+struct WLDisclosure<Content: View>: View {
+    let title: String
+    @Binding var isExpanded: Bool
+    @ViewBuilder var content: Content
+
+    init(_ title: String, isExpanded: Binding<Bool>, @ViewBuilder content: () -> Content) {
+        self.title = title; self._isExpanded = isExpanded; self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            WLDisclosureChip(title: title, isExpanded: $isExpanded)
+            if isExpanded {
+                content.transition(.wlDisclose)
+            }
+        }
+    }
+}
+
+/// Just the chip of a disclosure, for rows that place its content themselves.
+struct WLDisclosureChip: View {
+    let title: String
+    @Binding var isExpanded: Bool
+
+    var body: some View {
+        Button {
+            wlAnimate(Motion.disclose) { isExpanded.toggle() }
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: "chevron.right").font(.system(size: 8, weight: .bold))
+                    .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                Text(title)
+            }
+        }
+        .buttonStyle(.wlChip(on: isExpanded))
     }
 }
 
