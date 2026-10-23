@@ -446,7 +446,7 @@ struct SessionTabBar: View {
                                    pill: pill, showSeparator: index > 0 && !active && !prevActive)
                     }
                 }
-                .wlCapsuleTrack()
+                .wlCapsuleTrack(opaque: true)
                 // Double-clicking a tab renames it; keep the window's
                 // double-click-to-zoom off this area.
                 .background(GeometryReader { g in
@@ -553,7 +553,19 @@ struct SessionTab: View {
     /// True when this (non-active) tab has a command still running — shows a
     /// "running…" badge so you know it's working while you're on another tab.
     private var running: Bool {
-        tab.sessionIDs.contains { sessions.session($0)?.isBusy == true }
+        tab.sessionIDs.contains { id in
+            guard let s = sessions.session(id) else { return false }
+            // A coding agent counts as running only while it works, like the island.
+            if let a = s.agentState { return a == .working }
+            return s.isBusy
+        }
+    }
+    /// A coding agent in this tab is waiting for you (a permission prompt, a question).
+    private var waiting: Bool {
+        tab.sessionIDs.contains { id in
+            if case .needsYou? = sessions.session(id)?.agentState { return true }
+            return false
+        }
     }
     /// True when this (non-active) tab produced output you haven't seen yet — shows
     /// a small "new output" dot. The running badge takes precedence over it.
@@ -585,7 +597,9 @@ struct SessionTab: View {
                 Text(title).font(WL.small.weight(isActive ? .semibold : .regular))
                     .foregroundStyle(isActive ? WL.textPrimary : WL.textDim).lineLimit(1)
             }
-            if !isActive && running {
+            if !isActive && waiting {
+                WaitingBadge()
+            } else if !isActive && running {
                 RunningBadge()
             } else if !isActive && unread {
                 UnreadDot()
@@ -623,6 +637,7 @@ struct SessionTab: View {
         }
         .animation(Motion.state, value: isActive)
         .animation(Motion.state, value: running)
+        .animation(Motion.state, value: waiting)
         .animation(Motion.state, value: unread)
         .contentShape(Rectangle())
         // One tap handler that reads the click count: a count-2 TapGesture next
@@ -720,6 +735,21 @@ struct RunningBadge: View {
         }
         .padding(.horizontal, 5).padding(.vertical, 1)
         .background(WL.amber.opacity(0.12), in: Capsule())
+        .transition(.wlBadge)
+    }
+}
+
+/// A coding agent in a backgrounded tab is waiting on you.
+struct WaitingBadge: View {
+    @Environment(Localizer.self) private var loc
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Circle().fill(WL.amber).frame(width: 5, height: 5)
+            Text(loc("等你", "your turn")).font(WL.caption.weight(.semibold)).foregroundStyle(WL.amber)
+        }
+        .padding(.horizontal, 5).padding(.vertical, 1)
+        .background(WL.amber.opacity(0.16), in: Capsule())
         .transition(.wlBadge)
     }
 }

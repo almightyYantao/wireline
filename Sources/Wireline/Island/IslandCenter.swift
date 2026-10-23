@@ -56,7 +56,16 @@ final class IslandCenter {
     @ObservationIgnored weak var sessions: SessionStore?
     /// What the Allow / Deny buttons of a row do.
     @ObservationIgnored private var decisions: [String: (IslandDecision) -> Void] = [:]
-    @ObservationIgnored private var agents: [UUID: AgentWatch] = [:]
+    @ObservationIgnored private var agents: [UUID: AgentWatch] = [:] {
+        // Mirror each pane's agent state onto its session, so the tab badge
+        // reads the same working / waiting / done as the island.
+        didSet {
+            for s in sessions?.sessions ?? [] {
+                let state = agents[s.id]?.tracker.state
+                if s.agentState != state { s.agentState = state }
+            }
+        }
+    }
     @ObservationIgnored private var timer: DispatchWorkItem?
 
     private struct AgentWatch {

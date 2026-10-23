@@ -52,6 +52,11 @@ final class TerminalSession: Identifiable {
     /// Name of the program in the foreground of a local shell (`vim`, `node`,
     /// `claude`), nil at the prompt. Picks the pane / tab icon.
     var foregroundName: String?
+    /// A coding agent (Claude Code, Codex …) running in this pane, and what
+    /// it's doing — the island's tracker, mirrored here (nil: no agent). An
+    /// agent sitting at its prompt isn't "running" even though its process is
+    /// in the foreground.
+    var agentState: CodingAgentTracker.State?
 
     /// Coarse connection lifecycle for the animated status indicator: dialing
     /// (`connecting`) → server responding (`connected`) → process gone
