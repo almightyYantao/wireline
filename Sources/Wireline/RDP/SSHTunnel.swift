@@ -21,7 +21,8 @@ final class SSHTunnel {
 
     /// Start the tunnel and wait until its local end accepts connections
     /// (ssh opens `-L` listeners only after authenticating). Returns the port.
-    func start(via alias: String, password: String?, host: String, port: Int,
+    /// `options`: the jump host's own launch arguments (`-o …`, `-p …`).
+    func start(via alias: String, password: String?, options: [String] = [], host: String, port: Int,
                timeout: TimeInterval = 25) async throws -> Int {
         stop()
         guard let lp = Self.freePort() else { throw Failure.spawn("no free local port") }
@@ -36,8 +37,7 @@ final class SSHTunnel {
             "-o", "StrictHostKeyChecking=accept-new",
             "-o", "ControlMaster=no", "-o", "ControlPath=none",
             "-L", "127.0.0.1:\(lp):\(host):\(port)",
-            alias,
-        ]
+        ] + options + [alias]
         var env = ProcessInfo.processInfo.environment
         SSHAgentEnvironment.apply(to: &env)
         if let password, !password.isEmpty, let script = Self.makeAskpass() {

@@ -15,8 +15,12 @@ struct RDPTarget: Sendable {
     /// SSH jump host for `ssh -N -L`, and its password (nil for key auth).
     var via: String?
     var viaPassword: String?
+    /// The jump host's launch arguments.
+    var viaArgs: [String] = []
+    /// A fixed desktop size (nil: follow the pane).
+    var fixedSize: RDPResolution?
 
-    init(host: Host, password: String?, viaPassword: String?) {
+    init(host: Host, password: String?, viaPassword: String?, viaArgs: [String] = []) {
         alias = host.alias
         hostname = host.connectHostname
         port = host.effectivePort
@@ -25,6 +29,8 @@ struct RDPTarget: Sendable {
         self.password = password
         via = host.rdpVia
         self.viaPassword = viaPassword
+        self.viaArgs = viaArgs
+        fixedSize = host.rdpResolution.flatMap(RDPResolution.init)
     }
 }
 
@@ -105,10 +111,13 @@ final class RDPSession {
     @ObservationIgnored private var lastRequested: (UInt32, UInt32)?
     @ObservationIgnored private var clipboardTimer: Timer?
     @ObservationIgnored private var clipboardReady = false
+    /// The Mac side of the shared clipboard (a private one in tests).
+    @ObservationIgnored var pasteboard = NSPasteboard.general
     @ObservationIgnored private var lastPasteboardCount = NSPasteboard.general.changeCount
     @ObservationIgnored private var tunnelTask: Task<Void, Never>?
 
-    static let knownHosts = RDPKnownHosts(url: FileManager.default
+    /// Trusted certificates (a var so tests can point it at a scratch file).
+    static var knownHosts = RDPKnownHosts(url: FileManager.default
         .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         .appendingPathComponent("Wireline/rdp-known-hosts.json"))
 
@@ -149,6 +158,7 @@ final class RDPSession {
                 guard let self else { return }
                 do {
                     let port = try await t.start(via: via, password: self.target.viaPassword,
+                                                 options: self.target.viaArgs,
                                                  host: self.target.hostname, port: self.target.port)
                     guard self.generation == gen else { return }
                     self.note(Localizer.shared.t("隧道就绪：127.0.0.1:\(port)", "Tunnel up: 127.0.0.1:\(port)"))
@@ -172,10 +182,15 @@ final class RDPSession {
 
     private func dial(host: String, port: Int, gen: Int) {
         let scale = view.backingScale
-        let hiDPI = RDPPreferences.hiDPI
-        let size = view.pointSize.width > 80 && view.pointSize.height > 48
-            ? RDPDisplay.desktopSize(points: view.pointSize, backingScale: hiDPI ? scale : 1)
-            : (width: UInt32(1280), height: UInt32(800))
+        // A fixed resolution is taken literally: those pixels, Windows at 100%.
+        let hiDPI = RDPPreferences.hiDPI && target.fixedSize == nil
+        let size = if let fixed = target.fixedSize {
+            (width: fixed.width, height: fixed.height)
+        } else if view.pointSize.width > 80 && view.pointSize.height > 48 {
+            RDPDisplay.desktopSize(points: view.pointSize, backingScale: hiDPI ? scale : 1)
+        } else {
+            (width: UInt32(1280), height: UInt32(800))
+        }
         let desktopScale = hiDPI ? RDPDisplay.desktopScaleFactor(backingScale: scale) : 100
         let config = RDPConnection.Config(
             host: host, port: port, username: target.username, password: target.password,
@@ -227,7 +242,7 @@ final class RDPSession {
         }
         ev.remoteClipboard = { [weak self] text in
             guard let self, self.generation == gen else { return }
-            let pb = NSPasteboard.general
+            let pb = self.pasteboard
             pb.clearContents()
             pb.setString(text, forType: .string)
             self.lastPasteboardCount = pb.changeCount
@@ -475,7 +490,7 @@ final class RDPSession {
     }
 
     private func applyResize() {
-        guard resizeReady, status == .established, let connection else { return }
+        guard resizeReady, status == .established, target.fixedSize == nil, let connection else { return }
         guard TerminalResizeGate.shared.isIdle, !view.inLiveResize else { scheduleResize(); return }
         let pts = view.pointSize
         guard pts.width >= 80, pts.height >= 48 else { return }
@@ -507,7 +522,7 @@ final class RDPSession {
     /// Offer the Mac clipboard's text to the server when it changed (or now).
     func pushClipboard(force: Bool) {
         guard clipboardReady, let connection else { return }
-        let pb = NSPasteboard.general
+        let pb = pasteboard
         guard force || pb.changeCount != lastPasteboardCount else { return }
         lastPasteboardCount = pb.changeCount
         connection.setLocalClipboard(pb.string(forType: .string))

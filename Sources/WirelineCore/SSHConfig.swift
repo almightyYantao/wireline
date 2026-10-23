@@ -164,6 +164,7 @@ public enum SSHConfig {
             case "protocol": host.hostProtocol = HostProtocol(rawValue: value) ?? .ssh
             case "domain": host.rdpDomain = value.isEmpty ? nil : value
             case "via": host.rdpVia = value.isEmpty ? nil : value
+            case "resolution": host.rdpResolution = value.isEmpty ? nil : value
             default: break
             }
         }
@@ -211,6 +212,7 @@ public enum SSHConfig {
         if let a = host.launchArgs, !a.isEmpty { parts.append("args=\(metaEscape(a))") }
         if host.isRDP, let d = host.rdpDomain, !d.isEmpty { parts.append("domain=\(metaEscape(d))") }
         if host.isRDP, let v = host.rdpVia, !v.isEmpty { parts.append("via=\(metaEscape(v))") }
+        if host.isRDP, let r = host.rdpResolution, !r.isEmpty { parts.append("resolution=\(metaEscape(r))") }
         guard !parts.isEmpty else { return nil }
         return "\(metadataPrefix) \(parts.joined(separator: "; "))"
     }

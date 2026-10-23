@@ -168,6 +168,33 @@ public enum RDPDisplay {
     }
 }
 
+/// A fixed remote desktop size (`Host.rdpResolution`, spelled `1920x1080`).
+public struct RDPResolution: Equatable, Hashable, Sendable, CustomStringConvertible {
+    public let width: UInt32
+    public let height: UInt32
+
+    public init(width: UInt32, height: UInt32) { self.width = width; self.height = height }
+
+    /// `1920x1080` (also `×`, `X`, `*`); nil unless both sides are 200…8192.
+    public init?(_ text: String) {
+        let parts = text.lowercased().split(whereSeparator: { "x×*".contains($0) })
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+        guard parts.count == 2, let w = UInt32(parts[0]), let h = UInt32(parts[1]),
+              (200...8192).contains(w), (200...8192).contains(h) else { return nil }
+        width = w & ~1   // even, like every RDP desktop width
+        height = h
+    }
+
+    public var description: String { "\(width)x\(height)" }
+
+    /// The editor's choices (besides "fit the pane").
+    public static let presets: [RDPResolution] = [
+        .init(width: 1280, height: 720), .init(width: 1280, height: 800), .init(width: 1440, height: 900),
+        .init(width: 1600, height: 900), .init(width: 1920, height: 1080), .init(width: 1920, height: 1200),
+        .init(width: 2560, height: 1440), .init(width: 3840, height: 2160),
+    ]
+}
+
 /// Turns macOS scroll deltas into RDP wheel events (120 units per notch,
 /// at most 255 per event). Trackpads send many tiny precise deltas: they're
 /// accumulated and sent in small steps, so scrolling stays smooth on Windows

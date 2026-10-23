@@ -167,12 +167,13 @@ final class RDPTests: XCTestCase {
     func testRDPMetadataRoundTrip() {
         let text = """
         Host winbox
-            # wireline: protocol=rdp; group=Office; domain=CORP; via=bastion
+            # wireline: protocol=rdp; group=Office; domain=CORP; via=bastion; resolution=1920x1080
             HostName 10.1.2.3
             User alice
         """
         let h = SSHConfig.parse(text).hosts[0]
         XCTAssertTrue(h.isRDP)
+        XCTAssertEqual(h.rdpResolution, "1920x1080")
         XCTAssertEqual(h.rdpDomain, "CORP")
         XCTAssertEqual(h.rdpVia, "bastion")
         XCTAssertEqual(h.group, "Office")
@@ -182,10 +183,23 @@ final class RDPTests: XCTestCase {
         XCTAssertTrue(SSHConfig.render(h).contains("# wireline: protocol=rdp;"))
     }
 
+    func testResolutionParsing() {
+        XCTAssertEqual(RDPResolution("1920x1080"), RDPResolution(width: 1920, height: 1080))
+        XCTAssertEqual(RDPResolution(" 1366 × 768 "), RDPResolution(width: 1366, height: 768))
+        XCTAssertEqual(RDPResolution("1281X720")?.width, 1280)   // even width
+        XCTAssertNil(RDPResolution("fit"))
+        XCTAssertNil(RDPResolution("100x100"))
+        XCTAssertNil(RDPResolution("10000x1000"))
+        XCTAssertEqual(RDPResolution(width: 2560, height: 1440).description, "2560x1440")
+        XCTAssertTrue(RDPResolution.presets.allSatisfy { RDPResolution($0.description) == $0 })
+    }
+
     func testSSHHostsDontGetRDPKeys() {
         var h = Host(alias: "web", hostname: "1.2.3.4")
         h.rdpDomain = "LEFTOVER"   // e.g. switched from RDP back to SSH in the editor
+        h.rdpResolution = "1280x720"
         XCTAssertFalse(SSHConfig.render(h).contains("domain="))
+        XCTAssertFalse(SSHConfig.render(h).contains("resolution="))
         XCTAssertFalse(SSHConfig.render(h).contains("protocol="))
         XCTAssertEqual(h.effectivePort, 22)
     }
@@ -222,7 +236,8 @@ final class RDPTests: XCTestCase {
     }
 
     func testHostCodableKeepsRDPFields() throws {
-        let h = Host(alias: "w", hostname: "x", user: "u", hostProtocol: .rdp, rdpDomain: "D", rdpVia: "j")
+        let h = Host(alias: "w", hostname: "x", user: "u", hostProtocol: .rdp, rdpDomain: "D", rdpVia: "j",
+                     rdpResolution: "1920x1080")
         let back = try JSONDecoder().decode(Host.self, from: JSONEncoder().encode(h))
         XCTAssertEqual(back, h)
         // Old backups (no protocol key) decode as SSH.

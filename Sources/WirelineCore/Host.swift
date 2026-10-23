@@ -54,6 +54,8 @@ public struct Host: Identifiable, Codable, Sendable, Equatable {
     public var rdpDomain: String?
     /// An SSH host alias to tunnel through (`ssh -N -L port:host:3389 via`).
     public var rdpVia: String?
+    /// A fixed desktop size, `1920x1080` (nil = follow the pane's size).
+    public var rdpResolution: String?
 
     public var id: String { alias }
     public var isRDP: Bool { hostProtocol == .rdp }
@@ -73,7 +75,8 @@ public struct Host: Identifiable, Codable, Sendable, Equatable {
         launchArgs: String? = nil,
         hostProtocol: HostProtocol = .ssh,
         rdpDomain: String? = nil,
-        rdpVia: String? = nil
+        rdpVia: String? = nil,
+        rdpResolution: String? = nil
     ) {
         self.alias = alias
         self.hostname = hostname
@@ -90,6 +93,7 @@ public struct Host: Identifiable, Codable, Sendable, Equatable {
         self.hostProtocol = hostProtocol
         self.rdpDomain = rdpDomain
         self.rdpVia = rdpVia
+        self.rdpResolution = rdpResolution
     }
 
     /// `launchArgs` split into individual command-line tokens.
@@ -114,7 +118,7 @@ public struct Host: Identifiable, Codable, Sendable, Equatable {
     private enum CodingKeys: String, CodingKey {
         case alias, hostname, user, port, identityFile, proxyJump
         case extraOptions, group, descriptionText, authMethod, autoSudo, launchArgs
-        case hostProtocol, rdpDomain, rdpVia
+        case hostProtocol, rdpDomain, rdpVia, rdpResolution
     }
 
     private struct Option: Codable { var keyword: String; var value: String }
@@ -137,6 +141,7 @@ public struct Host: Identifiable, Codable, Sendable, Equatable {
         hostProtocol = try c.decodeIfPresent(HostProtocol.self, forKey: .hostProtocol) ?? .ssh
         rdpDomain = try c.decodeIfPresent(String.self, forKey: .rdpDomain)
         rdpVia = try c.decodeIfPresent(String.self, forKey: .rdpVia)
+        rdpResolution = try c.decodeIfPresent(String.self, forKey: .rdpResolution)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -157,6 +162,7 @@ public struct Host: Identifiable, Codable, Sendable, Equatable {
         if hostProtocol != .ssh { try c.encode(hostProtocol, forKey: .hostProtocol) }
         try c.encodeIfPresent(rdpDomain, forKey: .rdpDomain)
         try c.encodeIfPresent(rdpVia, forKey: .rdpVia)
+        try c.encodeIfPresent(rdpResolution, forKey: .rdpResolution)
     }
 
     public static func == (lhs: Host, rhs: Host) -> Bool {
@@ -174,6 +180,7 @@ public struct Host: Identifiable, Codable, Sendable, Equatable {
         lhs.hostProtocol == rhs.hostProtocol &&
         lhs.rdpDomain == rhs.rdpDomain &&
         lhs.rdpVia == rhs.rdpVia &&
+        lhs.rdpResolution == rhs.rdpResolution &&
         lhs.extraOptions.map(\.keyword) == rhs.extraOptions.map(\.keyword) &&
         lhs.extraOptions.map(\.value) == rhs.extraOptions.map(\.value)
     }
