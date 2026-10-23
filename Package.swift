@@ -13,6 +13,16 @@ let ghosttyLinkerSettings: [LinkerSetting] = [
     .linkedFramework("UniformTypeIdentifiers")
 ]
 
+/// What static FreeRDP (+ its builtin channels and OpenSSL) needs from the system.
+let freerdpLinkerSettings: [LinkerSetting] = [
+    .linkedLibrary("z"),
+    .linkedFramework("CoreFoundation"),
+    .linkedFramework("Security"),
+    .linkedFramework("SystemConfiguration"),
+    .linkedFramework("AudioToolbox"),
+    .linkedFramework("CoreAudio")
+]
+
 let package = Package(
     name: "Wireline",
     platforms: [
@@ -36,6 +46,9 @@ let package = Package(
         // libghostty (static lib + ghostty.h). ~150 MB, never committed: run
         // scripts/fetch-ghosttykit.sh once to put it in Vendor/.
         .binaryTarget(name: "GhosttyKit", path: "Vendor/GhosttyKit.xcframework"),
+        // FreeRDP 3 + OpenSSL, static (~35 MB universal), never committed: run
+        // scripts/fetch-freerdp.sh (--build) once to put it in Vendor/.
+        .binaryTarget(name: "FreeRDP", path: "Vendor/FreeRDP.xcframework"),
         .executableTarget(
             name: "Wireline",
             dependencies: [

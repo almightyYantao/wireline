@@ -23,3 +23,7 @@ xcuserdata/
 # libghostty (scripts/fetch-ghosttykit.sh) — ~150 MB, never commit
 Vendor/GhosttyKit.xcframework
 Vendor/ghostty-share/
+
+# FreeRDP (scripts/fetch-freerdp.sh) — ~35 MB, never commit
+Vendor/FreeRDP.xcframework
+Vendor/FreeRDP-licenses/

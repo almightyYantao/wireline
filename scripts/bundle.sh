@@ -107,6 +107,12 @@ else
     echo "  ⚠ ${GHOSTTY_SHARE} missing — run scripts/fetch-ghosttykit.sh (the libghostty engine needs it)"
 fi
 
+# FreeRDP / OpenSSL licences (both Apache-2.0; statically linked for RDP panes).
+if [[ -d "Vendor/FreeRDP-licenses" ]]; then
+    mkdir -p "${OUT}/Contents/Resources/FreeRDP"
+    cp Vendor/FreeRDP-licenses/*-LICENSE "${OUT}/Contents/Resources/FreeRDP/"
+fi
+
 # Code signing.
 #
 # Keychain items are ACL-bound to the app's *code signing identity*. An ad-hoc
