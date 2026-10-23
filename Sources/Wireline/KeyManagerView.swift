@@ -439,10 +439,10 @@ struct KeyManagerView: View {
 
     private func deployMenu(_ key: SSHKey) -> some View {
         Menu {
-            if store.hosts.isEmpty {
+            if store.sshHosts.isEmpty {
                 Text(loc("没有主机", "No hosts"))
             } else {
-                ForEach(store.hosts) { host in
+                ForEach(store.sshHosts) { host in
                     Button(host.alias) { deploy(key, to: host) }
                 }
             }

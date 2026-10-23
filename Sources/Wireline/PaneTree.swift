@@ -287,6 +287,9 @@ struct SessionGlyph: View {
             return symbol("folder", store.groupColor(forAlias: alias)?.color ?? WL.teal)
         case .localShell:
             return symbol("terminal", WL.textDim)
+        case .rdp(let alias, _):
+            // Four panes: Windows, in Windows blue unless the group has a colour.
+            return symbol("squareshape.split.2x2", store.groupColor(forAlias: alias)?.color ?? Color(hex: 0x0078D4))
         }
     }
 }
@@ -471,6 +474,12 @@ struct PaneLeafView: View {
             VStack(spacing: 0) {
                 header(session)
                 GroupColorRule(alias: session.alias)
+                if let rdp = session.rdp {
+                    // A remote desktop fills the card edge to edge (no terminal padding).
+                    RDPPaneContent(session: session, rdp: rdp, autoFocus: focused && !aiOpen).id(session.id)
+                        .clipShape(UnevenRoundedRectangle(bottomLeadingRadius: WL.radius(10),
+                                                          bottomTrailingRadius: WL.radius(10), style: .continuous))
+                } else {
                 TerminalHostView(session: session, autoFocus: focused && !aiOpen).id(session.id)
                     .wlTerminalPadding(store)
                     .overlay(alignment: .top) {
@@ -486,6 +495,7 @@ struct PaneLeafView: View {
                     .animation(Motion.banner, value: session.connectionState)
                     // Clicks inside the terminal focus the pane from the terminal
                     // view itself (see WirelineTerminalView.mouseDown).
+                }
             }
             // Fill the allotted cell so panes divide the space evenly (without
             // this each pane shrinks to its content and leaves gaps).
@@ -531,7 +541,7 @@ struct PaneLeafView: View {
     private func header(_ session: TerminalSession) -> some View {
         PaneHeader(session: session, focused: focused, zoomed: zoomed, showActions: hover || focused || SnippetPanel.shared.isOpen(for: session.id),
                    onActivate: { sessions.activeID = session.id }) {
-            SnippetToolbarButton(session: session, size: 22)
+            if session.rdp == nil { SnippetToolbarButton(session: session, size: 22) }
             paneButton("rectangle.split.2x1", loc("向右分屏", "Split right")) {
                 sessions.activeID = session.id
                 wlAnimateTerminalLayout { sessions.splitActive(.trailing) }
@@ -633,7 +643,8 @@ func dropOntoPane(_ payload: String, leaf: UUID, edge: PaneEdge,
     store.lastConnected[host.alias] = Date()
     wlAnimateTerminalLayout {
         sessions.splitHost(host, password: store.password(for: host),
-                           sudoPassword: store.sudoPassword(for: host), ontoLeaf: leaf, edge: edge)
+                           sudoPassword: store.sudoPassword(for: host),
+                           rdp: host.isRDP ? store.rdpTarget(for: host) : nil, ontoLeaf: leaf, edge: edge)
     }
     return true
 }

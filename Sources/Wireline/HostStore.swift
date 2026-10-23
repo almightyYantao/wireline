@@ -277,35 +277,40 @@ final class HostStore {
     func reload() {
         do {
             document = try repository.load()
-            hosts = document.hosts
+            rdpDocument = RDPHostsFile.normalize(try rdpRepository.load())
+            // RDP blocks pasted into ~/.ssh/config are listed too, and move to
+            // the RDP file on the next save.
+            let rdp = rdpDocument.hosts
+            hosts = document.hosts + rdp.filter { r in !document.hosts.contains { $0.alias == r.alias } }
         } catch {
             lastError = "Failed to read ssh config: \(error.localizedDescription)"
         }
     }
 
-    /// Persist the current host list back to disk, preserving unmanaged blocks.
+    /// SSH hosts only (fleet, batch, files, forwards — what needs a shell).
+    var sshHosts: [Host] { hosts.filter { !$0.isRDP } }
+
+    /// `~/.ssh/wireline-rdp-hosts` (see `RDPHostsFile`).
+    let rdpRepository = ConfigRepository(url: RDPHostsFile.defaultURL)
+    private var rdpDocument = SSHConfig.Document(items: [])
+
+    /// Persist the current host list back to disk, preserving unmanaged
+    /// blocks: SSH hosts to `~/.ssh/config`, RDP hosts to their own file.
     private func persist() {
-        // Rebuild the document: keep raw items, replace host items in order,
-        // append any newly-added hosts at the end.
-        var remaining = hosts
-        var newItems: [SSHConfig.Item] = []
-        for item in document.items {
-            switch item {
-            case .raw(let text):
-                newItems.append(.raw(text))
-            case .host(let old):
-                if let idx = remaining.firstIndex(where: { $0.alias == old.alias }) {
-                    newItems.append(.host(remaining.remove(at: idx)))
-                }
-                // else: host was deleted — drop it.
-            }
-        }
-        for leftover in remaining { newItems.append(.host(leftover)) }
-        document = SSHConfig.Document(items: newItems)
+        document = document.replacingHosts(with: sshHosts)
         do {
             try repository.save(document)
         } catch {
             lastError = "Failed to write ssh config: \(error.localizedDescription)"
+        }
+        let rdp = hosts.filter(\.isRDP)
+        // No RDP hosts, no file.
+        guard !rdp.isEmpty || FileManager.default.fileExists(atPath: rdpRepository.url.path) else { return }
+        rdpDocument = RDPHostsFile.document(for: rdp, from: rdpDocument)
+        do {
+            try rdpRepository.save(rdpDocument)
+        } catch {
+            lastError = "Failed to write RDP hosts: \(error.localizedDescription)"
         }
     }
 
@@ -499,6 +504,15 @@ final class HostStore {
     func password(for host: Host) -> String? {
         guard host.resolvedAuthMethod == .password else { return nil }
         return (try? keychain.password(for: host.alias)) ?? nil
+    }
+
+    /// What an RDP pane dials: the host, its Keychain password, and its SSH
+    /// jump host's password and launch arguments.
+    func rdpTarget(for host: Host) -> RDPTarget {
+        let via = host.rdpVia.flatMap { v in hosts.first { $0.alias == v } }
+        return RDPTarget(host: host, password: password(for: host),
+                         viaPassword: via.flatMap { password(for: $0) },
+                         viaArgs: via?.launchArgTokens ?? [])
     }
 
     /// The password to feed to `sudo` for an auto-sudo host. Unlike `password`,

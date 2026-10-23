@@ -102,7 +102,7 @@ struct RightPanel: View {
             sessions.focusPreviousPane()
         }
         .onReceive(NotificationCenter.default.publisher(for: .searchTerminal)) { _ in
-            guard sessions.activeSession != nil else { return }
+            guard let s = sessions.activeSession, s.rdp == nil else { return }
             wlAnimate(Motion.banner) { showSearch = true }
             DispatchQueue.main.async { searchFocused = true }
         }
@@ -202,21 +202,7 @@ struct RightPanel: View {
                 VStack(spacing: 0) {
                 ConnectionInfoBar(session: session)
                 GroupColorRule(alias: session.alias)
-                TerminalHostView(session: session, autoFocus: !showAI).id(session.id)
-                    .wlTerminalPadding(store)
-                    .overlay(alignment: .top) {
-                        if showSearch { terminalSearchBar(session) }
-                        else if session.connectionState == .disconnected, !session.connect.isShowingFailure {
-                            DisconnectedBanner(session: session)
-                        }
-                    }
-                    .overlay { ConnectPanelOverlay(session: session) }
-                    .overlay(alignment: .topTrailing) {
-                        if session.activeEditor == "vim" { VimHintView() }
-                    }
-                    .overlay { InlineAICommandView(session: session, isActive: true) }
-                    .animation(Motion.banner, value: session.connectionState)
-                    .animation(Motion.banner, value: showSearch)
+                singleSessionBody(session)
                     .overlay(WL.teal.opacity(dropTargeted ? 0.12 : 0))
                     .background(GeometryReader { geo in
                         Color.clear
@@ -246,6 +232,33 @@ struct RightPanel: View {
             }
         }
         .frame(maxWidth: .infinity)
+    }
+
+    /// A single-session tab's body: the remote desktop, or the terminal with
+    /// its search bar, connect panel and helpers.
+    @ViewBuilder
+    private func singleSessionBody(_ session: TerminalSession) -> some View {
+        if let rdp = session.rdp {
+            RDPPaneContent(session: session, rdp: rdp, autoFocus: !showAI).id(session.id)
+                .clipShape(UnevenRoundedRectangle(bottomLeadingRadius: WL.radius(10),
+                                                  bottomTrailingRadius: WL.radius(10), style: .continuous))
+        } else {
+            TerminalHostView(session: session, autoFocus: !showAI).id(session.id)
+                .wlTerminalPadding(store)
+                .overlay(alignment: .top) {
+                    if showSearch { terminalSearchBar(session) }
+                    else if session.connectionState == .disconnected, !session.connect.isShowingFailure {
+                        DisconnectedBanner(session: session)
+                    }
+                }
+                .overlay { ConnectPanelOverlay(session: session) }
+                .overlay(alignment: .topTrailing) {
+                    if session.activeEditor == "vim" { VimHintView() }
+                }
+                .overlay { InlineAICommandView(session: session, isActive: true) }
+                .animation(Motion.banner, value: session.connectionState)
+                .animation(Motion.banner, value: showSearch)
+        }
     }
 
     /// The host backing the active session, for AI context.
@@ -489,6 +502,8 @@ struct ActiveSessionBadge: View {
         case .ssh(let alias, _, _, _, _), .sftp(let alias, _, _):
             let host = store.hosts.first { $0.alias == alias }
             return (alias, host?.connectionSummary ?? "SSH")
+        case .rdp(let alias, let target):
+            return (alias, "RDP · \(target.username.map { "\($0)@" } ?? "")\(target.hostname)")
         case .localShell:
             return (Host.currentName, loc("本机", "This Mac"))
         }
@@ -497,7 +512,8 @@ struct ActiveSessionBadge: View {
     var body: some View {
         let (top, bottom) = lines
         HStack(spacing: 8) {
-            Image(systemName: session.kind.isLocal ? "desktopcomputer" : "server.rack")
+            Image(systemName: session.kind.isLocal ? "desktopcomputer"
+                              : session.rdp != nil ? "squareshape.split.2x2" : "server.rack")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(store.groupColor(forAlias: session.alias)?.color ?? WL.textDim)
             VStack(alignment: .leading, spacing: 0) {
@@ -762,12 +778,16 @@ struct WaitingBadge: View {
 struct DisconnectedBanner: View {
     @Environment(Localizer.self) private var loc
     let session: TerminalSession
+    /// Why, when known (a remote desktop's server-side reason).
+    var detail: String? = nil
 
     var body: some View {
         HStack(spacing: 10) {
             Circle().fill(WL.red).frame(width: 6, height: 6)
-            Text(loc("连接已断开", "Connection closed"))
+            Text(detail ?? loc("连接已断开", "Connection closed"))
                 .font(WL.small).foregroundStyle(WL.textPrimary)
+                .lineLimit(1).truncationMode(.tail)
+                .help(detail ?? "")
             Button(action: session.reconnect) {
                 HStack(spacing: 4) {
                     Image(systemName: "arrow.clockwise").font(WL.small)
@@ -804,8 +824,10 @@ struct ConnectionInfoBar: View {
                 .animation(Motion.state, value: latency)
             Spacer()
             HStack(spacing: 2) {
-                recordButton
-                SnippetToolbarButton(session: session)
+                if session.rdp == nil {
+                    recordButton
+                    SnippetToolbarButton(session: session)
+                }
                 Button(action: reconnect) {
                     Image(systemName: "arrow.clockwise").font(.system(size: 11, weight: .medium))
                 }.buttonStyle(.wlIcon).help(loc("重新连接", "Reconnect"))
@@ -822,6 +844,14 @@ struct ConnectionInfoBar: View {
 
     /// "SSH-2 · :2222 · 23 ms" — quiet metadata after the endpoint.
     private var meta: String {
+        // "RDP · :3390 · 2560×1440 · via bastion" for a remote desktop.
+        if let rdp = session.rdp {
+            var parts = ["RDP"]
+            if rdp.target.port != 3389 { parts.append(":\(rdp.target.port)") }
+            if let size = rdp.desktopSize { parts.append(size) }
+            if let via = rdp.target.via { parts.append(loc("经 \(via)", "via \(via)")) }
+            return parts.joined(separator: " · ")
+        }
         // A local shell has no protocol or latency — show where it is instead.
         guard case .ssh = session.kind else {
             return session.currentDirectory.map { ($0 as NSString).abbreviatingWithTildeInPath } ?? ""
@@ -851,6 +881,7 @@ struct ConnectionInfoBar: View {
     }
 
     private var endpoint: String {
+        if case .rdp(_, let t) = session.kind { return "\(t.username.map { "\($0)@" } ?? "")\(t.hostname)" }
         guard case .ssh(let alias, _, _, _, _) = session.kind else { return session.title }
         if let host { return "\(host.user ?? "root")@\(host.connectHostname)" }
         return alias
@@ -958,7 +989,7 @@ struct FilesPicker: View {
                 .padding(.horizontal, 26).padding(.top, 14).padding(.bottom, 10)
             ScrollView {
                 WLListCard {
-                    ForEach(store.hosts) { host in
+                    ForEach(store.sshHosts) { host in
                         FilesPickerRow(host: host, selected: selected == host.alias)
                             .simultaneousGesture(TapGesture(count: 2).onEnded { onPick(host) })
                             .simultaneousGesture(TapGesture(count: 1).onEnded { selected = host.alias })

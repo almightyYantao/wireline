@@ -485,7 +485,7 @@ private struct ConnectStepTrack: View {
 
 /// A dotted segment whose dots march along it — "in progress, heading there".
 /// Static under Reduce Motion.
-private struct MarchingDots: View {
+struct MarchingDots: View {
     let color: Color
     private let period: Double = 1.2
 

@@ -11,7 +11,7 @@ struct BatchExecutionView: View {
     @State private var running = false
 
     private var allHosts: [Host] {
-        store.hosts.sorted { $0.alias.localizedCaseInsensitiveCompare($1.alias) == .orderedAscending }
+        store.sshHosts.sorted { $0.alias.localizedCaseInsensitiveCompare($1.alias) == .orderedAscending }
     }
 
     var body: some View {
@@ -26,7 +26,7 @@ struct BatchExecutionView: View {
                     .font(.caption)
                     ForEach(store.groups, id: \.self) { g in
                         Button(g) {
-                            store.hosts(inGroup: g).forEach { selected.insert($0.alias) }
+                            store.hosts(inGroup: g).filter { !$0.isRDP }.forEach { selected.insert($0.alias) }
                         }.font(.caption)
                     }
                 }

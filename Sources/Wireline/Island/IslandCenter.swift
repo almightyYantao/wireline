@@ -387,7 +387,7 @@ final class IslandCenter {
             guard let dir = s.currentDirectory else { return s.title }
             let home = NSHomeDirectory()
             return dir.hasPrefix(home) ? "~" + dir.dropFirst(home.count) : dir
-        case .ssh, .sftp:
+        case .ssh, .sftp, .rdp:
             return s.remoteDirectory.map { "\(s.alias) · \($0)" } ?? s.alias
         }
     }

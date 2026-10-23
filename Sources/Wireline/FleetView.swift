@@ -60,16 +60,16 @@ struct FleetView: View {
                 Text(loc("目标主机 (\(selected.count))", "Targets (\(selected.count))"))
                     .font(WL.small.weight(.semibold)).foregroundStyle(WL.textPrimary)
                 Spacer()
-                BracketButton(selected.count == store.hosts.count ? loc("清空", "None") : loc("全选", "All")) {
-                    if selected.count == store.hosts.count { selected.removeAll() }
-                    else { selected = Set(store.hosts.map(\.alias)) }
+                BracketButton(selected.count == store.sshHosts.count ? loc("清空", "None") : loc("全选", "All")) {
+                    if selected.count == store.sshHosts.count { selected.removeAll() }
+                    else { selected = Set(store.sshHosts.map(\.alias)) }
                 }
             }
             .padding(.horizontal, 12).padding(.vertical, 10)
             WLFormDivider()
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(store.hosts) { host in
+                    ForEach(store.sshHosts) { host in
                         Toggle(isOn: Binding(get: { selected.contains(host.alias) },
                                              set: { _ in toggle(host.alias) })) {
                             HStack {
@@ -194,7 +194,7 @@ struct FleetView: View {
         summary = ""
         results = []
         let cmd = command
-        let hosts = store.hosts.map(\.alias).filter { selected.contains($0) }
+        let hosts = store.sshHosts.map(\.alias).filter { selected.contains($0) }
         // The run shows on the notch island too: n/total, failures, a pulse at the end.
         let islandID = "fleet:\(UUID().uuidString)"
         let island = IslandCenter.shared

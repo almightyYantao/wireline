@@ -90,6 +90,8 @@ final class RDPSession {
     var certificatePrompt: CertificatePrompt?
     var passwordPrompt: PasswordPrompt?
     var logsExpanded = false
+    /// The remote desktop's size, "2560×1440" (nil before the first frame).
+    private(set) var desktopSize: String?
     private(set) var log: [(t: TimeInterval, text: String)] = []
 
     let view = RDPView(frame: CGRect(x: 0, y: 0, width: 800, height: 500))
@@ -104,6 +106,8 @@ final class RDPSession {
     @ObservationIgnored private var tunnel: SSHTunnel?
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private var userClosed = false
+    /// The user turned the certificate down this attempt (true: it had changed).
+    @ObservationIgnored private var rejectedCertificate: Bool?
     @ObservationIgnored private var certReply: (@MainActor (Bool) -> Void)?
     @ObservationIgnored private var authReply: (@MainActor (RDPConnection.Credentials?) -> Void)?
     @ObservationIgnored private var resizeWork: DispatchWorkItem?
@@ -138,6 +142,7 @@ final class RDPSession {
         let gen = generation
         teardown()
         userClosed = false
+        rejectedCertificate = nil
         disconnectReason = nil
         startedAt = Date()
         endedAt = nil
@@ -234,6 +239,7 @@ final class RDPSession {
         ev.desktopSize = { [weak self] w, h in
             guard let self, self.generation == gen else { return }
             self.note("desktop \(w)×\(h)")
+            if self.desktopSize != "\(w)×\(h)" { self.desktopSize = "\(w)×\(h)" }
             self.view.refresh()
         }
         ev.pointer = { [weak self] p in
@@ -370,6 +376,14 @@ final class RDPSession {
             fail(.session, text.map { loc.t($0.zh, $0.en) } ?? loc.t("连接已断开", "Connection closed"))
         case .running(let stage):
             if text?.isAuthFailure == true { target.password = nil }
+            if let changed = rejectedCertificate {
+                // The TLS error that follows says nothing useful: say why.
+                fail(stage, changed
+                     ? loc.t("服务器证书与上次信任的不一致，已拒绝连接。确认是正常更换后可重试并信任新证书。",
+                             "The server's certificate differs from the one trusted before, so the connection was refused. If the change is expected, retry and trust the new one.")
+                     : loc.t("已拒绝服务器证书。", "The server's certificate was rejected."))
+                return
+            }
             fail(stage, text.map { loc.t($0.zh, $0.en) } ?? loc.t("连接被关闭", "The connection was closed"))
         default:
             break
@@ -441,7 +455,7 @@ final class RDPSession {
         let reply = certReply
         certReply = nil
         reply?(trust)
-        if !trust { userClosed = false }
+        if !trust { rejectedCertificate = prompt.previous != nil }
     }
 
     // MARK: Credentials

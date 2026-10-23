@@ -97,7 +97,7 @@ final class SnippetStore {
     func platform(for session: TerminalSession) -> PanePlatform {
         switch session.kind {
         case .localShell: return .macos
-        case .ssh, .sftp: return hostPlatforms[session.alias] ?? .unknown
+        case .ssh, .sftp, .rdp: return hostPlatforms[session.alias] ?? .unknown
         }
     }
 

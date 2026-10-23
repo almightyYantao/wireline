@@ -8,7 +8,11 @@ import WirelineCore
 func connectHost(_ host: Host, store: HostStore, sessions: SessionStore,
                  openWindow: OpenWindowAction) {
     store.lastConnected[host.alias] = Date()
-    if store.useBuiltInTerminal {
+    if host.isRDP {
+        // Remote desktops always open in a pane (no external client).
+        sessions.openRDP(host: host, target: store.rdpTarget(for: host))
+        openWindow(id: "main")
+    } else if store.useBuiltInTerminal {
         sessions.open(host: host, password: store.password(for: host), sudoPassword: store.sudoPassword(for: host))
         // Bring the main window forward so the new session is visible (e.g. when
         // launched from Quick Connect or the menu bar).
@@ -29,6 +33,7 @@ func openLocalShell(sessions: SessionStore, openWindow: OpenWindowAction) {
 @MainActor
 func openFiles(_ host: Host, store: HostStore, sessions: SessionStore,
                openWindow: OpenWindowAction) {
+    guard !host.isRDP else { return }
     sessions.openSFTP(host: host, password: store.password(for: host))
     openWindow(id: "main")
 }

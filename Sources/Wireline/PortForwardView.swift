@@ -110,7 +110,7 @@ struct ForwardEditor: View {
                 WLFormRow(loc("跳板/主机", "Via host")) {
                     WLMenuPicker(selection: $hostAlias,
                                  options: [WLOption("", loc("选择主机…", "Select host…"))]
-                                    + store.hosts.map { WLOption($0.alias, $0.alias) },
+                                    + store.sshHosts.map { WLOption($0.alias, $0.alias) },
                                  minWidth: 200)
                 }
                 WLFormDivider()

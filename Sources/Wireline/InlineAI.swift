@@ -162,7 +162,7 @@ final class InlineAIController {
         3. 用户用中文就用中文回答，用英文就用英文。
         """
         switch session.kind {
-        case .ssh, .sftp:
+        case .ssh, .sftp, .rdp:
             s += "\n当前是通过 SSH 连接的远程主机 \(session.alias)（默认 Linux）。"
         case .localShell:
             s += "\n当前是本地 macOS shell。"

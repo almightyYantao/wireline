@@ -416,10 +416,10 @@ struct PetChatView: View {
         for raw in targets {
             let t = raw.trimmingCharacters(in: .whitespaces)
             guard !t.isEmpty else { continue }
-            if store.hosts.contains(where: { $0.alias == t }) { out.append(t); continue }
-            let grp = store.hosts(inGroup: t).map(\.alias)
+            if store.sshHosts.contains(where: { $0.alias == t }) { out.append(t); continue }
+            let grp = store.hosts(inGroup: t).filter { !$0.isRDP }.map(\.alias)
             if !grp.isEmpty { out.append(contentsOf: grp); continue }
-            let fuzzy = store.hosts.filter {
+            let fuzzy = store.sshHosts.filter {
                 $0.alias.localizedCaseInsensitiveContains(t)
                     || ($0.group ?? "").localizedCaseInsensitiveCompare(t) == .orderedSame
             }.map(\.alias)
@@ -460,8 +460,8 @@ struct PetChatView: View {
     }
 
     private func inventory() -> String {
-        if store.hosts.isEmpty { return "（当前没有已保存的主机）" }
-        return store.hosts.map { h in
+        if store.sshHosts.isEmpty { return "（当前没有已保存的主机）" }
+        return store.sshHosts.map { h in
             var line = "- \(h.alias)"
             if let g = h.group, !g.isEmpty { line += " [组:\(g)]" }
             if let host = h.hostname { line += " host=\(host)" }

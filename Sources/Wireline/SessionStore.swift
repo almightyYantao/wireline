@@ -14,6 +14,8 @@ enum SessionKind {
     case sftp(alias: String, password: String?, args: [String])
     /// A plain local login shell (the user's `$SHELL`, e.g. zsh).
     case localShell
+    /// A Windows remote desktop (FreeRDP), shown by `RDPView` instead of a terminal.
+    case rdp(alias: String, target: RDPTarget)
 }
 
 /// One live in-app terminal session. Owns the AppKit terminal view for its whole
@@ -91,6 +93,8 @@ final class TerminalSession: Identifiable {
             return await Self.exec(["/bin/zsh", "-lc", command], timeout: 1800)
         case .sftp:
             return "(SFTP 会话不支持执行命令)"
+        case .rdp:
+            return "(远程桌面会话不支持执行命令)"
         }
     }
 
@@ -173,6 +177,12 @@ final class TerminalSession: Identifiable {
     let stats = StatsMonitor()
     /// The connect panel's view of the current ssh attempt (SSH sessions only).
     let connect = ConnectProgress()
+    /// The remote desktop (RDP sessions only). The pane shows its view; the
+    /// terminal below is never launched.
+    let rdp: RDPSession?
+
+    /// What takes keyboard focus for this pane.
+    var focusView: NSView { rdp?.view ?? terminalView }
 
     weak var store: SessionStore?
     private var askpassURL: URL?
@@ -206,14 +216,23 @@ final class TerminalSession: Identifiable {
         case .ssh(let a, _, _, _, _): self.alias = a
         case .sftp(let a, _, _): self.alias = a
         case .localShell: self.alias = ""
+        case .rdp(let a, _): self.alias = a
         }
         switch kind {
         case .ssh(_, let password, let sudoPassword, let autoSudo, _):
             self.io = TerminalIO(password: password, sudoPassword: sudoPassword, autoSudo: autoSudo)
-        case .sftp, .localShell:
+        case .sftp, .localShell, .rdp:
             self.io = TerminalIO(password: nil, autoSudo: false)
         }
-        self.terminalView = TerminalEngineKind.makeEngine(frame: CGRect(x: 0, y: 0, width: 800, height: 480))
+        if case .rdp(_, let target) = kind {
+            rdp = RDPSession(target: target)
+            // Never shown or launched: the plain engine, without libghostty's
+            // renderer thread.
+            self.terminalView = WirelineTerminalView(frame: CGRect(x: 0, y: 0, width: 800, height: 480))
+        } else {
+            rdp = nil
+            self.terminalView = TerminalEngineKind.makeEngine(frame: CGRect(x: 0, y: 0, width: 800, height: 480))
+        }
         // Engine ⇄ PTY: output goes to the engine, keystrokes and grid changes
         // come back to the PTY.
         terminalView.io = io
@@ -311,6 +330,25 @@ final class TerminalSession: Identifiable {
         connect.onUserFacingLine = { [weak self] line in
             self?.terminalView.feed(text: line + "\r\n")
         }
+        if let rdp { wireRDP(rdp) }
+    }
+
+    private func wireRDP(_ rdp: RDPSession) {
+        rdp.onStateChange = { [weak self] state in
+            guard let self else { return }
+            self.connectionState = state
+            self.isRunning = state != .disconnected
+            if state == .disconnected { IslandCenter.shared.sessionGone(self.id) }
+        }
+        rdp.onFocusRequest = { [weak self] in
+            guard let self, let store = self.store, store.activeID != self.id else { return }
+            store.activeID = self.id
+        }
+        // "Remember password" on the password card: the same Keychain item
+        // HostStore reads.
+        rdp.onSavePassword = { alias, password in
+            try? KeychainService().setPassword(password, for: alias)
+        }
     }
 
     /// Handle an OSC-7 working-directory report: record the absolute path (for the
@@ -326,7 +364,7 @@ final class TerminalSession: Identifiable {
             if name != title { title = name }
         case .ssh:
             applyRemoteDirectory(path)
-        case .sftp:
+        case .sftp, .rdp:
             break
         }
     }
@@ -363,7 +401,7 @@ final class TerminalSession: Identifiable {
             }
             FileBrowserModel.pendingPath[alias] = p
             NotificationCenter.default.post(name: .aiOpenFiles, object: alias)
-        case .sftp:
+        case .sftp, .rdp:
             break
         }
     }
@@ -500,6 +538,7 @@ final class TerminalSession: Identifiable {
     }
 
     func start() {
+        if let rdp { rdp.start(); return }
         // Replay prior scrollback (with colors) so a reopened tab looks untouched,
         // then a dim separator before the fresh live session begins.
         if let sb = pendingScrollback, !sb.isEmpty {
@@ -518,6 +557,11 @@ final class TerminalSession: Identifiable {
     /// the tab / split pane never moves. Works for SSH, SFTP, and local shells.
     /// Safe to call whether the connection is already gone or still up.
     func reconnect() {
+        if let rdp {
+            // Rejected credentials: ask for the password before dialling again.
+            if rdp.failedOnCredentials { rdp.retryAskingPassword() } else { rdp.reconnect() }
+            return
+        }
         // Tear down the old process and side channels — but never the terminal view.
         stats.stop()
         busyTimer?.cancel(); busyTimer = nil
@@ -612,6 +656,8 @@ final class TerminalSession: Identifiable {
                 currentDirectory: startDirectory ?? FileManager.default.homeDirectoryForCurrentUser.path
             )
             startBusyPolling()
+        case .rdp:
+            break   // `start()` / `reconnect()` hand over to `rdp`
         }
     }
 
@@ -619,7 +665,7 @@ final class TerminalSession: Identifiable {
     /// it can be replayed next launch. Writes the last ~256KB to
     /// `<dir>/<scrollbackKey>.txt`; removes the file when empty.
     func saveScrollback(dir: URL) {
-        guard !scrollbackKey.isEmpty, isRunning else { return }
+        guard !scrollbackKey.isEmpty, isRunning, rdp == nil else { return }
         let url = dir.appendingPathComponent("\(scrollbackKey).txt")
         let data = terminalView.renderedBuffer
         // Empty means a full-screen app owned the alternate screen at save time —
@@ -654,6 +700,13 @@ final class TerminalSession: Identifiable {
     }
 
     func terminate() {
+        if let rdp {
+            // Also from a failed / disconnected state: drops prompts and the tunnel.
+            rdp.close()
+            isRunning = false
+            connectionState = .disconnected
+            return
+        }
         guard isRunning else { return }
         isRunning = false
         connectionState = .disconnected
@@ -817,7 +870,7 @@ final class TerminalSession: Identifiable {
 /// reconnect) on the next launch. Live PTY state can't be frozen, so we persist
 /// what the session *is*, then re-establish it.
 struct SessionSnapshot: Codable, Sendable {
-    enum Kind: String, Codable { case ssh, sftp, local }
+    enum Kind: String, Codable { case ssh, sftp, local, rdp }
     var kind: Kind
     var alias: String
     var title: String
@@ -907,6 +960,12 @@ final class SessionStore {
     func openSFTP(host: Host, password: String?) -> UUID {
         add(TerminalSession(kind: .sftp(alias: host.alias, password: password, args: host.launchArgTokens),
                             title: "📁 \(host.alias)"))
+    }
+
+    /// Open a remote desktop for an RDP host (`HostStore.rdpTarget(for:)`).
+    @discardableResult
+    func openRDP(host: Host, target: RDPTarget) -> UUID {
+        add(TerminalSession(kind: .rdp(alias: host.alias, target: target), title: host.alias))
     }
 
     /// Open a plain local shell session.
@@ -1066,13 +1125,14 @@ final class SessionStore {
     }
 
     /// A new session like `source`: same SSH host (sharing its connection), or
-    /// a local shell in the same directory.
+    /// a local shell in the same directory. (Not a second remote desktop: on
+    /// a workstation Windows it would log the first one out.)
     private func siblingSession(of source: TerminalSession) -> TerminalSession {
         switch source.kind {
         case .ssh:
             return TerminalSession(kind: source.kind, title: source.alias,
                                    sharingControlSocket: source.controlSocket)
-        case .sftp, .localShell:
+        case .sftp, .localShell, .rdp:
             return TerminalSession(kind: .localShell, title: "Local Shell",
                                    startDirectory: source.currentDirectory)
         }
@@ -1097,16 +1157,20 @@ final class SessionStore {
         return id
     }
 
-    /// Open an SSH session to `host` as a new pane beside `leaf` (a host dragged
-    /// onto a terminal's edge).
+    /// Open a session to `host` as a new pane beside `leaf` (a host dragged
+    /// onto a terminal's edge): SSH, or a remote desktop when `rdp` is given.
     @discardableResult
-    func splitHost(_ host: Host, password: String?, sudoPassword: String?,
+    func splitHost(_ host: Host, password: String?, sudoPassword: String?, rdp: RDPTarget? = nil,
                    ontoLeaf leaf: UUID, edge: PaneEdge) -> UUID? {
         guard let ti = tabs.firstIndex(where: { $0.contains(leaf: leaf) }) else { return nil }
-        let session = TerminalSession(
-            kind: .ssh(alias: host.alias, password: password, sudoPassword: sudoPassword,
-                       autoSudo: host.autoSudo, args: host.launchArgTokens),
-            title: host.alias)
+        let session = if let rdp {
+            TerminalSession(kind: .rdp(alias: host.alias, target: rdp), title: host.alias)
+        } else {
+            TerminalSession(
+                kind: .ssh(alias: host.alias, password: password, sudoPassword: sudoPassword,
+                           autoSudo: host.autoSudo, args: host.launchArgTokens),
+                title: host.alias)
+        }
         if let tabID = activeTabID { zoomedSession[tabID] = nil }
         let id = spawn(session)
         tabs[ti] = tabs[ti].splitting(leaf: leaf, insert: id, edge: edge == .center ? .trailing : edge)
@@ -1320,7 +1384,7 @@ final class SessionStore {
     /// responder): the floating desktop pet grabs key status on launch, so a bare
     /// makeFirstResponder on a non-key window would never receive keystrokes.
     func focusActiveTerminal() {
-        guard let term = activeSession?.terminalView, let window = term.window else { return }
+        guard let term = activeSession?.focusView, let window = term.window else { return }
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
         window.makeFirstResponder(term)
@@ -1328,7 +1392,7 @@ final class SessionStore {
 
     /// Send the same text to every open session's terminal (the broadcast bar).
     func broadcast(_ text: String) {
-        for s in sessions { s.terminalView.send(txt: text) }
+        for s in sessions where s.rdp == nil { s.terminalView.send(txt: text) }
     }
 
 
@@ -1413,6 +1477,7 @@ final class SessionStore {
         case .ssh:        kind = .ssh
         case .sftp:       kind = .sftp
         case .localShell: kind = .local
+        case .rdp:        kind = .rdp
         }
         var dir: String?
         if case .localShell = s.kind { dir = s.currentDirectory }
@@ -1442,6 +1507,10 @@ final class SessionStore {
                 built = store.hosts.first { $0.alias == snap.alias }.map { h in
                     TerminalSession(kind: .sftp(alias: h.alias, password: store.password(for: h),
                                                 args: h.launchArgTokens), title: snap.title)
+                }
+            case .rdp:
+                built = store.hosts.first { $0.alias == snap.alias && $0.isRDP }.map { h in
+                    TerminalSession(kind: .rdp(alias: h.alias, target: store.rdpTarget(for: h)), title: snap.title)
                 }
             case .local:
                 built = TerminalSession(kind: .localShell, title: snap.title,
