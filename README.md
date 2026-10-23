@@ -53,6 +53,18 @@ The terminal is **libghostty** — the core of [Ghostty](https://ghostty.org) �
 
 ---
 
+## 🖥 Remote Desktop (RDP)
+
+Windows machines sit in the same window as your shells: a built-in **FreeRDP 3** client draws the desktop straight into a Wireline pane, so it tabs, splits and zooms like any terminal.
+
+- **Same host list**: pick SSH or RDP in the host editor — address, port, user, domain, password (Keychain), resolution (follow the pane or fixed). RDP hosts live in `~/.ssh/wireline-rdp-hosts`, so `ssh` never sees them
+- **Through a jump host**: choose any SSH host as the jump and Wireline opens the tunnel for you, so Windows boxes on an internal network just work
+- **Sharp and sized to fit**: full Retina resolution, and the remote desktop resizes as you drag splits or the window
+- **Mac-friendly input**: scancode keyboard with IME text input; ⌘ is the Windows key and ⌘C/V/X/A become Ctrl shortcuts (configurable); mouse, wheel and remote cursor shapes
+- **Clipboard** both ways (text), **latency** in the info bar, certificate trust on first use with a loud warning if it changes, a connection progress card and one-click reconnect
+
+---
+
 ## 🚀 Fleet
 
 <p align="center"><img src="docs/image/ai-fleet.png" width="90%" alt="Fleet run: one sentence across a host group, results aggregated into a table"></p>
