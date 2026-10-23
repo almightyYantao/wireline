@@ -512,10 +512,13 @@ struct ActiveSessionBadge: View {
     var body: some View {
         let (top, bottom) = lines
         HStack(spacing: 8) {
-            Image(systemName: session.kind.isLocal ? "desktopcomputer"
-                              : session.rdp != nil ? "squareshape.split.2x2" : "server.rack")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(store.groupColor(forAlias: session.alias)?.color ?? WL.textDim)
+            if session.rdp != nil {
+                WindowsGlyph(size: 12)
+            } else {
+                Image(systemName: session.kind.isLocal ? "desktopcomputer" : "server.rack")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(store.groupColor(forAlias: session.alias)?.color ?? WL.textDim)
+            }
             VStack(alignment: .leading, spacing: 0) {
                 Text(top).font(WL.small.weight(.semibold)).foregroundStyle(WL.textPrimary)
                 Text(bottom).font(WL.caption).foregroundStyle(WL.textDim)

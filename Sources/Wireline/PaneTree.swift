@@ -287,9 +287,8 @@ struct SessionGlyph: View {
             return symbol("folder", store.groupColor(forAlias: alias)?.color ?? WL.teal)
         case .localShell:
             return symbol("terminal", WL.textDim)
-        case .rdp(let alias, _):
-            // Four panes: Windows, in Windows blue unless the group has a colour.
-            return symbol("squareshape.split.2x2", store.groupColor(forAlias: alias)?.color ?? Color(hex: 0x0078D4))
+        case .rdp:
+            return brand(.windows)
         }
     }
 }

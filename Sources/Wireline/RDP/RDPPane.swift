@@ -209,13 +209,18 @@ private struct RDPCardHeader: View {
     let rdp: RDPSession
     let title: String
     let tint: Color
-    var symbol = "squareshape.split.2x2"
+    /// nil: the Windows tiles.
+    var symbol: String? = nil
 
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: symbol)
-                .font(.system(size: 15, weight: .medium))
-                .foregroundStyle(tint)
+            Group {
+                if let symbol {
+                    Image(systemName: symbol).font(.system(size: 15, weight: .medium)).foregroundStyle(tint)
+                } else {
+                    WindowsGlyph(size: 15)
+                }
+            }
                 .frame(width: 34, height: 34)
                 .background(RoundedRectangle(cornerRadius: WL.radius(9), style: .continuous).fill(tint.opacity(0.12)))
             VStack(alignment: .leading, spacing: 3) {

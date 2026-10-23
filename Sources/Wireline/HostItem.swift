@@ -28,7 +28,7 @@ struct HostItem: View {
         }
     }
     private var authSymbol: String {
-        host.isRDP ? "squareshape.split.2x2" : host.resolvedAuthMethod == .key ? "key.fill" : "lock.fill"
+        host.resolvedAuthMethod == .key ? "key.fill" : "lock.fill"
     }
     private var rowBackground: Color {
         if isActive { return WL.green.opacity(WL.isLight ? 0.12 : 0.14) }
@@ -103,7 +103,11 @@ struct HostItem: View {
     @ViewBuilder
     private var rowContent: some View {
         HStack(spacing: 8) {
-            Image(systemName: authSymbol).font(.system(size: 9)).foregroundStyle(WL.textDim)
+            if host.isRDP {
+                WindowsGlyph(size: 9)
+            } else {
+                Image(systemName: authSymbol).font(.system(size: 9)).foregroundStyle(WL.textDim)
+            }
             VStack(alignment: .leading, spacing: 2) {
                 Text(host.alias).font(WL.body)
                     .foregroundStyle(isActive ? WL.greenBright : WL.textPrimary)
