@@ -434,6 +434,7 @@ final class GhosttyTerminalView: NSView, TerminalEngine {
     /// Set while a click is being released, to learn whether libghostty
     /// opened a link (then ⌘-click path detection stays out of it).
     private var openedURLDuringClick = false
+    private var lastOpened: (url: String, at: CFTimeInterval)?
     private var mouseCursor: NSCursor = .iBeam
 
     func handle(_ event: GhosttyEvent) {
@@ -470,6 +471,11 @@ final class GhosttyTerminalView: NSView, TerminalEngine {
         // `main.c:12` parses with a scheme too — require a real one.
         guard link.contains("://") || link.hasPrefix("mailto:"), let url = URL(string: link) else { return }
         openedURLDuringClick = true
+        // One ⌘-click, one open: libghostty's OPEN_URL can arrive after the
+        // release, when the hover fallback in mouseUp has already opened it.
+        let now = CACurrentMediaTime()
+        if let last = lastOpened, last.url == link, now - last.at < 1.5 { return }
+        lastOpened = (link, now)
         NSWorkspace.shared.open(url)
     }
 
