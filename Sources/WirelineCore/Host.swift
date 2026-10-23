@@ -10,6 +10,14 @@ public enum AuthMethod: String, Codable, Sendable, CaseIterable {
     case unknown
 }
 
+/// What a host speaks. SSH hosts live in `~/.ssh/config`; RDP hosts in a
+/// separate file only Wireline reads (see `RDPHostsFile`), so `ssh` never
+/// sees them.
+public enum HostProtocol: String, Codable, Sendable, CaseIterable {
+    case ssh
+    case rdp
+}
+
 /// A single SSH host, backed 1:1 by a `Host` block in `~/.ssh/config`.
 ///
 /// The fields that map to real OpenSSH keywords (`HostName`, `User`, `Port`,
@@ -40,7 +48,15 @@ public struct Host: Identifiable, Codable, Sendable, Equatable {
     /// `-o HostKeyAlgorithms=+ssh-rsa`. Some legacy hosts need these to connect.
     public var launchArgs: String?
 
+    // RDP (`hostProtocol == .rdp`) -------------------------------------------
+    public var hostProtocol: HostProtocol
+    /// Windows domain for NLA, e.g. `CORP` (nil = none / local account).
+    public var rdpDomain: String?
+    /// An SSH host alias to tunnel through (`ssh -N -L port:host:3389 via`).
+    public var rdpVia: String?
+
     public var id: String { alias }
+    public var isRDP: Bool { hostProtocol == .rdp }
 
     public init(
         alias: String,
@@ -54,7 +70,10 @@ public struct Host: Identifiable, Codable, Sendable, Equatable {
         descriptionText: String? = nil,
         authMethod: AuthMethod = .unknown,
         autoSudo: Bool = false,
-        launchArgs: String? = nil
+        launchArgs: String? = nil,
+        hostProtocol: HostProtocol = .ssh,
+        rdpDomain: String? = nil,
+        rdpVia: String? = nil
     ) {
         self.alias = alias
         self.hostname = hostname
@@ -68,6 +87,9 @@ public struct Host: Identifiable, Codable, Sendable, Equatable {
         self.authMethod = authMethod
         self.autoSudo = autoSudo
         self.launchArgs = launchArgs
+        self.hostProtocol = hostProtocol
+        self.rdpDomain = rdpDomain
+        self.rdpVia = rdpVia
     }
 
     /// `launchArgs` split into individual command-line tokens.
@@ -75,8 +97,8 @@ public struct Host: Identifiable, Codable, Sendable, Equatable {
         (launchArgs ?? "").split(whereSeparator: { $0 == " " || $0 == "\t" }).map(String.init)
     }
 
-    /// Effective port, defaulting to the SSH standard 22.
-    public var effectivePort: Int { port ?? 22 }
+    /// Effective port, defaulting to 22 (SSH) or 3389 (RDP).
+    public var effectivePort: Int { port ?? (isRDP ? 3389 : 22) }
 
     /// The host we should actually open a TCP socket to for a reachability check.
     public var connectHostname: String { hostname ?? alias }
@@ -92,6 +114,7 @@ public struct Host: Identifiable, Codable, Sendable, Equatable {
     private enum CodingKeys: String, CodingKey {
         case alias, hostname, user, port, identityFile, proxyJump
         case extraOptions, group, descriptionText, authMethod, autoSudo, launchArgs
+        case hostProtocol, rdpDomain, rdpVia
     }
 
     private struct Option: Codable { var keyword: String; var value: String }
@@ -111,6 +134,9 @@ public struct Host: Identifiable, Codable, Sendable, Equatable {
         authMethod = try c.decodeIfPresent(AuthMethod.self, forKey: .authMethod) ?? .unknown
         autoSudo = try c.decodeIfPresent(Bool.self, forKey: .autoSudo) ?? false
         launchArgs = try c.decodeIfPresent(String.self, forKey: .launchArgs)
+        hostProtocol = try c.decodeIfPresent(HostProtocol.self, forKey: .hostProtocol) ?? .ssh
+        rdpDomain = try c.decodeIfPresent(String.self, forKey: .rdpDomain)
+        rdpVia = try c.decodeIfPresent(String.self, forKey: .rdpVia)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -128,6 +154,9 @@ public struct Host: Identifiable, Codable, Sendable, Equatable {
         try c.encode(authMethod, forKey: .authMethod)
         try c.encode(autoSudo, forKey: .autoSudo)
         try c.encodeIfPresent(launchArgs, forKey: .launchArgs)
+        if hostProtocol != .ssh { try c.encode(hostProtocol, forKey: .hostProtocol) }
+        try c.encodeIfPresent(rdpDomain, forKey: .rdpDomain)
+        try c.encodeIfPresent(rdpVia, forKey: .rdpVia)
     }
 
     public static func == (lhs: Host, rhs: Host) -> Bool {
@@ -142,6 +171,9 @@ public struct Host: Identifiable, Codable, Sendable, Equatable {
         lhs.authMethod == rhs.authMethod &&
         lhs.autoSudo == rhs.autoSudo &&
         lhs.launchArgs == rhs.launchArgs &&
+        lhs.hostProtocol == rhs.hostProtocol &&
+        lhs.rdpDomain == rhs.rdpDomain &&
+        lhs.rdpVia == rhs.rdpVia &&
         lhs.extraOptions.map(\.keyword) == rhs.extraOptions.map(\.keyword) &&
         lhs.extraOptions.map(\.value) == rhs.extraOptions.map(\.value)
     }

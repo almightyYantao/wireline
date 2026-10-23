@@ -25,5 +25,5 @@ Vendor/GhosttyKit.xcframework
 Vendor/ghostty-share/
 
 # FreeRDP (scripts/fetch-freerdp.sh) — ~35 MB, never commit
-Vendor/FreeRDP.xcframework
+Vendor/FreeRDP/
 Vendor/FreeRDP-licenses/

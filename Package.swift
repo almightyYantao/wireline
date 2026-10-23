@@ -1,5 +1,9 @@
 // swift-tools-version: 6.0
 import PackageDescription
+import Foundation
+
+/// Package root, for the vendored FreeRDP (see scripts/fetch-freerdp.sh).
+let packageRoot = URL(fileURLWithPath: #filePath).deletingLastPathComponent().path
 
 /// What static libghostty needs from the system.
 let ghosttyLinkerSettings: [LinkerSetting] = [
@@ -15,12 +19,16 @@ let ghosttyLinkerSettings: [LinkerSetting] = [
 
 /// What static FreeRDP (+ its builtin channels and OpenSSL) needs from the system.
 let freerdpLinkerSettings: [LinkerSetting] = [
+    .unsafeFlags(["\(packageRoot)/Vendor/FreeRDP/lib/libFreeRDP.a"]),
     .linkedLibrary("z"),
     .linkedFramework("CoreFoundation"),
     .linkedFramework("Security"),
     .linkedFramework("SystemConfiguration"),
     .linkedFramework("AudioToolbox"),
-    .linkedFramework("CoreAudio")
+    .linkedFramework("CoreAudio"),
+    .linkedFramework("IOKit"),
+    .linkedFramework("AVFoundation"),
+    .linkedFramework("Carbon")
 ]
 
 let package = Package(
@@ -46,9 +54,17 @@ let package = Package(
         // libghostty (static lib + ghostty.h). ~150 MB, never committed: run
         // scripts/fetch-ghosttykit.sh once to put it in Vendor/.
         .binaryTarget(name: "GhosttyKit", path: "Vendor/GhosttyKit.xcframework"),
-        // FreeRDP 3 + OpenSSL, static (~35 MB universal), never committed: run
-        // scripts/fetch-freerdp.sh (--build) once to put it in Vendor/.
-        .binaryTarget(name: "FreeRDP", path: "Vendor/FreeRDP.xcframework"),
+        // The C side of RDP panes: FreeRDP callbacks, its event-loop thread,
+        // a shadow framebuffer. Swift talks to it through include/wlrdp.h only.
+        // FreeRDP 3 + OpenSSL (static, ~35 MB universal) is never committed: run
+        // scripts/fetch-freerdp.sh (--build) once to put it in Vendor/FreeRDP.
+        // Not a binaryTarget: its headers would land in the include dir shared
+        // with GhosttyKit, whose umbrella module map would swallow them.
+        .target(
+            name: "CFreeRDPShim",
+            cSettings: [.unsafeFlags(["-I\(packageRoot)/Vendor/FreeRDP/include"])],
+            linkerSettings: freerdpLinkerSettings
+        ),
         .executableTarget(
             name: "Wireline",
             dependencies: [
@@ -57,7 +73,8 @@ let package = Package(
                 .product(name: "Inject", package: "Inject"),
                 .product(name: "Citadel", package: "Citadel"),
                 .product(name: "Sparkle", package: "Sparkle"),
-                "GhosttyKit"
+                "GhosttyKit",
+                "CFreeRDPShim"
             ],
             exclude: ["Ghostty/LICENSE-ghostty"],
             // The Vendor/ GhosttyKit is Wireline's Ghostty fork (manual-IO termio,

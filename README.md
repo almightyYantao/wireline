@@ -164,7 +164,7 @@ swift test
 
 The libghostty engine ships as a prebuilt `GhosttyKit.xcframework` in `Vendor/` (~280 MB, not in git), put there by `./scripts/fetch-ghosttykit.sh`. It's built from Wireline's Ghostty fork (patches: a host-owned-PTY IO backend, last-command output, regex search …) with Zig 0.17; the fork and prebuilt archives will be published to Releases, after which this step downloads and verifies them automatically.
 
-RDP panes link a static **FreeRDP 3** (+ OpenSSL) from `Vendor/FreeRDP.xcframework` (~35 MB universal, not in git): `./scripts/fetch-freerdp.sh --build` builds it with `scripts/build-freerdp.sh` (cmake + ninja; FreeRDP and OpenSSL are fetched and compiled for macOS 14, arm64 + x86_64, no FFmpeg — so no H.264, RemoteFX / progressive instead).
+RDP panes link a static **FreeRDP 3** (+ OpenSSL) from `Vendor/FreeRDP/` (~35 MB universal, not in git): `./scripts/fetch-freerdp.sh --build` builds it with `scripts/build-freerdp.sh` (cmake + ninja; FreeRDP and OpenSSL are fetched and compiled for macOS 14, arm64 + x86_64, no FFmpeg — so no H.264, RemoteFX / progressive instead).
 
 `bundle.sh` does a release build, assembles `build/Wireline.app` (Info.plist + a generated icon), and ad-hoc signs it so the local Keychain works. You can also open `Package.swift` in Xcode and run (⌘R).
 

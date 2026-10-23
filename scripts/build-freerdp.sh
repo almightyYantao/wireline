@@ -1,5 +1,5 @@
 #!/bin/bash
-# Reproducible FreeRDP.xcframework build for Wireline's native RDP panes.
+# Reproducible static FreeRDP build for Wireline's native RDP panes.
 #
 #   ./scripts/build-freerdp.sh [out_dir]    (default build/freerdp/out)
 #
@@ -13,8 +13,9 @@
 # libcrypto.a targets the build machine's macOS and is arm64-only.
 #
 # Produces in out_dir:
-#   FreeRDP.xcframework/   one fat static lib (freerdp3 + freerdp-client3 + winpr3 +
-#                          builtin channels + libssl/libcrypto) with headers + modulemap
+#   FreeRDP/lib/libFreeRDP.a   one fat static lib (freerdp3 + freerdp-client3 + winpr3 +
+#                              builtin channels + libssl/libcrypto)
+#   FreeRDP/include/           freerdp/ + winpr/ headers (only the C shim uses them)
 #   LICENSES/              FreeRDP (Apache-2.0) and OpenSSL (Apache-2.0) licence texts
 #   BUILD-INFO.txt         revs, cmake options, sha256s, sizes
 set -euo pipefail
@@ -86,6 +87,7 @@ FREERDP_CMAKE_OPTS=(
   # FreeRDP turns on LTO when supported: the .a files would hold LLVM bitcode,
   # which lipo/xcframework can't take and which ties the app to this clang.
   -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=OFF
+  -DWITH_VERBOSE_WINPR_ASSERT=OFF
   -DBUILD_TESTING=OFF
   # library only: no clients, no server, no sample, no tools
   -DWITH_CLIENT_COMMON=ON -DWITH_CLIENT_CHANNELS=ON -DWITH_CHANNELS=ON
@@ -108,7 +110,9 @@ FREERDP_CMAKE_OPTS=(
   -DWITH_MACAUDIO=ON
   -DCHANNEL_AUDIN=OFF -DCHANNEL_RDPECAM=OFF -DCHANNEL_URBDRC=OFF -DCHANNEL_TSMF=OFF
   -DCHANNEL_PRINTER=OFF -DCHANNEL_SMARTCARD=OFF -DCHANNEL_SERIAL=OFF -DCHANNEL_PARALLEL=OFF
-  -DCHANNEL_DRIVE=OFF -DCHANNEL_RDPDR=OFF -DCHANNEL_RDPEAR=OFF -DCHANNEL_SSHAGENT=OFF
+  # rdpdr itself stays: rdpsnd and RDP8 auto-detect require it to be registered
+  # (it redirects no devices — drive/printer/smartcard/serial are off).
+  -DCHANNEL_DRIVE=OFF -DCHANNEL_RDPEAR=OFF -DCHANNEL_SSHAGENT=OFF
   -DCHANNEL_VIDEO=OFF -DCHANNEL_GEOMETRY=OFF -DCHANNEL_RDPEWA=OFF -DCHANNEL_LOCATION=OFF
   -DCHANNEL_RAIL=OFF -DCHANNEL_REMDESK=OFF -DCHANNEL_ENCOMSP=OFF -DCHANNEL_ECHO=OFF -DCHANNEL_RDP2TCP=OFF
   -DCHANNEL_GFXREDIR=OFF
@@ -143,38 +147,15 @@ done
 echo "builds took $(( $(date +%s) - start ))s"
 
 # ---- package ---------------------------------------------------------------
-STAGE="$WORK/stage"; rm -rf "$STAGE"; mkdir -p "$STAGE/Headers"
-lipo -create "${FAT_INPUTS[@]}" -output "$STAGE/libFreeRDP.a"
+# A plain lib + include dir, not an xcframework: SwiftPM copies every binary
+# target's headers into one shared include dir, and GhosttyKit's umbrella
+# module map would then claim FreeRDP's headers too (and break the C shim's
+# build). Package.swift points the shim at these paths directly.
+rm -rf "$OUT/FreeRDP"; mkdir -p "$OUT/FreeRDP/lib" "$OUT/FreeRDP/include"
+lipo -create "${FAT_INPUTS[@]}" -output "$OUT/FreeRDP/lib/libFreeRDP.a"
 P0="$WORK/prefix-${ARCHS[0]}"
-cp -R "$P0/include/freerdp3/freerdp" "$STAGE/Headers/"
-cp -R "$P0/include/winpr3/winpr" "$STAGE/Headers/"
-cat > "$STAGE/Headers/module.modulemap" <<'EOF'
-module FreeRDP {
-    header "FreeRDP.h"
-    export *
-}
-EOF
-cat > "$STAGE/Headers/FreeRDP.h" <<'EOF'
-// Umbrella for the parts of FreeRDP Wireline's C shim uses. Swift never calls
-// FreeRDP directly (the API is macro- and callback-heavy): see Sources/CFreeRDPShim.
-#include <freerdp/freerdp.h>
-#include <freerdp/client.h>
-#include <freerdp/gdi/gdi.h>
-#include <freerdp/channels/channels.h>
-#include <freerdp/client/channels.h>
-#include <freerdp/client/cliprdr.h>
-#include <freerdp/client/disp.h>
-#include <freerdp/client/rdpgfx.h>
-#include <freerdp/gdi/gfx.h>
-#include <freerdp/locale/keyboard.h>
-#include <freerdp/event.h>
-#include <winpr/synch.h>
-#include <winpr/thread.h>
-EOF
-
-rm -rf "$OUT/FreeRDP.xcframework"
-xcodebuild -create-xcframework -library "$STAGE/libFreeRDP.a" -headers "$STAGE/Headers" \
-  -output "$OUT/FreeRDP.xcframework" >/dev/null
+cp -R "$P0/include/freerdp3/freerdp" "$OUT/FreeRDP/include/"
+cp -R "$P0/include/winpr3/winpr" "$OUT/FreeRDP/include/"
 
 mkdir -p "$OUT/LICENSES"
 cp "$FREERDP_SRC/LICENSE" "$OUT/LICENSES/FreeRDP-LICENSE"
@@ -190,7 +171,8 @@ tar -xzf "$OSSL_TGZ" -O "openssl-$OPENSSL_VERSION/LICENSE.txt" > "$OUT/LICENSES/
   echo "cmake_opts=${FREERDP_CMAKE_OPTS[*]}"
   echo "-- feature summary (${ARCHS[0]})"
   grep -E 'Using OpenSSL|Adding (STATIC|DYNAMIC) channel client' "$WORK/cmake-${ARCHS[0]}.log" || true
-  find "$OUT/FreeRDP.xcframework" -name '*.a' -exec shasum -a 256 {} \;
-  du -sh "$OUT/FreeRDP.xcframework"
+  shasum -a 256 "$OUT/FreeRDP/lib/libFreeRDP.a"
+  lipo -info "$OUT/FreeRDP/lib/libFreeRDP.a"
+  du -sh "$OUT/FreeRDP"
 } > "$OUT/BUILD-INFO.txt"
 tail -3 "$OUT/BUILD-INFO.txt"

@@ -161,6 +161,9 @@ public enum SSHConfig {
             case "auth": host.authMethod = AuthMethod(rawValue: value) ?? .unknown
             case "autosudo": host.autoSudo = (value == "true" || value == "1")
             case "args": host.launchArgs = value.isEmpty ? nil : value
+            case "protocol": host.hostProtocol = HostProtocol(rawValue: value) ?? .ssh
+            case "domain": host.rdpDomain = value.isEmpty ? nil : value
+            case "via": host.rdpVia = value.isEmpty ? nil : value
             default: break
             }
         }
@@ -199,11 +202,15 @@ public enum SSHConfig {
 
     static func metadataLine(for host: Host) -> String? {
         var parts: [String] = []
+        // First, so a glance at the block says what it is.
+        if host.isRDP { parts.append("protocol=rdp") }
         if let g = host.group, !g.isEmpty { parts.append("group=\(metaEscape(g))") }
         if let d = host.descriptionText, !d.isEmpty { parts.append("desc=\(metaEscape(d))") }
         if host.authMethod != .unknown { parts.append("auth=\(host.authMethod.rawValue)") }
         if host.autoSudo { parts.append("autosudo=true") }
         if let a = host.launchArgs, !a.isEmpty { parts.append("args=\(metaEscape(a))") }
+        if host.isRDP, let d = host.rdpDomain, !d.isEmpty { parts.append("domain=\(metaEscape(d))") }
+        if host.isRDP, let v = host.rdpVia, !v.isEmpty { parts.append("via=\(metaEscape(v))") }
         guard !parts.isEmpty else { return nil }
         return "\(metadataPrefix) \(parts.joined(separator: "; "))"
     }

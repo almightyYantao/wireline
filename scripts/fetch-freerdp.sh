@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Put FreeRDP where the build expects it:
 #
-#   Vendor/FreeRDP.xcframework     static FreeRDP 3 + OpenSSL + headers (Package.swift binaryTarget)
+#   Vendor/FreeRDP/lib/libFreeRDP.a   static FreeRDP 3 + OpenSSL (linked by the CFreeRDPShim target)
+#   Vendor/FreeRDP/include/            its headers
 #   Vendor/FreeRDP-licenses/       FreeRDP + OpenSSL licence texts (bundle.sh -> Contents/Resources)
 #
 # Both are git-ignored (~35 MB universal). Usage:
@@ -19,16 +20,16 @@ if [[ "${1:-}" == "--build" ]]; then
     ./scripts/build-freerdp.sh "${SRC}"
 fi
 
-if [[ ! -d "${SRC}/FreeRDP.xcframework" ]]; then
-    echo "no FreeRDP.xcframework in ${SRC} — set FREERDP_OUT or pass --build" >&2
+if [[ ! -f "${SRC}/FreeRDP/lib/libFreeRDP.a" ]]; then
+    echo "no FreeRDP/lib/libFreeRDP.a in ${SRC} — set FREERDP_OUT or pass --build" >&2
     exit 1
 fi
 
 mkdir -p Vendor
-rm -rf Vendor/FreeRDP.xcframework Vendor/FreeRDP-licenses
-cp -R "${SRC}/FreeRDP.xcframework" Vendor/
+rm -rf Vendor/FreeRDP Vendor/FreeRDP-licenses
+cp -R "${SRC}/FreeRDP" Vendor/
 cp -R "${SRC}/LICENSES" Vendor/FreeRDP-licenses
 [[ -f "${SRC}/BUILD-INFO.txt" ]] && cp "${SRC}/BUILD-INFO.txt" Vendor/FreeRDP-licenses/
 
-echo "✓ Vendor/FreeRDP.xcframework ($(du -sh Vendor/FreeRDP.xcframework | cut -f1))"
+echo "✓ Vendor/FreeRDP ($(du -sh Vendor/FreeRDP | cut -f1))"
 echo "✓ Vendor/FreeRDP-licenses"

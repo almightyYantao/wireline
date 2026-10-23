@@ -164,7 +164,7 @@ swift test
 
 终端内核 libghostty 以预编译的 `GhosttyKit.xcframework` 形式放在 `Vendor/`（约 280 MB，不进 git），由 `./scripts/fetch-ghosttykit.sh` 准备。它来自 Wireline 维护的 Ghostty fork（加了「由宿主管理 PTY」的 IO 后端、上一条命令输出、正则搜索等补丁），需要 Zig 0.17 编译；fork 与预编译包会发布到 Releases，之后这一步改为自动下载并校验。
 
-RDP 分屏静态链接 **FreeRDP 3**（含 OpenSSL），放在 `Vendor/FreeRDP.xcframework`（通用二进制约 35 MB，不进 git）：`./scripts/fetch-freerdp.sh --build` 用 `scripts/build-freerdp.sh` 编译（需要 cmake + ninja；自动拉取 FreeRDP 与 OpenSSL 源码，按 macOS 14、arm64 + x86_64 编译；不带 FFmpeg，因此没有 H.264，改用 RemoteFX / progressive）。
+RDP 分屏静态链接 **FreeRDP 3**（含 OpenSSL），放在 `Vendor/FreeRDP/`（通用二进制约 35 MB，不进 git）：`./scripts/fetch-freerdp.sh --build` 用 `scripts/build-freerdp.sh` 编译（需要 cmake + ninja；自动拉取 FreeRDP 与 OpenSSL 源码，按 macOS 14、arm64 + x86_64 编译；不带 FFmpeg，因此没有 H.264，改用 RemoteFX / progressive）。
 
 `bundle.sh` 会 release 构建、组装 `build/Wireline.app`（含 Info.plist + 自动生成图标），并做 ad-hoc 签名以便本机 Keychain 正常工作。也可用 Xcode 打开 `Package.swift` 直接运行（⌘R）。
 
