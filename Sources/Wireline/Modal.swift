@@ -98,6 +98,8 @@ struct WLModalEntry: Identifiable {
     let style: WLModalStyle
     let content: AnyView
     let dismiss: @MainActor () -> Void
+    /// The dialog is on its way out: the card folds shut, then it's removed.
+    var closing = false
 }
 
 struct WLModalKey: PreferenceKey {
@@ -115,23 +117,52 @@ private struct WLModalPresenter<Item, Modal: View>: ViewModifier {
     let modal: (Item) -> Modal
     @State private var token = UUID()
     @Environment(\.wlModalHosted) private var hosted
+    /// The last item shown, kept on screen while its card folds shut — the
+    /// close animates the same however the binding was cleared (Esc, a
+    /// button, the scrim, code), because the card plays it itself rather than
+    /// relying on a removal transition through the preference.
+    @State private var lingering: Item?
+    @State private var closing = false
+    @State private var closeWork: DispatchWorkItem?
 
     func body(content: Content) -> some View {
-        let entry = item.map { item in
+        let shown = item ?? (closing ? lingering : nil)
+        let entry = shown.map { item in
             WLModalEntry(id: AnyHashable([AnyHashable(token), key(item)]), style: style,
-                         content: AnyView(modal(item)), dismiss: dismiss)
+                         content: AnyView(modal(item)), dismiss: dismiss, closing: self.item == nil)
         }
         // Append, never overwrite: dialogs presented further down the tree
         // travel up through this same key.
         let announced = content.transformPreference(WLModalKey.self) { value in
             if let entry { value.append(entry) }
         }
+        let tracked = announced
+            .onAppear { if let item { lingering = item } }
+            .onChange(of: item != nil) { _, present in
+                closeWork?.cancel(); closeWork = nil
+                if present {
+                    lingering = item
+                    closing = false
+                } else if lingering != nil {
+                    closing = true
+                    let work = DispatchWorkItem {
+                        MainActor.assumeIsolated { closing = false; lingering = nil }
+                    }
+                    closeWork = work
+                    DispatchQueue.main.asyncAfter(deadline: .now() + WLModalMotion.closeDuration + 0.03, execute: work)
+                }
+            }
         if hosted {
-            announced
+            tracked
         } else {
-            announced.modifier(WLModalHost(depth: 0))
+            tracked.modifier(WLModalHost(depth: 0))
         }
     }
+}
+
+/// The open / close motion of a dialog card, played by the card itself.
+enum WLModalMotion {
+    static let closeDuration = 0.26
 }
 
 /// Reads the modals announced below it and draws them in an overlay. The
@@ -161,14 +192,10 @@ private struct WLModalStack: View {
         let layers = ZStack {
             ForEach(entries) { entry in
                 WLModalScrim(entry: entry)
-                    .transition(.wlFlipScrim)
                 WLModalCard(entry: entry)
-                    .transition(.wlFlip)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        // Whoever flipped the binding, the cards always animate.
-        .animation(Motion.resolved(Motion.flipIn), value: entries.map(\.id))
         if depth < Self.maxDepth {
             layers.modifier(WLModalHost(depth: depth + 1))
         } else {
@@ -179,9 +206,13 @@ private struct WLModalStack: View {
 
 private struct WLModalScrim: View {
     let entry: WLModalEntry
+    @State private var shown = false
 
     var body: some View {
         Color.black.opacity(WL.depth(0.38))
+            .opacity(shown && !entry.closing ? 1 : 0)
+            .onAppear { withAnimation(Motion.resolved(Motion.state)) { shown = true } }
+            .animation(Motion.resolved(Motion.flipOut), value: entry.closing)
             .ignoresSafeArea()
             .contentShape(Rectangle())
             .onTapGesture { if entry.style.scrimCloses { entry.dismiss() } }
@@ -194,6 +225,8 @@ private struct WLModalScrim: View {
 
 private struct WLModalCard: View {
     let entry: WLModalEntry
+    /// 0 → 1 as the card turns in.
+    @State private var open = 0.0
 
     var body: some View {
         WLModalFit {
@@ -201,6 +234,12 @@ private struct WLModalCard: View {
                 .environment(\.wlDismiss, WLDismissAction(action: entry.dismiss))
                 .background(WLModalHook(style: entry.style, dismiss: entry.dismiss))
         }
+        .modifier(WLFlipEffect(progress: Motion.reduce ? 1 : open))
+        .modifier(WLFoldEffect(progress: entry.closing && !Motion.reduce ? 0 : 1))
+        .opacity(Motion.reduce ? (entry.closing ? 0 : open) : 1)
+        .animation(Motion.reduce ? Motion.fade : Motion.flipOut, value: entry.closing)
+        .onAppear { withAnimation(Motion.reduce ? Motion.fade : Motion.flipIn) { open = 1 } }
+        .allowsHitTesting(!entry.closing)
         // Clear the traffic lights; the card never touches the window edge.
         .padding(.horizontal, 20).padding(.top, 30).padding(.bottom, 20)
         .frame(maxWidth: .infinity, maxHeight: .infinity)

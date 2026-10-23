@@ -34,7 +34,7 @@ enum Motion {
     /// place over its scrim.
     static let flipIn: Animation = .spring(duration: 0.28, bounce: 0.12)
     /// …and flipping back away — the same path reversed, faster.
-    static let flipOut: Animation = .timingCurve(0.4, 0, 0.7, 0.2, duration: 0.26)
+    static let flipOut: Animation = .timingCurve(0.4, 0, 0.7, 0.2, duration: WLModalMotion.closeDuration)
     /// A banner / toast / floating bar sliding in from an edge.
     static let banner: Animation = .spring(duration: 0.36, bounce: 0.16)
     /// Expanding a floating surface the user deliberately summoned (pet chat).
@@ -160,7 +160,8 @@ struct WLFlipEffect: ViewModifier, Animatable {
         let pose = Self.pose(progress)
         content
             .scaleEffect(pose.scale)
-            .rotation3DEffect(.degrees(pose.angle), axis: (x: 1, y: 0, z: 0),
+            // Turns in left to right, like a card being flipped over.
+            .rotation3DEffect(.degrees(pose.angle), axis: (x: 0, y: 1, z: 0),
                               anchor: .center, perspective: 0.55)
             .opacity(pose.opacity)
     }

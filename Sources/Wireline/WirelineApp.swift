@@ -32,6 +32,7 @@ struct WirelineApp: App {
                 .environment(sessions)
                 .environment(snippets)
                 .environment(loc)
+                .environment(todos)
                 .frame(minWidth: 900, minHeight: 560)
                 .task {
                     // Bring up the Touch ID ssh-agent first (when any key is
@@ -104,6 +105,9 @@ struct WirelineApp: App {
                     .shortcut(.commandPalette, keys)
                 Button("Quick Connect…") { NotificationCenter.default.post(name: .showQuickConnect, object: nil) }
                     .shortcut(.quickConnect, keys)
+                // ⌘K: the same host search, in-app (⌥⌘K is the system-wide one).
+                Button("Search Hosts…") { NotificationCenter.default.post(name: .showQuickConnect, object: nil) }
+                    .keyboardShortcut("k", modifiers: [.command])
                 Button("Refresh Statuses") { Task { await store.checkAll() } }
                     .shortcut(.refreshStatuses, keys)
                 // ⌘F searches the terminal scrollback when a session is active,
