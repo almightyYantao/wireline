@@ -30,10 +30,8 @@ enum Motion {
     static let popIn: Animation = .spring(duration: 0.22, bounce: 0)
     /// …and going away. Exits are always faster than entries.
     static let popOut: Animation = .easeIn(duration: 0.12)
-    /// A modal surface (⌘K, ⌘P) appearing over a scrim.
-    static let modalIn: Animation = .spring(duration: 0.3, bounce: 0.05)
-    static let modalOut: Animation = .easeIn(duration: 0.14)
-    /// A dialog card (`.wlModal`) flipping up into place over its scrim.
+    /// A dialog card (every `.wlModal`: sheets, ⌘K, ⌘P) flipping up into
+    /// place over its scrim.
     static let flipIn: Animation = .spring(duration: 0.38, bounce: 0.16)
     /// …and flipping back away — the same path reversed, faster.
     static let flipOut: Animation = .easeIn(duration: 0.2)
@@ -83,22 +81,6 @@ extension AnyTransition {
             insertion: .scale(scale: 0.96, anchor: anchor).combined(with: .opacity).animation(Motion.popIn),
             removal: .opacity.animation(Motion.popOut)
         )
-    }
-
-    /// Modal cards over a scrim: settle in from slightly above, shrink away.
-    static var wlModal: AnyTransition {
-        if Motion.reduce { return .opacity.animation(Motion.fade) }
-        return .asymmetric(
-            insertion: .scale(scale: 0.97).combined(with: .offset(y: -6)).combined(with: .opacity)
-                .animation(Motion.modalIn),
-            removal: .scale(scale: 0.98).combined(with: .opacity).animation(Motion.modalOut)
-        )
-    }
-
-    /// Scrims behind modals.
-    static var wlScrim: AnyTransition {
-        .asymmetric(insertion: .opacity.animation(.easeOut(duration: 0.2)),
-                    removal: .opacity.animation(Motion.modalOut))
     }
 
     /// Dialog cards (`.wlModal`): the card flips up about its horizontal axis

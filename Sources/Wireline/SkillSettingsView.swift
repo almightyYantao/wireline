@@ -1,11 +1,12 @@
 import SwiftUI
 
 /// Management UI for ops skills: toggle built-ins, view their steps, add/edit
-/// custom skills. Presented as a sheet from Settings → AI.
+/// custom skills. Presented as a modal card from Settings → AI.
 struct SkillSettingsView: View {
     @Environment(Localizer.self) private var loc
     @State private var store = SkillStore.shared
     @State private var editing: WLSkill?
+    @State private var expanded: Set<String> = []
     var onClose: () -> Void = {}
 
     var body: some View {
@@ -32,9 +33,11 @@ struct SkillSettingsView: View {
             Button(loc("完成", "Done")) { onClose() }
                 .buttonStyle(.wlPrimary).keyboardShortcut(.defaultAction)
         }
-        .sheet(item: $editing) { s in
-            SkillEditor(skill: s) { saved in store.upsert(saved); editing = nil } onCancel: { editing = nil }
-                .environment(loc)
+        .wlModal(item: $editing) { s in
+            SkillEditor(skill: s) { saved in
+                store.upsert(saved)
+                wlAnimate(Motion.flipOut) { editing = nil }
+            } onCancel: { wlAnimate(Motion.flipOut) { editing = nil } }
         }
     }
 
@@ -49,19 +52,25 @@ struct SkillSettingsView: View {
                 Text(s.id).font(WL.mono(10)).foregroundStyle(WL.textDim)
             }
             Text(s.description).font(WL.caption).foregroundStyle(WL.textDim)
-            DisclosureGroup {
-                Text(s.body).font(WL.mono(11)).foregroundStyle(WL.textDim)
-                    .frame(maxWidth: .infinity, alignment: .leading).padding(.top, 4).textSelection(.enabled)
-            } label: {
-                Text(loc("查看步骤", "View steps")).font(WL.caption).foregroundStyle(WL.green)
-            }.tint(WL.green)
-            HStack(spacing: 14) {
+            HStack(spacing: 6) {
+                WLDisclosureChip(title: loc("查看步骤", "View steps"), isExpanded: Binding(
+                    get: { expanded.contains(s.id) },
+                    set: { if $0 { expanded.insert(s.id) } else { expanded.remove(s.id) } }))
+                Spacer(minLength: 0)
                 if !s.builtin {
-                    Button(loc("编辑", "Edit")) { editing = s }
-                    Button(loc("删除", "Delete"), role: .destructive) { store.remove(s) }
+                    BracketButton(loc("编辑", "Edit")) { editing = s }
+                    BracketButton(loc("删除", "Delete")) { store.remove(s) }
                 }
-                Spacer()
-            }.font(WL.caption).buttonStyle(.wlPlain).foregroundStyle(WL.green)
+            }
+            .padding(.top, 2)
+            if expanded.contains(s.id) {
+                Text(s.body).font(WL.mono(11)).foregroundStyle(WL.textDim)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(10)
+                    .background(WL.fieldFill, in: RoundedRectangle(cornerRadius: WL.radius(10), style: .continuous))
+                    .textSelection(.enabled)
+                    .transition(.wlDisclose)
+            }
         }
         .padding(.vertical, 10)
     }
@@ -71,6 +80,7 @@ struct SkillSettingsView: View {
 private struct SkillEditor: View {
     @Environment(Localizer.self) private var loc
     @State var skill: WLSkill
+    @FocusState private var nameFocused: Bool
     var onSave: (WLSkill) -> Void
     var onCancel: () -> Void
 
@@ -79,7 +89,10 @@ private struct SkillEditor: View {
                 subtitle: loc("写清楚何时使用、按什么步骤排查", "Say when to use it and which steps to follow"),
                 symbol: "square.and.pencil", width: 540, height: 560, onClose: onCancel) {
             WLFormSection(loc("基本", "General")) {
-                stacked(loc("名称", "Name")) { field("重启前健康检查", $skill.name) }
+                stacked(loc("名称", "Name")) {
+                    TextField("", text: $skill.name, prompt: Text("重启前健康检查").foregroundStyle(WL.textDim))
+                        .wlField(focus: $nameFocused)
+                }
                 WLFormDivider()
                 stacked(loc("id（唯一，字母数字/连字符）", "id (unique, kebab-case)")) { field("pre-restart-check", $skill.id) }
                 WLFormDivider()
@@ -106,6 +119,7 @@ private struct SkillEditor: View {
                           || skill.name.trimmingCharacters(in: .whitespaces).isEmpty
                           || skill.body.trimmingCharacters(in: .whitespaces).isEmpty)
         }
+        .wlAutofocus($nameFocused)
     }
 
     /// Label above a full-width field.

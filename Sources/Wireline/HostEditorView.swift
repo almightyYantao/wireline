@@ -5,7 +5,7 @@ import WirelineCore
 struct HostEditorView: View {
     @Environment(HostStore.self) private var store
     @Environment(Localizer.self) private var loc
-    @Environment(\.dismiss) private var dismiss
+    @Environment(\.wlDismiss) private var dismiss
     let context: HostEditContext
 
     @State private var alias = ""
@@ -95,10 +95,8 @@ struct HostEditorView: View {
                 .buttonStyle(.wlPrimary).keyboardShortcut(.defaultAction)
                 .disabled(!canSave)
         }
-        .onAppear {
-            populate()
-            DispatchQueue.main.async { aliasFocused = true }
-        }
+        .onAppear(perform: populate)
+        .wlAutofocus($aliasFocused)
     }
 
     private var canSave: Bool { !alias.trimmingCharacters(in: .whitespaces).isEmpty }

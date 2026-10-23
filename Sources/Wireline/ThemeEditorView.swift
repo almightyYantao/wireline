@@ -10,7 +10,7 @@ import WirelineCore
 struct ThemeEditorView: View {
     @Environment(HostStore.self) private var store
     @Environment(Localizer.self) private var loc
-    @Environment(\.dismiss) private var dismiss
+    @Environment(\.wlDismiss) private var dismiss
 
     /// The working copy being previewed/edited (a copy, not yet persisted).
     @State private var draft: AppTheme = .wirelineDefault
@@ -21,11 +21,11 @@ struct ThemeEditorView: View {
         WLSheet(loc("主题", "Themes"),
                 subtitle: loc("修改实时预览到整个应用；保存后成为自定义主题，关闭不保存则还原",
                               "Edits preview live across the app; save to keep them, close to revert"),
-                symbol: "paintpalette", width: 640, height: 600, scrolls: false,
+                symbol: "paintpalette", width: 560, height: 600, scrolls: false,
                 onClose: { dismiss() }) {
             HStack(alignment: .top, spacing: 16) {
                 library
-                    .frame(width: 190)
+                    .frame(width: 170)
                     .frame(maxHeight: .infinity)
                     .wlCard()
                 editor
@@ -37,10 +37,6 @@ struct ThemeEditorView: View {
             Button(loc("导出主题包", "Export")) { exportPack() }
                 .buttonStyle(.wlSecondary)
             Spacer()
-            if draft.isBuiltIn {
-                Text(loc("内置主题——编辑将另存为自定义", "Built-in — saving forks a custom copy"))
-                    .font(WL.caption).foregroundStyle(WL.textDim)
-            }
             Button(loc("关闭", "Close")) { dismiss() }
                 .buttonStyle(.wlSecondary).keyboardShortcut(.cancelAction)
             Button(draft.isBuiltIn ? loc("另存为自定义", "Save as custom") : loc("保存", "Save")) { save() }
@@ -109,10 +105,11 @@ struct ThemeEditorView: View {
 
     private var nameSection: some View {
         WLFormSection("") {
-            WLFormRow(loc("名称", "Name"), detail: draft.isBuiltIn ? loc("内置只读", "read-only") : nil) {
+            WLFormRow(loc("名称", "Name"),
+                      detail: draft.isBuiltIn ? loc("内置主题，保存时另存为自定义", "Built-in — saving forks a copy") : nil) {
                 TextField("", text: Binding(get: { draft.name }, set: { draft.name = $0 }))
                     .wlField(font: WL.body)
-                    .frame(width: 200)
+                    .frame(width: 170)
                     .disabled(draft.isBuiltIn)
             }
         }
@@ -132,13 +129,9 @@ struct ThemeEditorView: View {
             WLFormDivider()
             ansiStrip.padding(.vertical, 10)
             WLFormDivider()
-            DisclosureGroup(isExpanded: $advanced) {
-                ansiGrid.padding(.top, 8)
-            } label: {
-                Text(loc("高级：逐个 ANSI 颜色", "Advanced: per-ANSI colors"))
-                    .font(WL.small).foregroundStyle(WL.green)
+            WLDisclosure(loc("高级：逐个 ANSI 颜色", "Advanced: per-ANSI colors"), isExpanded: $advanced) {
+                ansiGrid
             }
-            .tint(WL.green)
             .padding(.vertical, 10)
         }
     }
@@ -154,7 +147,7 @@ struct ThemeEditorView: View {
     }
 
     private var ansiGrid: some View {
-        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 8), spacing: 8) {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 44), spacing: 8)], spacing: 8) {
             ForEach(0..<draft.colors.ansi.count, id: \.self) { i in
                 VStack(spacing: 3) {
                     ColorPicker("", selection: ansiBinding(i), supportsOpacity: false)

@@ -45,10 +45,8 @@ struct PortForwardView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .sheet(isPresented: $showEditor) {
+        .wlModal(isPresented: $showEditor) {
             ForwardEditor(existing: editing)
-                .environment(store)
-                .environment(forwards)
         }
     }
 }
@@ -94,7 +92,7 @@ struct ForwardEditor: View {
     @Environment(HostStore.self) private var store
     @Environment(ForwardStore.self) private var forwards
     @Environment(Localizer.self) private var loc
-    @Environment(\.dismiss) private var dismiss
+    @Environment(\.wlDismiss) private var dismiss
     let existing: PortForward?
 
     @State private var hostAlias = ""
