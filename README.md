@@ -141,7 +141,7 @@ A draggable, always-on-top little sprite that floats over your desktop the momen
 - 🎨 Light and dark themes, or import **iTerm2 `.itermcolors`**; a **Ghostty-style config file** at `~/.config/wireline/config` with live reload and Ghostty action names in keybinds
 
 **Files & ops**
-- 📁 Visual **SFTP** ([Citadel](https://github.com/orlandos-nl/Citadel)): dual-pane, drag/double-click transfers, new/rename/delete, **right-click AI edit**
+- 📁 Visual **SFTP** ([Citadel](https://github.com/orlandos-nl/Citadel)): dual-pane, drag/double-click transfers of files and whole folders through a **transfer queue** (pipelined chunks, progress, pause and resume from where it stopped, keeps going after you leave the page), opens where the host's terminal is, new/rename/delete, **edit in your local editor** (VS Code, Zed, Cursor, …; every save syncs back), **right-click AI edit**
 - 📥 **ZMODEM transfer**: run `sz` on the remote and Wireline catches it automatically — files land in `~/Downloads` (revealed in Finder); `rz` uploads via a file picker (bridges the local `lrzsz` — `brew install lrzsz`)
 - ⚡ Batch / fleet execution across selected hosts, aggregated output
 - 🔀 Graphical port forwarding: local (`-L`), remote (`-R`) and SOCKS (`-D`) tunnels, jump hosts, one-click toggle, start with Wireline, password hosts via the Keychain; **discover a host's listening ports** and forward one in a click

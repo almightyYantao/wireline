@@ -129,6 +129,130 @@ actor SFTPConnection {
         }
     }
 
+    // MARK: Chunked transfers (the transfer queue)
+
+    /// A file's size and kind; nil when it isn't there.
+    func stat(_ path: String) async -> (size: UInt64, isDir: Bool)? {
+        guard let sftp, let a = try? await sftp.getAttributes(at: path) else { return nil }
+        return (a.size ?? 0, ((a.permissions ?? 0) & 0o170000) == 0o040000)
+    }
+
+    /// Everything under directory `root`, as paths relative to it (parents
+    /// before their children).
+    func walk(_ root: String) async throws -> [(relative: String, isDir: Bool, size: UInt64)] {
+        guard let sftp else { throw Fail(msg: "未连接") }
+        var out: [(relative: String, isDir: Bool, size: UInt64)] = []
+        var pending = [""]
+        while !pending.isEmpty {
+            let rel = pending.removeFirst()
+            for e in try await listEntries(sftp: sftp, path: rel.isEmpty ? root : "\(root)/\(rel)") {
+                let r = rel.isEmpty ? e.name : "\(rel)/\(e.name)"
+                out.append((r, e.isDir, e.size))
+                if e.isDir { pending.append(r) }
+            }
+        }
+        return out
+    }
+
+    func makeDirectoryIfMissing(_ path: String) async throws {
+        guard let sftp else { throw Fail(msg: "未连接") }
+        if await stat(path)?.isDir == true { return }
+        try await sftp.createDirectory(atPath: path)
+    }
+
+    /// Requests kept in flight at once: over a link with latency, one request
+    /// per round trip would cap throughput at chunk ÷ RTT.
+    private static let window = 8
+    private static let readPiece: UInt32 = 64 * 1024
+    private static let writePiece = 32_000   // Citadel's own write slice (swift-nio-ssh#99)
+
+    /// Copy `remote` into `local`, starting at byte `offset` (0 truncates; more
+    /// resumes). `step` hears the bytes landed after each window and returns
+    /// false to stop. Returns whether the whole file is in.
+    func download(_ remote: String, to local: URL, from offset: UInt64,
+                  step: @escaping @Sendable (UInt64) async -> Bool) async throws -> Bool {
+        guard let sftp else { throw Fail(msg: "连接已断开") }
+        let fm = FileManager.default
+        if !fm.fileExists(atPath: local.path) { fm.createFile(atPath: local.path, contents: nil) }
+        let out = try FileHandle(forWritingTo: local)
+        defer { try? out.close() }
+        try out.truncate(atOffset: offset)
+        return try await sftp.withFile(filePath: remote, flags: .read) { file in
+            try await Self.pumpDown(file, into: out, from: offset, step: step)
+        }
+    }
+
+    private nonisolated static func pumpDown(_ opened: SFTPFile, into out: FileHandle, from offset: UInt64,
+                                             step: @escaping @Sendable (UInt64) async -> Bool) async throws -> Bool {
+        nonisolated(unsafe) let file = opened
+        var pos = offset
+        while true {
+            let base = pos
+            let pieces = try await withThrowingTaskGroup(of: (UInt64, ByteBuffer).self) { group in
+                for i in 0..<Self.window {
+                    let at = base + UInt64(i) * UInt64(Self.readPiece)
+                    group.addTask { (at, try await file.read(from: at, length: Self.readPiece)) }
+                }
+                var got: [(UInt64, ByteBuffer)] = []
+                for try await r in group { got.append(r) }
+                return got.sorted { $0.0 < $1.0 }
+            }
+            // Keep the contiguous run; a short read ends it (the rest is re-read).
+            var landed: UInt64 = 0
+            for (at, buffer) in pieces {
+                guard at == pos, buffer.readableBytes > 0 else { break }
+                var b = buffer
+                let bytes = b.readBytes(length: b.readableBytes) ?? []
+                try out.seek(toOffset: pos)
+                try out.write(contentsOf: bytes)
+                pos += UInt64(bytes.count)
+                landed += UInt64(bytes.count)
+                if bytes.count < Int(Self.readPiece) { break }
+            }
+            if landed == 0 { return true }                 // EOF
+            if !(await step(landed)) { return false }
+        }
+    }
+
+    /// Copy `local` to `remote`, starting at byte `offset` (0 truncates; more
+    /// resumes). Same `step` contract as `download`.
+    func upload(_ local: URL, to remote: String, from offset: UInt64,
+                step: @escaping @Sendable (UInt64) async -> Bool) async throws -> Bool {
+        guard let sftp else { throw Fail(msg: "连接已断开") }
+        let input = try FileHandle(forReadingFrom: local)
+        defer { try? input.close() }
+        try input.seek(toOffset: offset)
+        let flags: SFTPOpenFileFlags = offset == 0 ? [.write, .create, .truncate] : [.write, .create]
+        return try await sftp.withFile(filePath: remote, flags: flags) { file in
+            try await Self.pumpUp(file, from: input, at: offset, step: step)
+        }
+    }
+
+    private nonisolated static func pumpUp(_ opened: SFTPFile, from input: FileHandle, at offset: UInt64,
+                                           step: @escaping @Sendable (UInt64) async -> Bool) async throws -> Bool {
+        nonisolated(unsafe) let file = opened
+        var pos = offset
+        while true {
+            guard let data = try input.read(upToCount: Self.window * Self.writePiece), !data.isEmpty
+            else { return true }
+            let base = pos
+            try await withThrowingTaskGroup(of: Void.self) { group in
+                var start = 0
+                while start < data.count {
+                    let end = min(start + Self.writePiece, data.count)
+                    var buf = ByteBufferAllocator().buffer(capacity: end - start)
+                    buf.writeBytes(data[data.startIndex + start ..< data.startIndex + end])
+                    let slice = buf, at = base + UInt64(start)
+                    group.addTask { try await file.write(slice, at: at) }
+                    start = end
+                }
+                try await group.waitForAll()
+            }
+            pos += UInt64(data.count)
+            if !(await step(UInt64(data.count))) { return false }
+        }
+    }
+
     func close() async {
         try? await sftp?.close()
         sftp = nil
@@ -153,10 +277,47 @@ final class FileBrowserModel {
     var status: String?
     /// Called after any upload/download finishes, so the panes can refresh.
     var onTransferComplete: (() -> Void)?
+    let transfers: TransferQueue
+    /// The remote home, for resolving `~` paths.
+    private var home = "/"
 
-    init(host: Host, store: HostStore) {
+    private init(host: Host, store: HostStore) {
         self.host = host
         self.store = store
+        self.transfers = TransferQueue(conn: conn)
+        transfers.onItemFinished = { [weak self] item in
+            guard let self else { return }
+            if item.direction == .upload, (item.remotePath as NSString).deletingLastPathComponent == path {
+                refresh()
+            }
+            onTransferComplete?()
+        }
+        transfers.onIdle = { [weak self] in
+            guard let self, closeWhenIdle else { return }
+            disconnect()
+        }
+    }
+
+    // MARK: Lifetime
+
+    /// One browser per host, kept while it has transfers running — so leaving
+    /// the Files page (⌘W) doesn't cut a download off halfway.
+    private static var live: [String: FileBrowserModel] = [:]
+    private var closeWhenIdle = false
+
+    static func obtain(host: Host, store: HostStore) -> FileBrowserModel {
+        if let m = live[host.alias] {
+            m.closeWhenIdle = false
+            return m
+        }
+        let m = FileBrowserModel(host: host, store: store)
+        live[host.alias] = m
+        return m
+    }
+
+    /// The page went away: disconnect now, or once the queue drains.
+    func release() {
+        if transfers.isActive { closeWhenIdle = true } else { disconnect() }
     }
 
     func connect() {
@@ -195,6 +356,7 @@ final class FileBrowserModel {
                 }
                 let (home, items) = try await conn.connectAndList(
                     hostname: hostname, port: port, user: user, credential: credential)
+                self.home = home
                 path = home
                 entries = items
                 connected = true
@@ -255,6 +417,12 @@ final class FileBrowserModel {
         if !parent.isEmpty { await load(parent) }
     }
 
+    /// Show `raw` (`~`-relative is fine): the directory, or a file's folder.
+    func reveal(_ raw: String) {
+        guard connected else { Self.pendingPath[host.alias] = raw; return }
+        Task { await reveal(raw, home: home) }
+    }
+
     func load(_ newPath: String) async {
         do {
             entries = try await conn.list(newPath)
@@ -309,36 +477,84 @@ final class FileBrowserModel {
         }
     }
 
+    /// Queue a remote file or folder to copy into local `dir`.
     func download(_ e: SFTPEntry, toDirectory dir: URL) {
-        download(e, to: dir.appendingPathComponent(e.name))
-    }
-
-    func download(_ e: SFTPEntry, to localURL: URL) {
-        guard !e.isDir else { return }
-        status = "下载中：\(e.name)…"
         let remote = join(path, e.name)
+        let target = dir.appendingPathComponent(e.name)
+        guard e.isDir else {
+            transfers.enqueue([.init(direction: .download, name: e.name, remotePath: remote,
+                                     localURL: target, total: e.size)])
+            return
+        }
+        status = Localizer.shared.t("正在列出 \(e.name)…", "Listing \(e.name)…")
         Task {
             do {
-                let data = try await conn.download(remote)
-                try data.write(to: localURL)
-                status = "已下载：\(e.name)（\(data.count) 字节）"
+                let tree = try await conn.walk(remote)
+                let fm = FileManager.default
+                try fm.createDirectory(at: target, withIntermediateDirectories: true)
+                var items: [TransferQueue.Item] = []
+                for n in tree {
+                    let local = target.appendingPathComponent(n.relative)
+                    if n.isDir {
+                        try fm.createDirectory(at: local, withIntermediateDirectories: true)
+                    } else {
+                        items.append(.init(direction: .download, name: "\(e.name)/\(n.relative)",
+                                           remotePath: "\(remote)/\(n.relative)", localURL: local, total: n.size))
+                    }
+                }
+                status = nil
+                transfers.enqueue(items)
+                onTransferComplete?()
             } catch { status = "下载失败：\(friendly(error))" }
-            onTransferComplete?()
         }
     }
 
+    /// Queue a local file or folder to copy into the current remote directory.
     func upload(from localURL: URL) {
         let name = localURL.lastPathComponent
-        status = "上传中：\(name)…"
         let remote = join(path, name)
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: localURL.path, isDirectory: &isDir) else { return }
+        guard isDir.boolValue else {
+            let size = (try? FileManager.default.attributesOfItem(atPath: localURL.path))?[.size] as? UInt64 ?? 0
+            transfers.enqueue([.init(direction: .upload, name: name, remotePath: remote,
+                                     localURL: localURL, total: size)])
+            return
+        }
         Task {
             do {
-                let data = try Data(contentsOf: localURL)
-                try await conn.upload(remote, data: data)
+                try await conn.makeDirectoryIfMissing(remote)
+                var items: [TransferQueue.Item] = []
+                let keys: [URLResourceKey] = [.isDirectoryKey, .fileSizeKey]
+                let walker = FileManager.default.enumerator(at: localURL, includingPropertiesForKeys: keys)
+                let base = localURL.standardizedFileURL.path
+                while let url = walker?.nextObject() as? URL {
+                    let rel = String(url.standardizedFileURL.path.dropFirst(base.count + 1))
+                    let values = try? url.resourceValues(forKeys: Set(keys))
+                    if values?.isDirectory == true {
+                        try await conn.makeDirectoryIfMissing("\(remote)/\(rel)")
+                    } else {
+                        items.append(.init(direction: .upload, name: "\(name)/\(rel)", remotePath: "\(remote)/\(rel)",
+                                           localURL: url, total: UInt64(values?.fileSize ?? 0)))
+                    }
+                }
+                transfers.enqueue(items)
                 await load(path)
-                status = "已上传：\(name)"
             } catch { status = "上传失败：\(friendly(error))" }
-            onTransferComplete?()
+        }
+    }
+
+    /// Open a remote file in a local editor; saves sync back (see RemoteEditStore).
+    func editLocally(_ e: SFTPEntry, with editor: RemoteEditStore.Editor?) {
+        guard !e.isDir else { return }
+        let remote = join(path, e.name)
+        status = Localizer.shared.t("正在打开 \(e.name)…", "Opening \(e.name)…")
+        Task {
+            do {
+                let data = try await conn.download(remote)
+                status = nil
+                RemoteEditStore.shared.begin(alias: host.alias, remotePath: remote, data: data, editor: editor)
+            } catch { status = "打开失败：\(friendly(error))" }
         }
     }
 
@@ -360,8 +576,12 @@ final class FileBrowserModel {
         } catch { status = "写回失败：\(friendly(error))"; return false }
     }
 
+    /// Hang up, dropping anything still queued.
     func disconnect() {
+        transfers.cancelAll()
         connected = false
+        closeWhenIdle = false
+        if Self.live[host.alias] === self { Self.live[host.alias] = nil }
         Task { await conn.close() }
     }
 

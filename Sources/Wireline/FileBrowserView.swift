@@ -6,6 +6,7 @@ import WirelineCore
 /// right. Drag a row to the other pane (or double-click a file) to transfer.
 struct FileBrowserView: View {
     @Environment(HostStore.self) private var store
+    @Environment(SessionStore.self) private var sessions
     @Environment(Localizer.self) private var loc
     let host: Host
     var onClose: () -> Void
@@ -27,29 +28,30 @@ struct FileBrowserView: View {
                 localPane.frame(maxWidth: .infinity).fileCard()
             }
             .padding([.horizontal, .top], 12)
-            .padding(.bottom, model?.status == nil ? 12 : 0)
+            .padding(.bottom, hasFooter ? 0 : 12)
             if let s = model?.status {
                 Text(s).font(WL.small).foregroundStyle(WL.textDim)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 18).padding(.vertical, 7)
             }
-        }
-        .background {
-            // ⌘W closes the file browser (disconnecting), returning to the SSH
-            // terminal area on the tab that was active before. A hidden button so
-            // the shortcut works while this pane is up without stealing ⌘W from a
-            // focused terminal (terminals intercept it themselves).
-            Button("") { model?.disconnect(); onClose() }
-                .keyboardShortcut("w", modifiers: .command)
-                .hidden()
+            if !edits.isEmpty { RemoteEditStrip(edits: edits).padding(.horizontal, 12).padding(.top, 8) }
+            if let model, !model.transfers.items.isEmpty {
+                TransferPanel(queue: model.transfers).padding(.horizontal, 12).padding(.top, 8)
+            }
+            if hasFooter { Spacer().frame(height: 12) }
         }
         .task(id: host.alias) {
-            let m = FileBrowserModel(host: host, store: store)
+            let m = FileBrowserModel.obtain(host: host, store: store)
             m.onTransferComplete = { local.reload() }
             model = m
+            // Open where the terminal on this host is (unless something asked
+            // for a specific path, like a ⌘-clicked one).
+            if FileBrowserModel.pendingPath[host.alias] == nil, !m.connected, let dir = terminalDirectory {
+                FileBrowserModel.pendingPath[host.alias] = dir
+            }
             m.connect()
         }
-        .onDisappear { model?.disconnect() }
+        .onDisappear { model?.release() }
         .wlModal(isPresented: $showMkdir) {
             WLPromptSheet(title: loc("新建文件夹", "New Folder"), subtitle: host.alias + " · " + (model?.path ?? ""),
                           symbol: "folder.badge.plus", label: loc("名称", "Name"),
@@ -73,12 +75,31 @@ struct FileBrowserView: View {
         }
     }
 
+    private var edits: [RemoteEditStore.Edit] { RemoteEditStore.shared.edits(for: host.alias) }
+    private var hasFooter: Bool {
+        model?.status != nil || !edits.isEmpty || !(model?.transfers.items.isEmpty ?? true)
+    }
+
+    /// Where a terminal on this host is right now (the focused one first).
+    private var terminalDirectory: String? {
+        let onHost = sessions.sessions.filter { s in
+            if case .ssh = s.kind { return s.alias == host.alias && s.remoteDirectory != nil }
+            return false
+        }
+        let active = onHost.first { $0.id == sessions.activeID }
+        return (active ?? onHost.first)?.remoteDirectory
+    }
+
     // MARK: Remote pane
 
     private var remotePane: some View {
         VStack(spacing: 0) {
             paneHeader(title: loc("远程 · \(host.alias)", "Remote · \(host.alias)"), symbol: "server.rack", crumbs: model?.breadcrumbs.map { ($0.name, $0.path) } ?? [],
                        onCrumb: { model?.go(to: $0) }, onUp: { model?.goUp() }) {
+                if let dir = terminalDirectory, model?.connected == true {
+                    BracketButton(loc("终端目录", "Terminal Dir")) { model?.reveal(dir) }
+                        .help(loc("跳到终端当前所在的目录：\(dir)", "Go to the terminal's directory: \(dir)"))
+                }
                 BracketButton(loc("新建文件夹", "New Folder")) { showMkdir = true }
                 BracketButton(loc("刷新", "Refresh")) { model?.refresh() }
                 BracketButton(loc("断开", "Disconnect")) { model?.disconnect(); onClose() }
@@ -115,6 +136,36 @@ struct FileBrowserView: View {
         }
     }
 
+    private func remoteMenu(_ entry: SFTPEntry, model: FileBrowserModel) -> [WLMenuItem] {
+        let download = WLMenuItem.item(loc("下载到本地 →", "Download →"), systemImage: "arrow.down.circle") {
+            model.download(entry, toDirectory: local.url)
+        }
+        var items: [WLMenuItem]
+        if entry.isDir {
+            items = [.item(loc("打开", "Open"), systemImage: "folder") { model.open(entry) }, download]
+        } else {
+            let editors = RemoteEditStore.installedEditors()
+            let preferred = RemoteEditStore.preferredEditor
+            items = [
+                download,
+                .item(loc("用本地编辑器打开", "Edit Locally"), systemImage: "square.and.pencil") {
+                    model.editLocally(entry, with: nil)
+                },
+            ]
+            if !editors.isEmpty {
+                items.append(.submenu(loc("打开方式", "Open With"), systemImage: "app", editors.map { editor in
+                    .item(editor.name, checked: editor == preferred) { model.editLocally(entry, with: editor) }
+                }))
+            }
+            items.append(.item(loc("AI 改…", "AI edit…"), systemImage: "sparkles") { aiEditEntry = entry })
+        }
+        return items + [
+            .item(loc("重命名…", "Rename…"), systemImage: "pencil") { renaming = entry },
+            .divider,
+            .item(loc("删除", "Delete"), systemImage: "trash", destructive: true) { model.delete(entry) },
+        ]
+    }
+
     @ViewBuilder
     private func remoteRow(_ entry: SFTPEntry, model: FileBrowserModel) -> some View {
         let row = EntryRow(icon: entry.isDir ? "folder.fill" : "doc",
@@ -123,17 +174,7 @@ struct FileBrowserView: View {
                            detail: entry.isDir ? "" : humanSize(entry.size),
                            selected: remoteSel == entry.id)
             .draggable("R:\(entry.name)")
-            .wlContextMenu([
-                entry.isDir
-                    ? .item(loc("打开", "Open"), systemImage: "folder") { model.open(entry) }
-                    : .item(loc("下载到本地 →", "Download →"), systemImage: "arrow.down.circle") { model.download(entry, toDirectory: local.url) },
-                entry.isDir
-                    ? .divider
-                    : .item(loc("AI 改…", "AI edit…"), systemImage: "sparkles") { aiEditEntry = entry },
-                .item(loc("重命名…", "Rename…"), systemImage: "pencil") { renaming = entry },
-                .divider,
-                .item(loc("删除", "Delete"), systemImage: "trash", destructive: true) { model.delete(entry) }
-            ])
+            .wlContextMenu(remoteMenu(entry, model: model))
         // Single click selects immediately; double click opens (dir) or downloads (file).
         row.onTapGesture { remoteSel = entry.id }
             .simultaneousGesture(TapGesture(count: 2).onEnded {
@@ -162,12 +203,22 @@ struct FileBrowserView: View {
             var handled = false
             for item in items where item.hasPrefix("R:") {
                 let name = String(item.dropFirst(2))
-                if let e = model?.entries.first(where: { $0.name == name && !$0.isDir }) {
+                if let e = model?.entries.first(where: { $0.name == name }) {
                     model?.download(e, toDirectory: local.url); handled = true
                 }
             }
             return handled
         }
+    }
+
+    private func localMenu(_ entry: LocalEntry) -> [WLMenuItem] {
+        let open: [WLMenuItem] = entry.isDir ? [.item(loc("打开", "Open"), systemImage: "folder") { local.open(entry) }] : []
+        return open + [
+            .item(loc("上传到远程 ←", "Upload ←"), systemImage: "arrow.up.circle") { model?.upload(from: entry.url) },
+            .item(loc("在 Finder 中显示", "Reveal in Finder"), systemImage: "magnifyingglass") {
+                NSWorkspace.shared.activateFileViewerSelecting([entry.url])
+            },
+        ]
     }
 
     @ViewBuilder
@@ -178,14 +229,7 @@ struct FileBrowserView: View {
                            detail: entry.isDir ? "" : humanSize(entry.size),
                            selected: localSel == entry.id)
             .draggable("L:\(entry.url.path)")
-            .wlContextMenu([
-                entry.isDir
-                    ? .item(loc("打开", "Open"), systemImage: "folder") { local.open(entry) }
-                    : .item(loc("上传到远程 ←", "Upload ←"), systemImage: "arrow.up.circle") { model?.upload(from: entry.url) },
-                .item(loc("在 Finder 中显示", "Reveal in Finder"), systemImage: "magnifyingglass") {
-                    NSWorkspace.shared.activateFileViewerSelecting([entry.url])
-                }
-            ])
+            .wlContextMenu(localMenu(entry))
         row.onTapGesture { localSel = entry.id }
             .simultaneousGesture(TapGesture(count: 2).onEnded {
                 localSel = entry.id
@@ -283,5 +327,122 @@ private extension View {
     func fileCard() -> some View {
         let shape = RoundedRectangle(cornerRadius: WL.radius(12), style: .continuous)
         return clipShape(shape).wlCard()
+    }
+}
+
+/// Remote files open in a local editor, syncing on save.
+private struct RemoteEditStrip: View {
+    let edits: [RemoteEditStore.Edit]
+    @Environment(Localizer.self) private var loc
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(edits) { e in
+                HStack(spacing: 8) {
+                    Image(systemName: "square.and.pencil").font(.system(size: 11)).foregroundStyle(WL.green)
+                    Text(e.remotePath).font(WL.small).foregroundStyle(WL.textPrimary).lineLimit(1).truncationMode(.middle)
+                    Text(state(e)).font(WL.caption).foregroundStyle(e.error == nil ? WL.textDim : WL.red).lineLimit(1)
+                    Spacer()
+                    BracketButton(loc("停止同步", "Stop")) { RemoteEditStore.shared.stop(e.id) }
+                        .help(loc("不再把本地保存写回服务器（本地副本会删除）", "Stop copying saves back (the local copy is deleted)"))
+                }
+            }
+        }
+        .padding(.horizontal, 12).padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .wlCard()
+    }
+
+    private func state(_ e: RemoteEditStore.Edit) -> String {
+        if e.syncing { return loc("同步中…", "Saving…") }
+        if e.error != nil { return loc("写回失败", "Save failed") }
+        if let t = e.lastSynced {
+            return loc("已同步 ", "Saved ") + t.formatted(date: .omitted, time: .shortened)
+        }
+        return loc("保存后自动写回", "Saves sync back")
+    }
+}
+
+/// The transfer queue under the panes.
+private struct TransferPanel: View {
+    let queue: TransferQueue
+    @Environment(Localizer.self) private var loc
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                let running = queue.items.filter { $0.state == .running || $0.state == .queued }.count
+                Text(running > 0 ? loc("传输 · \(running) 个进行中", "Transfers · \(running) active")
+                                 : loc("传输", "Transfers"))
+                    .font(WL.small.weight(.semibold)).foregroundStyle(WL.textPrimary)
+                Spacer()
+                if queue.items.contains(where: { $0.state == .done }) {
+                    BracketButton(loc("清除已完成", "Clear Finished")) { queue.clearFinished() }
+                }
+            }
+            ScrollView {
+                LazyVStack(spacing: 4) {
+                    ForEach(queue.items) { item in row(item) }
+                }
+            }
+            .frame(maxHeight: 150)
+        }
+        .padding(.horizontal, 12).padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .wlCard()
+    }
+
+    private func row(_ item: TransferQueue.Item) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: item.direction == .upload ? "arrow.up" : "arrow.down")
+                .font(.system(size: 10, weight: .semibold)).foregroundStyle(WL.textDim).frame(width: 12)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack {
+                    Text(item.name).font(WL.small).foregroundStyle(WL.textPrimary).lineLimit(1).truncationMode(.middle)
+                    Spacer()
+                    Text(detail(item)).font(WL.caption)
+                        .foregroundStyle(isFailed(item) ? WL.red : WL.textDim).lineLimit(1)
+                }
+                GeometryReader { g in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(WL.textPrimary.opacity(0.08))
+                        Capsule().fill(isFailed(item) ? WL.red : WL.green)
+                            .frame(width: max(0, g.size.width * item.fraction))
+                    }
+                }
+                .frame(height: 3)
+                .animation(Motion.state, value: item.fraction)
+            }
+            switch item.state {
+            case .queued, .running:
+                Button { queue.pause(item.id) } label: { Image(systemName: "pause.fill").font(.system(size: 9)) }
+                    .buttonStyle(.wlIcon).help(loc("暂停", "Pause"))
+            case .paused, .failed:
+                Button { queue.resume(item.id) } label: { Image(systemName: "play.fill").font(.system(size: 9)) }
+                    .buttonStyle(.wlIcon).help(loc("继续（从断点）", "Resume"))
+            case .done:
+                Image(systemName: "checkmark").font(.system(size: 9, weight: .bold)).foregroundStyle(WL.green)
+                    .frame(width: 22)
+            }
+            Button { queue.remove(item.id) } label: { Image(systemName: "xmark").font(.system(size: 9)) }
+                .buttonStyle(.wlIcon).help(loc("移除", "Remove"))
+        }
+    }
+
+    private func isFailed(_ item: TransferQueue.Item) -> Bool {
+        if case .failed = item.state { return true }
+        return false
+    }
+
+    private func detail(_ item: TransferQueue.Item) -> String {
+        let bytes = ByteCountFormatter.string(fromByteCount: Int64(item.done), countStyle: .file)
+            + " / " + ByteCountFormatter.string(fromByteCount: Int64(item.total), countStyle: .file)
+        switch item.state {
+        case .queued:          return loc("等待中", "Queued")
+        case .running:         return bytes
+        case .paused:          return loc("已暂停 · ", "Paused · ") + bytes
+        case .done:            return ByteCountFormatter.string(fromByteCount: Int64(item.total), countStyle: .file)
+        case .failed(let msg): return msg
+        }
     }
 }
