@@ -108,6 +108,12 @@ let package = Package(
             name: "WirelineCoreTests",
             dependencies: ["WirelineCore"]
         ),
+        // The session agent as a real process over its socket.
+        .testTarget(
+            name: "WirelineAgentTests",
+            dependencies: ["WirelineAgent", "WirelineCore"],
+            swiftSettings: [.unsafeFlags(["-Xcc", "-I\(packageRoot)/Vendor/GhosttyVt/include"])]
+        ),
         // libghostty engine end-to-end (opens a window + shell; skipped unless
         // WIRELINE_GHOSTTY_HARNESS=1).
         .testTarget(

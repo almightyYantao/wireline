@@ -36,7 +36,37 @@ final class VTTerminal {
         _ = ghostty_terminal_set(t, GHOSTTY_TERMINAL_OPT_WRITE_PTY, unsafeBitCast(write, to: UnsafeRawPointer.self))
     }
 
+    /// A terminal restored from a complete snapshot (tests, debugging).
+    init?(snapshot: [UInt8]) {
+        var decoder: GhosttySnapshotDecoder?
+        let made = snapshot.withUnsafeBufferPointer { ghostty_snapshot_decoder_new_buf(nil, &decoder, $0.baseAddress, $0.count) }
+        guard made == GHOSTTY_SUCCESS, let decoder else { return nil }
+        defer { ghostty_snapshot_decoder_free(decoder) }
+        var t: GhosttyTerminal?
+        guard ghostty_snapshot_decoder_decode(decoder, &t) == GHOSTTY_SUCCESS, let t else { return nil }
+        terminal = t
+    }
+
     deinit { ghostty_terminal_free(terminal) }
+
+    /// The active screen as plain text, scrollback included.
+    func plainText() -> String {
+        guard let terminal else { return "" }
+        var opts = GhosttyFormatterTerminalOptions()
+        opts.size = MemoryLayout<GhosttyFormatterTerminalOptions>.size
+        opts.emit = GHOSTTY_FORMATTER_FORMAT_PLAIN
+        opts.trim = true
+        opts.extra.size = MemoryLayout<GhosttyFormatterTerminalExtra>.size
+        opts.extra.screen.size = MemoryLayout<GhosttyFormatterScreenExtra>.size
+        var f: GhosttyFormatter?
+        guard ghostty_formatter_terminal_new(nil, &f, terminal, opts) == GHOSTTY_SUCCESS, let f else { return "" }
+        defer { ghostty_formatter_free(f) }
+        var ptr: UnsafeMutablePointer<UInt8>?
+        var len = 0
+        guard ghostty_formatter_format_alloc(f, nil, &ptr, &len) == GHOSTTY_SUCCESS, let ptr else { return "" }
+        defer { ghostty_free(nil, ptr, len) }
+        return String(decoding: UnsafeBufferPointer(start: ptr, count: len), as: UTF8.self)
+    }
 
     func write(_ bytes: UnsafeBufferPointer<UInt8>) {
         guard let terminal, let base = bytes.baseAddress, !bytes.isEmpty else { return }
@@ -48,6 +78,41 @@ final class VTTerminal {
     func resize(cols: UInt16, rows: UInt16, cellWidth: UInt32 = 0, cellHeight: UInt32 = 0) {
         guard let terminal else { return }
         _ = ghostty_terminal_resize(terminal, max(cols, 1), max(rows, 1), cellWidth, cellHeight)
+    }
+
+    /// Scrollback kept (the app's `scrollback-limit`).
+    func setScrollback(bytes: Int) {
+        guard let terminal else { return }
+        var b = bytes
+        _ = ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_BYTES, &b)
+    }
+
+    /// The colors the attached app draws with, for OSC 10/11/12 replies.
+    func setColors(foreground: (UInt8, UInt8, UInt8), background: (UInt8, UInt8, UInt8),
+                   cursor: (UInt8, UInt8, UInt8)?) {
+        guard let terminal else { return }
+        var fg = GhosttyColorRgb(r: foreground.0, g: foreground.1, b: foreground.2)
+        var bg = GhosttyColorRgb(r: background.0, g: background.1, b: background.2)
+        _ = ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_COLOR_FOREGROUND, &fg)
+        _ = ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_COLOR_BACKGROUND, &bg)
+        if let cursor {
+            var c = GhosttyColorRgb(r: cursor.0, g: cursor.1, b: cursor.2)
+            _ = ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_COLOR_CURSOR, &c)
+        } else {
+            _ = ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_COLOR_CURSOR, nil)
+        }
+    }
+
+    /// OSC 0/2 title, nil when unset.
+    var title: String? { string(GHOSTTY_TERMINAL_DATA_TITLE) }
+    /// OSC 7 (or 9 / 1337) working directory as reported — raw, often a file:// URI.
+    var reportedDirectory: String? { string(GHOSTTY_TERMINAL_DATA_PWD) }
+
+    private func string(_ data: GhosttyTerminalData) -> String? {
+        guard let terminal else { return nil }
+        var s = GhosttyString(ptr: nil, len: 0)
+        guard ghostty_terminal_get(terminal, data, &s) == GHOSTTY_SUCCESS, let ptr = s.ptr, s.len > 0 else { return nil }
+        return String(decoding: UnsafeBufferPointer(start: ptr, count: s.len), as: UTF8.self)
     }
 
     /// The complete state as a snapshot (`snapshot.h`), nil on failure.
