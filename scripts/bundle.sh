@@ -24,12 +24,16 @@ BIN="$(swift build -c "${CONFIG}" --product "${APP_NAME}" --show-bin-path)/${APP
 # The session agent (sessions that outlive the app), next to the app's binary.
 swift build -c "${CONFIG}" --product wireline-agent
 AGENT_BIN="$(dirname "${BIN}")/wireline-agent"
+# What MCP clients (Claude Code, Codex) launch to reach the app.
+swift build -c "${CONFIG}" --product wireline-mcp
+MCP_BIN="$(dirname "${BIN}")/wireline-mcp"
 
 echo "▸ Assembling ${OUT}…"
 rm -rf "${OUT}"
 mkdir -p "${OUT}/Contents/MacOS" "${OUT}/Contents/Resources"
 cp "${BIN}" "${OUT}/Contents/MacOS/${APP_NAME}"
 cp "${AGENT_BIN}" "${OUT}/Contents/MacOS/wireline-agent"
+cp "${MCP_BIN}" "${OUT}/Contents/MacOS/wireline-mcp"
 
 # Icon is cached so repeated (dev) bundles stay fast; FORCE_ICON=1 rebuilds it.
 ICNS_CACHE="build/AppIcon.icns"

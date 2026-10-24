@@ -19,6 +19,9 @@ public final class AgentConnection: @unchecked Sendable {
     public private(set) var isOpen = true
 
     public var onFrame: ((AgentFrame) -> Void)?
+    /// Raw mode: when set, incoming bytes go here unframed (and `onFrame` is
+    /// never called). The MCP bridge carries newline-delimited JSON this way.
+    public var onBytes: ((ArraySlice<UInt8>) -> Void)?
     /// The peer hung up, broke the protocol, or fell too far behind.
     public var onClose: (() -> Void)?
     public var maxBuffered = 256 << 20
@@ -54,8 +57,13 @@ public final class AgentConnection: @unchecked Sendable {
     }
 
     public func send(_ frame: AgentFrame) {
+        send(bytes: frame.encoded())
+    }
+
+    /// Queue raw bytes (raw mode's counterpart of `send(_:)`).
+    public func send<C: Collection>(bytes: C) where C.Element == UInt8 {
         guard isOpen else { return }
-        pending.append(contentsOf: frame.encoded())
+        pending.append(contentsOf: bytes)
         if pending.count - pendingStart > maxBuffered { close(); return }
         flush()
     }
@@ -75,6 +83,7 @@ public final class AgentConnection: @unchecked Sendable {
         let cb = onClose
         onClose = nil
         onFrame = nil
+        onBytes = nil
         cb?()
     }
 
@@ -88,7 +97,9 @@ public final class AgentConnection: @unchecked Sendable {
         var buf = [UInt8](repeating: 0, count: 64 * 1024)
         while isOpen {
             let n = buf.withUnsafeMutableBytes { read(fd, $0.baseAddress, $0.count) }
-            if n > 0 {
+            if n > 0, let onBytes {
+                onBytes(buf[0..<n])
+            } else if n > 0 {
                 do {
                     for frame in try reader.feed(buf[0..<n]) {
                         onFrame?(frame)

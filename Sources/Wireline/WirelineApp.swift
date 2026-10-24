@@ -19,6 +19,9 @@ struct WirelineApp: App {
         // No-op when InjectionIII isn't present, and compiled out of release.
         Bundle(path: "/Applications/InjectionIII.app/Contents/Resources/macOSInjection.bundle")?.load()
         #endif
+        // Listen for MCP clients as early as possible: `wireline-mcp` may have
+        // launched us and is waiting. Tools answer once the stores are attached.
+        MCPServerHost.shared.start()
     }
 
     var body: some Scene {
@@ -69,6 +72,7 @@ struct WirelineApp: App {
                     if store.autoCheckOnLaunch { await store.checkAll() }
                     store.startMonitoring()
                     store.startAutoBackup()
+                    MCPServerHost.shared.attach(hosts: store, sessions: sessions)
                     // Reconnect enabled MCP servers so their tools are available to the AI.
                     await MCPStore.shared.connectEnabled()
                     // Float the desktop pet on launch (unless the user disabled it).

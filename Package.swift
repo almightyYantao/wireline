@@ -39,6 +39,7 @@ let package = Package(
     products: [
         .executable(name: "Wireline", targets: ["Wireline"]),
         .executable(name: "wireline-agent", targets: ["WirelineAgent"]),
+        .executable(name: "wireline-mcp", targets: ["WirelineMCP"]),
         .library(name: "WirelineCore", targets: ["WirelineCore"])
     ],
     dependencies: [
@@ -104,6 +105,12 @@ let package = Package(
             dependencies: ["WirelineCore", "CGhosttyVt"],
             swiftSettings: [.unsafeFlags(["-Xcc", "-I\(packageRoot)/Vendor/GhosttyVt/include"])]
         ),
+        // What MCP clients launch over stdio: relays to the app's socket
+        // (docs/design/mcp-server.md). Ships as Contents/MacOS/wireline-mcp.
+        .executableTarget(
+            name: "WirelineMCP",
+            dependencies: ["WirelineCore"]
+        ),
         .testTarget(
             name: "WirelineCoreTests",
             dependencies: ["WirelineCore"]
@@ -118,7 +125,7 @@ let package = Package(
         // WIRELINE_GHOSTTY_HARNESS=1).
         .testTarget(
             name: "WirelineGhosttyHarness",
-            dependencies: ["Wireline", "GhosttyKit", "WirelineAgent", .product(name: "SwiftTerm", package: "SwiftTerm")]
+            dependencies: ["Wireline", "GhosttyKit", "WirelineAgent", "WirelineMCP", .product(name: "SwiftTerm", package: "SwiftTerm")]
         )
     ]
 )

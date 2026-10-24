@@ -1,6 +1,6 @@
 # 对外开放 MCP + 可还原脱敏 设计
 
-> 状态：§9 已拍板（2026-10-24，全部按建议）；P1 已实现（分支 `privacy-masker`）。
+> 状态：§9 已拍板（2026-10-24，全部按建议）；P1 已实现（`privacy-masker`，c0d6d54），P2 已实现（分支 `mcp-server`）。
 > 参考：Netcatty（GPL-3.0，只借思路不搬代码）的 `electron/mcp/`、`docs/features/external-mcp-privacy.md`。
 
 ## 0. 目标与非目标
@@ -37,12 +37,19 @@ Claude Code / Codex ──stdio(JSON-RPC 行)──▶ wireline-mcp（垫片，C
 - Unix socket 不监听网络端口，不需要往磁盘写 token；连接时用现成的 `PeerIdentity.check(fd:)` 校验对方是同一 Team ID 签名的 `wireline-mcp`（会话常驻 agent 已经这样做了）。
 - **一个 socket 连接就是一个 MCP 会话**，脱敏作用域、审批里"本次连接不再询问"的范围都自然绑定在连接上。
 
-**垫片行为**
+**垫片行为**（P2 实现）
 
-- 启动后连接 socket。连不上时，用 `open -gj -b <bundle id>` 在后台拉起 App，最多等 15 秒（见 §9 问题 2）。
-- 连上后先发 `{"wl":"hello","v":1,"pid":…}`，App 回 `ok` 或拒绝原因（未开启对外 MCP、版本不匹配），然后双向逐行转发。
-- App 未开启对外 MCP 时，垫片照常完成 `initialize`，`tools/list` 只返回一个 `wireline_status` 工具，调用时说明"请在 Wireline 设置 → AI → 对外开放 中开启"。这样外部 Agent 能把原因告诉用户，不会只报一句"server 启动失败"。
-- socket 路径沿用 `sessions/sessions-v1.sock` 的做法，路径超过 `sun_path` 长度时退回短路径（`SSHAgentController.socketPath()` 已有这个逻辑）。
+- 启动后连接 socket。连不上时用 `open -g` 在后台拉起 App（不抢焦点），最多等 15 秒。
+- 连上后先用 `PeerIdentity` 校验对方确实是 Wireline，然后双向转发字节，不做额外握手（两边在同一个包里，版本号写在 socket 文件名里）。
+- 还是连不上，或者对方不是可信进程：垫片自己扮演一个最小的 MCP server（`MCPBridge.offlineReply`），只提供 `wireline_status`，说明原因。客户端能把原因转告用户，而不是只报"server 启动失败"。
+- 环境变量 `WIRELINE_MCP_SOCKET` 可以指定 socket 路径（测试、开发版用），设了它就不会去拉起 App。
+
+**App 侧**（P2 实现）
+
+- App 一启动（`WirelineApp.init`）就监听，不管开关开没开。关闭时 `tools/list` 只返回 `wireline_status`，调用会提示用户去设置里打开；切换开关时给所有连接发 `notifications/tools/list_changed`，客户端不用重连。
+- 监听前先试连一次：如果已经有别的 Wireline 在服务（开发版和正式版同时开着），就不去抢 socket，在设置里显示原因。
+- 每个连接在 `initialize` 时固定隐私档位和 masker；之后设置里改了档位，调用一律报错要求重连（fail closed）。参数先还原、带不属于本连接的占位符直接拒绝，结果脱敏后再发出。
+- socket 读写复用 `AgentConnection`，加了按原始字节收发的模式（`onBytes` / `send(bytes:)`）。
 
 ---
 

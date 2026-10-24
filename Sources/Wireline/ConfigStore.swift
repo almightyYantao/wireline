@@ -400,6 +400,8 @@ extension ConfigStore {
             flag("ai-redact", m, "Deprecated, use ai-privacy", default: true,
                  get: { _ in ai.privacyLevel != .off },
                  set: { ai.privacyLevel = $1 ? (ai.privacyLevel == .off ? .secrets : ai.privacyLevel) : .off }),
+            flag("mcp-server", m, "Let MCP clients (Claude Code, Codex …) use Wireline through wireline-mcp", default: false,
+                 get: { _ in MCPServerSettings.shared.enabled }, set: { MCPServerSettings.shared.enabled = $1 }),
             flag("ai-agent-in-terminal", m, "Agent runs commands visibly in the terminal (false = out-of-band)",
                  default: true, get: { _ in ai.agentInTerminal }, set: { ai.agentInTerminal = $1 }),
             flag("ai-agent-read-only", m, "Agent may only run read-only commands", default: false,
