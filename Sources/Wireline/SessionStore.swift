@@ -94,13 +94,13 @@ final class TerminalSession: Identifiable {
     /// Run a command out-of-band and capture its combined output — for the AI
     /// agent mode. SSH sessions reuse the ControlMaster socket (no re-auth, no
     /// disturbance to the interactive terminal); local shells run via zsh.
-    func runCapturing(_ command: String) async -> String {
+    func runCapturing(_ command: String, timeout: TimeInterval = 1800) async -> String {
         switch kind {
         case .ssh(let alias, _, _, _, _):
             return await Self.exec(["/usr/bin/ssh", "-S", controlSocket, "-o", "BatchMode=yes", alias, command],
-                                   timeout: 1800, useAgent: true)
+                                   timeout: timeout, useAgent: true)
         case .localShell:
-            return await Self.exec(["/bin/zsh", "-lc", command], timeout: 1800)
+            return await Self.exec(["/bin/zsh", "-lc", command], timeout: timeout)
         case .sftp:
             return "(SFTP 会话不支持执行命令)"
         case .rdp:
@@ -171,6 +171,11 @@ final class TerminalSession: Identifiable {
                 let data = pipe.fileHandleForReading.readDataToEndOfFile()
                 p.waitUntilExit()
                 let text = String(data: data, encoding: .utf8) ?? ""
+                // Our terminate() above: say so, like runInTerminalCapturing does.
+                if p.terminationReason == .uncaughtSignal, p.terminationStatus == SIGTERM {
+                    cont.resume(returning: text + (text.isEmpty ? "" : "\n") + "(执行超时)")
+                    return
+                }
                 cont.resume(returning: text.isEmpty ? "(无输出，退出码 \(p.terminationStatus))" : text)
             }
         }

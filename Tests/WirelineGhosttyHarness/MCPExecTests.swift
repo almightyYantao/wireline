@@ -75,6 +75,30 @@ final class MCPExecTests: XCTestCase {
         XCTAssertEqual(Set([a, b]), [.allow, .deny])
     }
 
+    func testTheClockStartsWhenAQuestionIsShown() async throws {
+        let center = MCPApprovalCenter.shared
+        center.timeout = 0.4
+        let a1 = approval(), a2 = approval()
+        let first = Task { await center.ask(a1) }
+        let second = Task { await center.ask(a2) }
+        while center.queue.count < 2 { try await Task.sleep(for: .milliseconds(10)) }
+        try await Task.sleep(for: .milliseconds(300))
+        center.answer(a1.id, .allow)                // the second has waited 0.3 s, but only now shows
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(center.current?.id, a2.id, "timed out while still queued")
+        let (x, y) = (await first.value, await second.value)
+        XCTAssertEqual([x, y], [.allow, .deny])
+    }
+
+    func testADisconnectWithdrawsItsQuestions() async throws {
+        let conn = MCPServerConnection { _ in }
+        let pending = Task { await MCPServerTools.gate(.ask(dangerous: false), key: "k", conn: conn, approval) }
+        while MCPApprovalCenter.shared.current == nil { try await Task.sleep(for: .milliseconds(10)) }
+        conn.closed()
+        XCTAssertNil(MCPApprovalCenter.shared.current)
+        if case .stop = await pending.value {} else { XCTFail("a withdrawn question must not go ahead") }
+    }
+
     func testResolveTargets() {
         let hosts = [Host(alias: "web1", group: "prod"), Host(alias: "web2", group: "prod"),
                      Host(alias: "db", group: "prod"), Host(alias: "win", group: "prod", hostProtocol: .rdp),
@@ -115,16 +139,36 @@ final class MCPExecTests: XCTestCase {
         let existing = dir.appendingPathComponent("it's.conf")
         try "old\n".write(to: existing, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o640], ofItemAtPath: existing.path)
-        XCTAssertEqual(try run(MCPServerTools.fileWriteScript(path: existing.path), input: "new 内容\n"), 0)
+        XCTAssertEqual(try run(MCPServerTools.fileWriteScript(path: existing.path, bytes: "new 内容\n".utf8.count),
+                               input: "new 内容\n"), 0)
         XCTAssertEqual(try String(contentsOf: existing, encoding: .utf8), "new 内容\n")
         let perms = try FileManager.default.attributesOfItem(atPath: existing.path)[.posixPermissions] as? Int
         XCTAssertEqual(perms, 0o640)
 
         let fresh = dir.appendingPathComponent("fresh.txt")
-        XCTAssertEqual(try run(MCPServerTools.fileWriteScript(path: fresh.path), input: "hello"), 0)
+        XCTAssertEqual(try run(MCPServerTools.fileWriteScript(path: fresh.path, bytes: 5), input: "hello"), 0)
         XCTAssertEqual(try String(contentsOf: fresh, encoding: .utf8), "hello")
 
         let blocked = dir.appendingPathComponent("no-such-dir/x")
-        XCTAssertNotEqual(try run(MCPServerTools.fileWriteScript(path: blocked.path), input: "x"), 0)
+        XCTAssertNotEqual(try run(MCPServerTools.fileWriteScript(path: blocked.path, bytes: 1), input: "x"), 0)
+
+        // The link dropped: fewer bytes than promised leaves the target as it was.
+        XCTAssertEqual(try run(MCPServerTools.fileWriteScript(path: existing.path, bytes: 1000), input: "partial"), 5)
+        XCTAssertEqual(try String(contentsOf: existing, encoding: .utf8), "new 内容\n")
+    }
+
+    func testTildeMeansTheLoginDirectory() throws {
+        XCTAssertEqual(MCPServerTools.remotePath("~"), "\"$HOME\"")
+        XCTAssertEqual(MCPServerTools.remotePath("~/a b/it's"), #""$HOME"/'a b/it'\''s'"#)
+        XCTAssertEqual(MCPServerTools.remotePath("/etc/~x"), "'/etc/~x'")
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/bin/sh")
+        p.arguments = ["-c", "printf %s " + MCPServerTools.remotePath("~/x")]
+        let out = Pipe()
+        p.standardOutput = out
+        try p.run()
+        p.waitUntilExit()
+        XCTAssertEqual(String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self),
+                       FileManager.default.homeDirectoryForCurrentUser.path + "/x")
     }
 }

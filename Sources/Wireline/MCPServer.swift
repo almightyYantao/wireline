@@ -156,10 +156,15 @@ final class MCPServerConnection {
         }
     }
 
-    /// The client went away: its background commands go with it.
+    private(set) var isClosed = false
+
+    /// The client went away: its background commands and unanswered
+    /// approvals go with it.
     func closed() {
+        isClosed = true
         for job in jobs.values { job.stop() }
         jobs = [:]
+        MCPApprovalCenter.shared.withdraw(owner: ObjectIdentifier(self))
     }
 
     func notify(_ method: String) {

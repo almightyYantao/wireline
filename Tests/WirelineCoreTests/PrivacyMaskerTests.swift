@@ -151,4 +151,10 @@ final class PrivacyMaskerTests: XCTestCase {
         for i in 0..<PrivacyMasker.maxEntries { _ = m.mask("token=v\(i)x") }
         XCTAssertEqual(m.mask("token=onemore"), "token=\(PrivacyMasker.irreversible)")
     }
+
+    func testOverLimitAddressesAreNotSentInTheClear() {
+        let m = masker(.all)
+        for i in 0..<PrivacyMasker.maxEntries { _ = m.mask("token=v\(i)x") }
+        XCTAssertEqual(m.mask("ping 203.0.113.9"), "ping \(PrivacyMasker.irreversible)")
+    }
 }

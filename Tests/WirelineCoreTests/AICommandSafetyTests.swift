@@ -13,7 +13,9 @@ final class AICommandSafetyTests: XCTestCase {
                   "systemctl status nginx", "journalctl -u nginx -n 50", "curl -s https://example.com/health",
                   "curl -sI -X HEAD https://example.com", "wget -qO- https://example.com", "ip addr show",
                   "ip route", "free -m && uptime", "LANG=C df -h", "find /var/log -name '*.gz' -mtime +7",
-                  "echo hi | tee", "sort -n -k2 file", "mount", "hostname -f", "date +%s", "dmesg -T | tail"] {
+                  "echo hi | tee", "sort -n -k2 file", "mount", "hostname -f", "date +%s", "dmesg -T | tail",
+                  "LC_ALL=C sort file", "rg -n error /var/log", "fd -e log . /var/log", "sed -n '/error/p' f",
+                  "sed 's/foo/bar/g' f", "wget -O - https://x", "curl -sS https://x | jq .", "git diff HEAD~1"] {
             XCTAssertTrue(AICommandSafety.isReadOnly(c), "should be read-only: \(c)")
         }
     }
@@ -32,7 +34,14 @@ final class AICommandSafetyTests: XCTestCase {
             "ifconfig eth0 down", "mount /dev/sdb1 /mnt", "hostname newname", "date -s '2020-01-01'",
             "dmesg -c", "journalctl --vacuum-size=100M", "docker image rm nginx", "docker image prune -a",
             "kubectl config use-context prod", "git branch -D main", "git branch feature", "git remote add x url",
-            "git config user.name x", "rm -f /tmp/x", "systemctl restart nginx", "docker rm -f web"
+            "git config user.name x", "rm -f /tmp/x", "systemctl restart nginx", "docker rm -f web",
+            // Found in review: readers that run programs, or flags that write.
+            "fd . /srv -t f -x rm", "fd -X rm", "rg --pre=./evil foo", "sed '1e rm -rf ~/data' /etc/hostname",
+            "sed 's/a/b/e' f", "sed -n 's/a/b/w out' f", "sed -f script.sed f", "GIT_EXTERNAL_DIFF=rm git diff",
+            "LD_PRELOAD=/tmp/x.so ls", "PAGER=rm git log", "wget -qO- --method=DELETE http://api/v1/users/1",
+            "wget -qO- --post-data=a http://x", "wget -O- -O file http://x", "curl -c ~/.bashrc http://x",
+            "curl -D out http://x", "curl --trace out http://x", "curl -sc jar http://x", "git log --output=/tmp/x",
+            "mount -a", "date 010100002020"
         ] {
             XCTAssertFalse(AICommandSafety.isReadOnly(c), "should not be read-only: \(c)")
         }

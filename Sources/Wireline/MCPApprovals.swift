@@ -19,6 +19,8 @@ struct MCPApproval: Identifiable, Equatable {
     /// The AI's impact assessment of a dangerous command, when it arrives.
     var review: String?
     var sessionID: UUID?
+    /// The MCP connection asking; its questions are withdrawn when it closes.
+    var owner: ObjectIdentifier?
 }
 
 /// One question at a time, asked on the notch island, as a card in the main
@@ -34,6 +36,9 @@ final class MCPApprovalCenter {
 
     @ObservationIgnored private var waiters: [UUID: CheckedContinuation<IslandDecision, Never>] = [:]
     @ObservationIgnored var timeout: TimeInterval = 120
+    /// Questions whose clock is running: it starts when one is shown, not
+    /// while it waits behind another.
+    @ObservationIgnored private var timed: Set<UUID> = []
 
     func ask(_ approval: MCPApproval) async -> IslandDecision {
         await withCheckedContinuation { cont in
@@ -41,16 +46,17 @@ final class MCPApprovalCenter {
             queue.append(approval)
             if queue.count == 1 { present() }
             if approval.dangerous { fetchReview(approval) }
-            let id = approval.id, wait = timeout
-            Task { [weak self] in
-                try? await Task.sleep(for: .seconds(wait))
-                self?.answer(id, .deny)
-            }
         }
+    }
+
+    /// Deny everything still pending from one client (it disconnected).
+    func withdraw(owner: ObjectIdentifier) {
+        for a in queue where a.owner == owner { answer(a.id, .deny) }
     }
 
     func answer(_ id: UUID, _ decision: IslandDecision) {
         guard let cont = waiters.removeValue(forKey: id) else { return }
+        timed.remove(id)
         queue.removeAll { $0.id == id }
         IslandCenter.shared.remove(islandID(id))
         cont.resume(returning: decision)
@@ -61,6 +67,13 @@ final class MCPApprovalCenter {
 
     private func present() {
         guard let a = current else { return }
+        if timed.insert(a.id).inserted {
+            let id = a.id, wait = timeout
+            Task { [weak self] in
+                try? await Task.sleep(for: .seconds(wait))
+                self?.answer(id, .deny)
+            }
+        }
         let loc = Localizer.shared
         let note = a.review ?? a.detail.map { String($0.prefix(300)) }
         let confirmation = IslandConfirmation(kind: a.dangerous ? .dangerousCommand : .toolCall,

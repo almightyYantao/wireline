@@ -130,8 +130,8 @@ extension MCPServerTools {
                            hosts: HostStore, sessions: SessionStore) async -> Outcome? {
         let host = MCPServerHost.shared
         switch name {
-        case "file_list":      return await remoteRead(hosts, args, script: { "ls -la -- \(shellQuote($0))" })
-        case "file_stat":      return await remoteRead(hosts, args, script: { "stat -- \(shellQuote($0)) 2>/dev/null || ls -ld -- \(shellQuote($0))" })
+        case "file_list":      return await remoteRead(hosts, args, script: { "ls -la -- \(remotePath($0))" })
+        case "file_stat":      return await remoteRead(hosts, args, script: { "stat -- \(remotePath($0)) 2>/dev/null || ls -ld -- \(remotePath($0))" })
         case "file_mkdir":     return await fileMkdir(hosts, args, conn: conn)
         case "file_rename":    return await fileRename(hosts, args, conn: conn)
         case "file_delete":    return await fileDelete(hosts, args, conn: conn)
@@ -143,7 +143,7 @@ extension MCPServerTools {
         case "forward_list":   return forwardList(host.forwards)
         case "forward_create": return await forwardCreate(hosts, host.forwards, args, conn: conn)
         case "forward_start":  return await forwardStart(hosts, host.forwards, args, conn: conn)
-        case "forward_stop":   return forwardStop(host.forwards, args)
+        case "forward_stop":   return await forwardStop(host.forwards, args, conn: conn)
         case "snippet_list":   return snippetList(host.snippets, query: args["query"] as? String)
         case "snippet_run":    return await snippetRun(host.snippets, sessions, args, conn: conn)
         case "host_add":       return await hostAdd(hosts, args, conn: conn)
@@ -200,7 +200,7 @@ extension MCPServerTools {
                         subject: path, dangerous: false, canAlwaysAllow: false)
         })
         if let stop { return stop }
-        return done(await remote(h.alias, "mkdir -p -- \(shellQuote(path))"), "Created \(h.alias):\(path).", audit: audit!)
+        return done(await remote(h.alias, "mkdir -p -- \(remotePath(path))"), "Created \(h.alias):\(path).", audit: audit!)
     }
 
     private static func fileRename(_ hosts: HostStore, _ args: [String: Any], conn: MCPServerConnection) async -> Outcome {
@@ -214,7 +214,7 @@ extension MCPServerTools {
                         subject: "\(from)\n→ \(to)", dangerous: false, canAlwaysAllow: false)
         })
         if let stop { return stop }
-        let script = "[ -e \(shellQuote(to)) ] && { echo 'target exists'; exit 3; }; mv -- \(shellQuote(from)) \(shellQuote(to))"
+        let script = "[ -e \(remotePath(to)) ] && { echo 'target exists'; exit 3; }; mv -- \(remotePath(from)) \(remotePath(to))"
         return done(await remote(h.alias, script), "Renamed \(h.alias):\(from) → \(to).", audit: audit!)
     }
 
@@ -232,8 +232,8 @@ extension MCPServerTools {
                         subject: path, dangerous: recursive, canAlwaysAllow: false)
         })
         if let stop { return stop }
-        let script = recursive ? "rm -rf -- \(shellQuote(path))"
-                               : "[ -d \(shellQuote(path)) ] && { echo 'is a directory (pass recursive=true)'; exit 3; }; rm -f -- \(shellQuote(path))"
+        let script = recursive ? "rm -rf -- \(remotePath(path))"
+                               : "[ -d \(remotePath(path)) ] && { echo 'is a directory (pass recursive=true)'; exit 3; }; rm -f -- \(remotePath(path))"
         return done(await remote(h.alias, script), "Deleted \(h.alias):\(path).", audit: audit!)
     }
 
@@ -372,11 +372,17 @@ extension MCPServerTools {
         return withAudit(Outcome(text: "\(f.id.uuidString): \(forwardState(s, f))"), audit!)
     }
 
-    private static func forwardStop(_ store: ForwardStore?, _ args: [String: Any]) -> Outcome {
+    private static func forwardStop(_ store: ForwardStore?, _ args: [String: Any], conn: MCPServerConnection) async -> Outcome {
         let (s, f): (ForwardStore, PortForward)
         switch forward(store, args) { case .success(let x): (s, f) = x; case .failure(let o): return o }
+        // Stopping the user's own tunnel (a DB tunnel, a proxy) is a change like starting one.
+        let (audit, stop) = pass(await gate(MCPPolicy.change(mode: mode), key: "fwd-stop|\(f.id)", conn: conn) {
+            MCPApproval(client: conn.clientName, title: loc.t("停止端口转发", "Stop a port forward"),
+                        subject: "\(f.label ?? f.hostAlias): \(f.localPort) → \(f.hostAlias)", dangerous: false, canAlwaysAllow: true)
+        })
+        if let stop { return stop }
         s.stop(f)
-        return withAudit(Outcome(text: "Stopped \(f.id.uuidString)."), "auto")
+        return withAudit(Outcome(text: "Stopped \(f.id.uuidString)."), audit!)
     }
 
     // MARK: snippets

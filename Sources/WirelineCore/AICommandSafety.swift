@@ -91,8 +91,13 @@ public enum AICommandSafety {
         guard !segments.isEmpty else { return false }
         for seg in segments {
             let tokens = seg.split(whereSeparator: { $0 == " " || $0 == "\t" }).map(String.init)
-            // Leading `VAR=value` assignments are fine; the command comes after.
+            // Leading `VAR=value` assignments come before the command. Only
+            // harmless ones: LD_PRELOAD, GIT_EXTERNAL_DIFF, PAGER … run code.
             guard let i = tokens.firstIndex(where: { !$0.contains("=") }) else { return false }
+            for a in tokens[..<i] {
+                let name = String(a.prefix { $0 != "=" })
+                guard safeEnvironment.contains(name) || name.hasPrefix("LC_") else { return false }
+            }
             let base = (tokens[i].lowercased() as NSString).lastPathComponent
             guard readOnlyCommands.contains(base) else { return false }
             let args = Array(tokens[(i + 1)...])
@@ -105,6 +110,12 @@ public enum AICommandSafety {
         return true
     }
 
+    private static let safeEnvironment: Set<String> = ["LANG", "LANGUAGE", "TZ", "TERM", "COLUMNS", "LINES", "NO_COLOR"]
+
+    /// A sed script that runs a command (`e`, `s///e`) or writes a file (`w`, `W`, `s///w`).
+    private static let sedExecutesOrWrites = try! NSRegularExpression(
+        pattern: #"(^|['"\[;{}\n0-9$!,])\s*[ewW](\s|$|[;}'"])|/[gIpimM0-9]*[ewW](\s|$|[;}'"])"#)
+
     /// Per-command flags and forms that turn an allowlisted reader into a writer.
     private static func argumentsOnlyRead(_ base: String, _ args: [String]) -> Bool {
         // Case matters (curl -X is the method, -x a proxy), so flags are
@@ -116,7 +127,20 @@ public enum AICommandSafety {
         let positional = args.filter { !$0.hasPrefix("-") }
         switch base {
         case "sed":
-            return !args.contains { $0.hasPrefix("-i") || $0.hasPrefix("--in-place") }
+            if args.contains(where: { $0.hasPrefix("-i") || $0.hasPrefix("--in-place") }) { return false }
+            // A script file could say anything.
+            if has(["-f", "--file"]) { return false }
+            return !args.contains { a in
+                !a.hasPrefix("-") && sedExecutesOrWrites.firstMatch(in: a, range: NSRange(a.startIndex..., in: a)) != nil
+            }
+        case "fd":
+            if has(["-x", "--exec", "-X", "--exec-batch"]) { return false }
+            return !args.contains { $0.hasPrefix("-") && !$0.hasPrefix("--") && $0.dropFirst().contains { "xX".contains($0) } }
+        case "rg":
+            // --pre runs a program on every file searched.
+            return !has(["--pre"])
+        case "ag":
+            return !has(["--pager"])
         case "env":
             // `env cmd …` runs cmd.
             return !args.contains { !$0.hasPrefix("-") && !$0.contains("=") }
@@ -131,11 +155,13 @@ public enum AICommandSafety {
         case "curl":
             let writes: Set<String> = ["-d", "--data", "--data-raw", "--data-binary", "--data-urlencode", "--data-ascii",
                                        "--json", "-F", "--form", "--form-string", "-T", "--upload-file", "-o", "--output",
-                                       "--output-dir", "-O", "--remote-name", "--remote-name-all", "-K", "--config"]
+                                       "--output-dir", "-O", "--remote-name", "--remote-name-all", "-K", "--config",
+                                       "-c", "--cookie-jar", "-D", "--dump-header", "--trace", "--trace-ascii",
+                                       "--stderr", "--libcurl", "--etag-save", "--hsts", "--alt-svc"]
             if has(writes) { return false }
             // Clustered short flags (-sSO, -dfoo) hide the same letters.
             if args.contains(where: { $0.hasPrefix("-") && !$0.hasPrefix("--") && $0.count > 2
-                && $0.dropFirst().contains(where: { "dFTOoK".contains($0) }) }) { return false }
+                && $0.dropFirst().contains(where: { "dFTOoKcD".contains($0) }) }) { return false }
             let readMethods: Set<String> = ["GET", "HEAD", "OPTIONS"]
             for (n, a) in args.enumerated() {
                 if a == "-X" || a == "--request" {
@@ -148,10 +174,30 @@ public enum AICommandSafety {
             }
             return true
         case "wget":
-            // wget saves to a file unless told to print or only check; -o / -a write a log.
-            let joined = args.joined(separator: " ")
-            let toStdout = ["-O -", "-O-", "-qO-", "-qO -", "--output-document=-", "--spider"].contains { joined.contains($0) }
-            return toStdout && !has(["-o", "--output-file", "-a", "--append-output"])
+            // Sends a body or another method, writes a log / cookies / tree, or runs wgetrc commands.
+            if has(["--method", "--post-data", "--post-file", "--body-data", "--body-file", "-o", "--output-file",
+                    "-a", "--append-output", "--save-cookies", "--warc-file", "-r", "--recursive", "-m", "--mirror",
+                    "-P", "--directory-prefix", "-x", "--force-directories", "-i", "--input-file", "-e", "--execute"]) {
+                return false
+            }
+            // Saves to a file unless every way of naming the output says stdout (-O - / -qO-).
+            var outputs: [String] = []
+            for (n, a) in args.enumerated() {
+                let next = n + 1 < args.count ? args[n + 1] : ""
+                if a.hasPrefix("--output-document=") {
+                    outputs.append(String(a.dropFirst("--output-document=".count)))
+                } else if a == "--output-document" {
+                    outputs.append(next)
+                } else if a.hasPrefix("-"), !a.hasPrefix("--") {
+                    if a.dropFirst().contains(where: { "oaPxirme".contains($0) }) { return false }
+                    if let o = a.firstIndex(of: "O") {
+                        let rest = a[a.index(after: o)...]
+                        outputs.append(rest.isEmpty ? next : String(rest))
+                    }
+                }
+            }
+            if args.contains("--spider") { return outputs.allSatisfy { $0 == "-" } }
+            return !outputs.isEmpty && outputs.allSatisfy { $0 == "-" }
         case "ip":
             let verbs: Set<String> = ["add", "del", "delete", "set", "change", "replace", "flush", "append",
                                       "prepend", "up", "down", "save", "restore", "exec", "attach", "detach"]
@@ -159,11 +205,13 @@ public enum AICommandSafety {
         case "ifconfig":
             return positional.count <= 1
         case "mount":
-            return positional.isEmpty
+            // Listing only: `mount -a` mounts everything in fstab.
+            return args.allSatisfy { $0 == "-l" }
         case "hostname":
             return positional.isEmpty
         case "date":
-            return !has(["-s", "--set"])
+            // `date MMDDhhmm` sets the clock; only +format arguments.
+            return !has(["-s", "--set"]) && positional.allSatisfy { $0.hasPrefix("+") }
         case "dmesg":
             return !has(["-c", "-C", "--clear", "--read-clear", "-n", "--console-level", "-D", "-E",
                          "--console-off", "--console-on"])
@@ -181,6 +229,8 @@ public enum AICommandSafety {
             }
             return true
         case "git":
+            // Writes the diff to a file, or runs the configured diff / textconv programs.
+            if has(["--output", "--ext-diff", "--textconv"]) { return false }
             switch positional.first?.lowercased() {
             case "branch":
                 // Listing only: no names (create / rename) and no mutating flags.

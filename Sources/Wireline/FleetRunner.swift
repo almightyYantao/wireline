@@ -154,6 +154,8 @@ enum FleetRunner {
                 p.standardOutput = pipe
                 p.standardError = pipe
                 let stdin = input.map { _ in Pipe() }
+                // ssh may exit before reading it all: EPIPE, not a SIGPIPE that kills the app.
+                if let stdin { _ = fcntl(stdin.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1) }
                 p.standardInput = stdin ?? FileHandle.nullDevice
                 do { try p.run() } catch {
                     cleanup()

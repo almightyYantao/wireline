@@ -155,7 +155,12 @@ enum MCPServerTools {
             return .stop(.refused(why))
         case .ask(let dangerous):
             if !dangerous, conn.alwaysAllowed.contains(key) { return .go(audit: "auto (allowed for this connection)") }
-            switch await MCPApprovalCenter.shared.ask(approval()) {
+            var request = approval()
+            request.owner = ObjectIdentifier(conn)
+            let answer = await MCPApprovalCenter.shared.ask(request)
+            // Approved after the client went away: nobody is waiting for the result.
+            guard !conn.isClosed else { return .stop(.refused("The client disconnected before the user answered.")) }
+            switch answer {
             case .allow:
                 return .go(audit: "approved")
             case .allowAlways:
@@ -286,12 +291,20 @@ enum MCPServerTools {
     /// `'it'\''s'`: safe inside any POSIX shell.
     static func shellQuote(_ s: String) -> String { "'" + s.replacingOccurrences(of: "'", with: #"'\''"#) + "'" }
 
+    /// A remote path for a script: quoted, but `~` and `~/…` still mean the
+    /// login directory (models write them; quoting alone made a literal `~`).
+    static func remotePath(_ p: String) -> String {
+        if p == "~" { return "\"$HOME\"" }
+        if p.hasPrefix("~/") { return "\"$HOME\"/" + shellQuote(String(p.dropFirst(2))) }
+        return shellQuote(p)
+    }
+
     /// The remote side of `file_read`: plain sh (whatever the login shell is),
     /// the content base64-encoded between markers, so ssh's own chatter on the
     /// same stream can't corrupt it and binary files are detectable.
     static func fileReadScript(path: String, maxBytes: Int) -> String {
         let script = """
-        f=\(shellQuote(path))
+        f=\(remotePath(path))
         if [ -d "$f" ]; then echo "__WL_ERR__ is a directory"; exit 3; fi
         if [ ! -e "$f" ]; then echo "__WL_ERR__ no such file"; exit 3; fi
         if [ ! -r "$f" ]; then echo "__WL_ERR__ permission denied"; exit 3; fi
@@ -387,8 +400,8 @@ enum MCPServerTools {
         let limit = TimeInterval(min(max(int(args["timeout"]) ?? 600, 5), 3600))
         let output = visible
             ? await s.runInTerminalCapturing(command, idleTimeout: min(120, limit), maxTimeout: limit)
-            : await s.runCapturing(command)
-        let timedOut = output == "(执行超时)"
+            : await s.runCapturing(command, timeout: limit)
+        let timedOut = output.hasSuffix("(执行超时)")
         IslandCenter.shared.finish(islandID, success: !timedOut, detail: command, pulse: nil)
         if timedOut {
             return withAudit(.error("Timed out after \(Int(limit)) s (or no output for 120 s). It may still be running in the session; session_read to check."), audit)
@@ -497,13 +510,16 @@ enum MCPServerTools {
     // MARK: file_write
 
     /// The remote side of `file_write`: take the content on stdin into a temp
-    /// file first (so a dropped link never leaves half a file), then copy it
-    /// over the target, which keeps the file's owner and permissions.
-    static func fileWriteScript(path: String) -> String {
+    /// file, and replace the target only if all `bytes` arrived (a dropped link
+    /// is just an early EOF to `cat`), copying over it so the file keeps its
+    /// owner and permissions.
+    static func fileWriteScript(path: String, bytes: Int) -> String {
         let script = """
-        f=\(shellQuote(path))
+        f=\(remotePath(path))
         tmp=$(mktemp) || exit 4
         cat > "$tmp" || { rm -f "$tmp"; exit 4; }
+        got=$(wc -c < "$tmp" | tr -d ' ')
+        if [ "$got" != \(bytes) ]; then rm -f "$tmp"; echo "incomplete upload ($got of \(bytes) bytes); target untouched"; exit 5; fi
         cat "$tmp" > "$f"; rc=$?
         rm -f "$tmp"
         exit $rc
@@ -562,7 +578,8 @@ enum MCPServerTools {
         guard case .go(let audit) = gate else { if case .stop(let o) = gate { return o }; return .error("") }
 
         let data = Data(content.utf8)
-        let r = await FleetRunner.run(command: fileWriteScript(path: path), on: alias, input: data, timeout: 30)
+        let r = await FleetRunner.run(command: fileWriteScript(path: path, bytes: data.count), on: alias, input: data,
+                                      timeout: 30 + data.count / 50_000)
         guard r.ok else {
             return withAudit(.error("Writing \(alias):\(path) failed (exit \(r.exitCode)): \(String(r.output.suffix(1000)))"
                                     + (r.output.contains("ermission denied") ? " — the SSH user can't write there; ask the user to do it with sudo." : "")), audit)

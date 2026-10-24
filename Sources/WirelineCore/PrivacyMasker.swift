@@ -40,9 +40,9 @@ public final class PrivacyMasker: @unchecked Sendable {
     public let level: PrivacyPolicy.Level
     public let nonce: String
 
-    /// Beyond this many values, new secrets are replaced one-way instead.
+    /// Beyond this many values, new ones are replaced one-way instead.
     public static let maxEntries = 10_000
-    /// What an over-limit secret becomes. Not a placeholder: it can't be restored.
+    /// What an over-limit value becomes. Not a placeholder: it can't be restored.
     public static let irreversible = "[WL-REDACTED]"
 
     private let lock = NSLock()
@@ -162,7 +162,8 @@ public final class PrivacyMasker: @unchecked Sendable {
         // Number in reading order, then replace from the end so ranges hold.
         let replacements = hits.sorted { $0.range.location < $1.range.location }.map { h -> (NSRange, String) in
             let value = ns.substring(with: h.range)
-            return (h.range, token(for: value, kind: h.kind) ?? (h.kind == .secret ? Self.irreversible : value))
+            // A full table never lets anything through in the clear.
+            return (h.range, token(for: value, kind: h.kind) ?? Self.irreversible)
         }
         let out = NSMutableString(string: text)
         for (range, replacement) in replacements.reversed() {
