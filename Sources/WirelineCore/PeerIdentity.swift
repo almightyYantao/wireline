@@ -16,17 +16,25 @@ import Darwin
 /// Not the file on disk — an update replaces that under a running agent,
 /// and a disk check would then refuse the agent holding the sessions.
 ///
-/// Debug builds accept anyone with `WIRELINE_AGENT_TRUST_ANY=1` (tests run
-/// under xctest, signed by Apple); release builds have no such switch.
+/// Debug builds accept anyone with `WIRELINE_AGENT_TRUST_ANY=1` or
+/// `trustAny` (tests run under xctest, signed by Apple); release builds have
+/// no such switch.
 public enum PeerIdentity {
     public enum Verdict: Equatable, Sendable {
         case trusted
         case refused(String)
     }
 
+    #if DEBUG
+    /// Tests in this process set it directly: changing the environment after
+    /// libghostty has started leaves it reading a freed `environ`.
+    nonisolated(unsafe) public static var trustAny =
+        ProcessInfo.processInfo.environment["WIRELINE_AGENT_TRUST_ANY"] == "1"
+    #endif
+
     public static func check(fd: Int32) -> Verdict {
         #if DEBUG
-        if ProcessInfo.processInfo.environment["WIRELINE_AGENT_TRUST_ANY"] == "1" { return .trusted }
+        if trustAny { return .trusted }
         #endif
         var token = audit_token_t()
         var len = socklen_t(MemoryLayout<audit_token_t>.size)
