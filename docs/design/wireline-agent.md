@@ -1,6 +1,6 @@
 # wireline-agent：会话常驻进程设计
 
-> 状态：P1–P4 已完成，等真实 App 手测和 fork 发布（2026-10-24）。分支 `wireline-agent`。
+> 状态：P1–P4 已完成，随 Wireline 1.3.0 发布（实验功能，默认关闭；2026-10-24）。分支 `wireline-agent`。
 > 相关代码：[`TerminalIO.swift`](../../Sources/Wireline/TerminalIO.swift)、[`PTYProcess.swift`](../../Sources/WirelineCore/PTYProcess.swift)、[`GhosttyIO.swift`](../../Sources/Wireline/Ghostty/GhosttyIO.swift)、[`SessionStore.swift`](../../Sources/Wireline/SessionStore.swift)。
 > Ghostty fork：`~/Desktop/Private/ghostty-wireline`，分支 `wireline`。
 
@@ -196,7 +196,7 @@ fork 分支 `wireline-agent`：`ca918cbaa`、`9b88d5b08`、构建脚本一次。
 - **协议升版的规则**：升 `AgentProtocol.version` 时，`hello`、`list`、`close` 三条消息的 JSON 形状保持不变，让新 App 能连上旧版本的 socket，关掉没有标签对应的旧会话。在此之前，旧 agent 会一直服务自己的会话，直到它们结束或超过保留时长。
 - **agent 崩溃**：会话显示断开；点「重新连接」后 App 重新拉起 agent，在里面开新会话，旧画面保留在上方（`testAgentCrashThenReconnect`）。下次启动时找不到的会话，退回到回放滚动缓冲存档再重连。
 - **第一次 ⌘Q**：「退出 Wireline」由 App 自己提供（`SessionStore.requestQuit`）。有会话在 agent 里、并且没提示过时，弹 `QuitNoticeSheet`：退出并保留会话（默认）、结束会话并退出、取消。之后不再弹。Dock 菜单里的「退出」和注销系统不经过它。
-- 剩下的对外操作：fork 推送、发含 GhosttyVt 的 Release、改 `fetch-ghosttykit.sh` 的固定版本，然后合回 main。
+- 发布：fork `wireline` 分支 484039fb2，Release `wireline-484039f`（含 `GhosttyVt.tar.gz`）；`fetch-ghosttykit.sh` 已固定到它，全新 clone 验证过下载、编译和全部测试。
 
 ## 11. 手测清单（真实 App，`scripts/bundle.sh` 打的包）
 

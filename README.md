@@ -136,6 +136,7 @@ A draggable, always-on-top little sprite that floats over your desktop the momen
 - 📡 **Broadcast input**: type once, send to every open session
 - 📼 **Session logging**: record a session's output to a file, reveal in Finder
 - ♻️ **Session restore**: reopens and reconnects your tabs, keeping split layouts and working directories
+- 🌙 **Sessions that outlive the app** (experimental, Settings → Terminal): SSH and local shells run in a background `wireline-agent`; quit Wireline (or update it) and they keep going — reopen and the same processes come back with their screen and scrollback, vim and Claude Code included. ⌥⌘Q quits and ends them. Both sides check each other's code signature
 - 📊 Live remote **CPU / memory / time** in the status bar (via a reused ControlMaster connection)
 - 📝 A vim/vi cheat-sheet pops up while editing (collapsible to a floating icon)
 - 🎨 Light and dark themes, or import **iTerm2 `.itermcolors`**; a **Ghostty-style config file** at `~/.config/wireline/config` with live reload and Ghostty action names in keybinds
