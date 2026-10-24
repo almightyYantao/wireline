@@ -59,10 +59,12 @@ struct WirelineApp: App {
                     sessions.restoreIfNeeded(store: store)
                     // Flush scrollback (and snapshots) on quit so the very last
                     // output is restored next launch, not just up to the last tab change.
+                    // Tunnels are ssh children that would outlive us holding their ports.
                     NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification,
-                                                           object: nil, queue: .main) { [sessions] _ in
-                        MainActor.assumeIsolated { sessions.persist() }
+                                                           object: nil, queue: .main) { [sessions, forwards] _ in
+                        MainActor.assumeIsolated { sessions.persist(); forwards.stopAll() }
                     }
+                    forwards.startAutoForwards(store: store)
                     if store.autoCheckOnLaunch { await store.checkAll() }
                     store.startMonitoring()
                     store.startAutoBackup()

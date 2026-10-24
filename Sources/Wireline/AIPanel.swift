@@ -666,7 +666,7 @@ struct AIPanelView: View {
             let f = PortForward(hostAlias: host, localPort: lp, remoteHost: rh, remotePort: rp,
                                 bindAddress: "127.0.0.1", label: "AI")
             forwards.add(f)
-            forwards.toggle(f, host: store.hosts.first { $0.alias == host })   // start it
+            forwards.start(f, store: store)
             messages.append(AIMessage(role: .system, content: loc("✓ 已创建并启动转发：本地 \(lp) → \(host):\(rh):\(rp)",
                                                                    "✓ Tunnel started: local \(lp) → \(host):\(rh):\(rp)")))
         case let .addHost(alias, hostname, user, port, group):

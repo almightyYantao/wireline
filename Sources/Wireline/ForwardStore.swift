@@ -57,14 +57,26 @@ final class ForwardStore {
 
     func isRunning(_ forward: PortForward) -> Bool { manager.isRunning(forward.id) }
 
-    func toggle(_ forward: PortForward, host: Host?) {
+    func toggle(_ forward: PortForward, store: HostStore) {
         if manager.isRunning(forward.id) {
             manager.stop(forward.id)
-        } else if let host {
-            states[forward.id] = manager.start(forward, host: host)
+        } else {
+            start(forward, store: store)
+        }
+    }
+
+    func start(_ forward: PortForward, store: HostStore) {
+        guard !manager.isRunning(forward.id) else { return }
+        if let host = store.hosts.first(where: { $0.alias == forward.hostAlias }) {
+            states[forward.id] = manager.start(forward, host: host, password: store.password(for: host))
         } else {
             states[forward.id] = .failed("Host '\(forward.hostAlias)' not found in ssh config.")
         }
+    }
+
+    /// At launch: bring up the tunnels marked to start automatically.
+    func startAutoForwards(store: HostStore) {
+        for f in forwards where f.autoStart { start(f, store: store) }
     }
 
     func stopAll() { manager.stopAll() }

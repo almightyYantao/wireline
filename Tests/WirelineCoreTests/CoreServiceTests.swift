@@ -45,7 +45,27 @@ final class CoreServiceTests: XCTestCase {
         let fwd = PortForward(hostAlias: "bastion", localPort: 5432,
                               remoteHost: "db.internal", remotePort: 5432)
         let args = SSHCommand.forwardArguments(for: host, forward: fwd)
-        XCTAssertEqual(args, ["-N", "-L", "127.0.0.1:5432:db.internal:5432", "bastion"])
+        XCTAssertEqual(args, ["-N", "-o", "ExitOnForwardFailure=yes", "-o", "ServerAliveInterval=30",
+                              "-L", "127.0.0.1:5432:db.internal:5432", "bastion"])
+    }
+
+    func testRemoteAndDynamicForwardArguments() {
+        let host = Host(alias: "bastion")
+        let r = PortForward(kind: .remote, hostAlias: "bastion", localPort: 3000,
+                            remoteHost: "127.0.0.1", remotePort: 8080, bindAddress: nil)
+        XCTAssertEqual(SSHCommand.forwardArguments(for: host, forward: r).suffix(3),
+                       ["-R", "8080:127.0.0.1:3000", "bastion"])
+        let d = PortForward(kind: .dynamic, hostAlias: "bastion", localPort: 1080,
+                            remoteHost: "", remotePort: 0)
+        XCTAssertEqual(SSHCommand.forwardArguments(for: host, forward: d).suffix(3),
+                       ["-D", "127.0.0.1:1080", "bastion"])
+    }
+
+    func testForwardDecodesOldFormat() throws {
+        let json = #"[{"id":"6F9619FF-8B86-D011-B42D-00C04FC964FF","hostAlias":"b","localPort":1,"remoteHost":"h","remotePort":2,"bindAddress":"127.0.0.1"}]"#
+        let f = try JSONDecoder().decode([PortForward].self, from: Data(json.utf8))
+        XCTAssertEqual(f.first?.kind, .local)
+        XCTAssertEqual(f.first?.autoStart, false)
     }
 
     func testShellQuoting() {

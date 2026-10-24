@@ -144,7 +144,7 @@ A draggable, always-on-top little sprite that floats over your desktop the momen
 - 📁 Visual **SFTP** ([Citadel](https://github.com/orlandos-nl/Citadel)): dual-pane, drag/double-click transfers, new/rename/delete, **right-click AI edit**
 - 📥 **ZMODEM transfer**: run `sz` on the remote and Wireline catches it automatically — files land in `~/Downloads` (revealed in Finder); `rz` uploads via a file picker (bridges the local `lrzsz` — `brew install lrzsz`)
 - ⚡ Batch / fleet execution across selected hosts, aggregated output
-- 🔀 Graphical port forwarding (`ssh -L`, jump hosts, one-click toggle)
+- 🔀 Graphical port forwarding: local (`-L`), remote (`-R`) and SOCKS (`-D`) tunnels, jump hosts, one-click toggle, start with Wireline, password hosts via the Keychain; **discover a host's listening ports** and forward one in a click
 - 🧰 **Snippets**: search them from the ⚡ popover or ⌘P (English, Chinese or pinyin); Return inserts, ⌘Return runs; `{{name}}` parameters filled in place and remembered; Linux / macOS scopes; scripts and dangerous commands ask first
 - 🔑 **SSH key manager**: list `~/.ssh` keys with fingerprints, generate (ed25519/rsa/ecdsa), import keys from elsewhere (fixes permissions), copy public key, or deploy to a host via `ssh-copy-id`
 - 💾 Encrypted backup & migration to a file, or **to WebDAV** (ciphertext only)

@@ -33,8 +33,10 @@ public final class PortForwardManager: @unchecked Sendable {
         return false
     }
 
+    /// `password` (from the Keychain) answers ssh's prompt through a throwaway
+    /// askpass script, so password-auth hosts can tunnel too — no terminal here.
     @discardableResult
-    public func start(_ forward: PortForward, host: Host) -> ForwardState {
+    public func start(_ forward: PortForward, host: Host, password: String? = nil) -> ForwardState {
         lock.lock()
         if let existing = processes[forward.id], existing.isRunning {
             let pid = existing.processIdentifier
@@ -47,16 +49,25 @@ public final class PortForwardManager: @unchecked Sendable {
         process.executableURL = URL(fileURLWithPath: sshPath)
         process.arguments = SSHCommand.forwardArguments(for: host, forward: forward)
         process.standardInput = FileHandle.nullDevice
-        if SSHAgentEnvironment.socketPath != nil {
-            var env = ProcessInfo.processInfo.environment
-            SSHAgentEnvironment.apply(to: &env)
-            process.environment = env
+        var env = ProcessInfo.processInfo.environment
+        SSHAgentEnvironment.apply(to: &env)
+        let askpass = password.flatMap { $0.isEmpty ? nil : Self.makeAskpassScript() }
+        if let askpass, let password {
+            env["SSH_ASKPASS"] = askpass.path
+            env["SSH_ASKPASS_REQUIRE"] = "force"
+            env["WIRELINE_ASKPASS_PW"] = password
+            process.arguments = ["-o", "NumberOfPasswordPrompts=1"] + (process.arguments ?? [])
+        } else {
+            // Nobody can type a password here: fail fast instead of hanging.
+            process.arguments = ["-o", "BatchMode=yes"] + (process.arguments ?? [])
         }
+        process.environment = env
         let errPipe = Pipe()
         process.standardError = errPipe
 
         let id = forward.id
         process.terminationHandler = { [weak self] proc in
+            if let askpass { try? FileManager.default.removeItem(at: askpass) }
             guard let self else { return }
             self.lock.lock()
             self.processes[id] = nil
@@ -73,6 +84,7 @@ public final class PortForwardManager: @unchecked Sendable {
         do {
             try process.run()
         } catch {
+            if let askpass { try? FileManager.default.removeItem(at: askpass) }
             return .failed(error.localizedDescription)
         }
         lock.lock()
@@ -88,6 +100,17 @@ public final class PortForwardManager: @unchecked Sendable {
         let process = processes[id]
         lock.unlock()
         process?.terminate()
+    }
+
+    private static func makeAskpassScript() -> URL? {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wireline-forward-askpass-\(UUID().uuidString).sh")
+        let script = "#!/bin/sh\nprintf '%s\\n' \"$WIRELINE_ASKPASS_PW\"\n"
+        do {
+            try script.write(to: url, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: url.path)
+            return url
+        } catch { return nil }
     }
 
     public func stopAll() {
