@@ -383,6 +383,10 @@ final class WLModalRegistry {
         if let i = records.firstIndex(where: { $0.hook === hook }) { records[i].previous = nil }
     }
 
+    func hasModal(in window: NSWindow) -> Bool {
+        records.contains { $0.window === window && $0.hook != nil }
+    }
+
     private func handleKey(_ event: NSEvent) -> Bool {
         guard let window = event.window,
               let hook = records.last(where: { $0.window === window && $0.hook != nil })?.hook

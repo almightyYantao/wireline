@@ -177,6 +177,12 @@ struct SettingsView: View {
                     Toggle(isOn: $store.inheritWorkingDirectory) { rowLabel(loc("新标签继承当前目录", "New tabs inherit the directory")) }
                         .toggleStyle(.wlSwitch).frame(minHeight: 38).wlConfigLocked("window-inherit-working-directory")
                     WLFormDivider()
+                    Toggle(isOn: $store.confirmCloseRunning) {
+                        WLFormRow(loc("关闭前确认", "Confirm before closing"),
+                                  detail: loc("标签或分屏里还有命令、Claude Code 等在运行时，关闭前先问一下", "Ask before closing a tab or pane that's still running a command or a coding agent")) { EmptyView() }
+                    }
+                    .toggleStyle(.wlSwitch).wlConfigLocked("confirm-close-surface")
+                    WLFormDivider()
                     WLFormRow(loc("命令完成提醒", "Command-finished alert"),
                               detail: loc("Wireline 不在前台时，耗时超过这个时长的命令结束会发通知", "When Wireline is in the background, notify for commands that ran at least this long")) {
                         WLStepper(value: $store.notifyCommandAfter, range: 1...600, step: 5,

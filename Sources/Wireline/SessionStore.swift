@@ -675,20 +675,33 @@ final class TerminalSession: Identifiable {
     func saveScrollback(dir: URL) {
         guard !scrollbackKey.isEmpty, isRunning, rdp == nil else { return }
         let url = dir.appendingPathComponent("\(scrollbackKey).txt")
-        let data = terminalView.renderedBuffer
-        // Empty means a full-screen app owned the alternate screen at save time —
+        // Nil means a full-screen app owned the alternate screen at save time —
         // keep the previous snapshot rather than clobbering it with a blank one.
-        guard !data.isEmpty else { return }
+        guard let text = replayableScrollback() else { return }
+        if text.isEmpty { try? FileManager.default.removeItem(at: url) }
+        else { try? Data(text.utf8).write(to: url, options: .atomic) }
+    }
+
+    /// The rendered scrollback as a replayable stream (see `start()`); nil when
+    /// there's nothing to take (RDP, or a full-screen app on the alternate screen).
+    func replayableScrollback() -> String? {
+        guard rdp == nil else { return nil }
+        let data = terminalView.renderedBuffer
+        guard !data.isEmpty else { return nil }
         // The stream is colored SGR + text with CRLF line breaks. Drop prior
         // restore-banner lines (they get re-serialized after each launch) while
         // preserving CRLF and escape sequences, so the tail stays replayable.
-        let text = String(decoding: data, as: UTF8.self)
+        return String(decoding: data, as: UTF8.self)
             .components(separatedBy: "\r\n")
             .filter { !$0.contains("已恢复上次会话") }
             .joined(separator: "\r\n")
             .trimmingCharacters(in: .newlines)
-        if text.isEmpty { try? FileManager.default.removeItem(at: url) }
-        else { try? Data(text.utf8).write(to: url, options: .atomic) }
+    }
+
+    /// Something is running here that closing would kill: a command (the tab's
+    /// "running" badge) or a coding agent, even one idle at its own prompt.
+    var hasRunningWork: Bool {
+        isRunning && rdp == nil && (isBusy || agentState != nil)
     }
 
     /// Whether this session is recording its output to a log file, and where.
@@ -1004,8 +1017,8 @@ final class SessionStore {
         session.store = self
         let id = session.id
         session.terminalView.onCloseRequested = { [weak self] in
-            // Remaining panes grow into the space: animate, one reflow.
-            wlAnimateTerminalLayout { self?.close(id) }
+            // Remaining panes grow into the space (performClose animates, one reflow).
+            self?.requestClose([id])
         }
         sessions.append(session)
         session.start()
@@ -1061,22 +1074,7 @@ final class SessionStore {
         let layout = UserDefaults.standard.data(forKey: Self.layoutKey)
             .flatMap { try? JSONDecoder().decode(LayoutSnapshot.self, from: $0) }
         func id(_ i: Int) -> UUID? { restored.indices.contains(i) ? restored[i]?.id : nil }
-        func build(_ n: LayoutSnapshot.Node) -> PaneNode? {
-            switch n {
-            case .leaf(let i):
-                return id(i).map(PaneNode.makeLeaf)
-            case .branch(let vertical, let ratio, let a, let b):
-                switch (build(a), build(b)) {
-                case (let x?, let y?):
-                    let bid = UUID()
-                    if abs(ratio - 0.5) > 0.001 { splitRatios[bid] = min(max(CGFloat(ratio), 0.12), 0.88) }
-                    return .branch(id: bid, axis: vertical ? .vertical : .horizontal, first: x, second: y)
-                case (let x?, nil): return x
-                case (nil, let y?): return y
-                case (nil, nil): return nil
-                }
-            }
-        }
+        func build(_ n: LayoutSnapshot.Node) -> PaneNode? { buildPane(n, id: id) }
         var built: [PaneNode] = []
         var tabIndexMap: [Int: Int] = [:]   // saved tab index → built tab index
         for (i, node) in (layout?.tabs ?? []).enumerated() {
@@ -1097,6 +1095,25 @@ final class SessionStore {
         activeTabID = activeTab?.id
         let wanted = layout?.activeSession.flatMap(id)
         activeID = wanted.flatMap { w in activeTab?.leafID(for: w) != nil ? w : nil } ?? activeTab?.sessionIDs.first
+    }
+
+    /// A saved pane tree back into a live one; leaves whose session is gone
+    /// drop out and their sibling takes the space.
+    private func buildPane(_ n: LayoutSnapshot.Node, id: (Int) -> UUID?) -> PaneNode? {
+        switch n {
+        case .leaf(let i):
+            return id(i).map(PaneNode.makeLeaf)
+        case .branch(let vertical, let ratio, let a, let b):
+            switch (buildPane(a, id: id), buildPane(b, id: id)) {
+            case (let x?, let y?):
+                let bid = UUID()
+                if abs(ratio - 0.5) > 0.001 { splitRatios[bid] = min(max(CGFloat(ratio), 0.12), 0.88) }
+                return .branch(id: bid, axis: vertical ? .vertical : .horizontal, first: x, second: y)
+            case (let x?, nil): return x
+            case (nil, let y?): return y
+            case (nil, nil): return nil
+            }
+        }
     }
 
     /// Make every split in the active tab even.
@@ -1329,8 +1346,110 @@ final class SessionStore {
     /// Ghostty, instead of jumping to the first pane.
     private var focusHistory: [UUID] = []
 
-    func close(_ id: UUID) {
+    // MARK: - Close (with confirmation) / reopen
+
+    /// A close that's waiting on "something is still running — close anyway?".
+    struct CloseRequest: Identifiable {
+        let id = UUID()
+        let sessionIDs: [UUID]
+        /// Titles of the sessions that are busy, for the dialog.
+        let busyTitles: [String]
+    }
+    /// Set while the confirmation dialog is up (presented by ContentView).
+    var pendingClose: CloseRequest?
+
+    /// The user asked to close these sessions (⌘W, a tab's or pane's ×). Asks
+    /// first when one of them is still running something, unless that's
+    /// turned off (`confirm-close-surface`).
+    func requestClose(_ ids: [UUID]) {
+        guard pendingClose == nil else { return }   // the dialog is already asking
+        let confirm = UserDefaults.standard.object(forKey: "confirmCloseRunning") as? Bool ?? true
+        let busy = ids.compactMap(session).filter(\.hasRunningWork)
+        if confirm, !busy.isEmpty {
+            wlAnimate(Motion.flipIn) { pendingClose = CloseRequest(sessionIDs: ids, busyTitles: busy.map(\.title)) }
+        } else {
+            performClose(ids)
+        }
+    }
+
+    func confirmPendingClose() {
+        guard let request = pendingClose else { return }
+        wlAnimate(Motion.flipOut) { pendingClose = nil }
+        performClose(request.sessionIDs)
+    }
+
+    /// Close a whole tab at once, or a single pane — remembered as one entry
+    /// for "reopen closed tab" either way.
+    private func performClose(_ ids: [UUID]) {
+        wlAnimateTerminalLayout {
+            if ids.count > 1, let ti = tabIndex(containing: ids[0]),
+               Set(tabs[ti].sessionIDs) == Set(ids) {
+                rememberClosed(tab: tabs[ti], at: ti)
+                for id in ids { close(id, remember: false) }
+            } else {
+                for id in ids { close(id) }
+            }
+        }
+    }
+
+    /// What it takes to bring a closed tab (or pane) back: its sessions, their
+    /// screens, and how they were arranged.
+    private struct ClosedTab {
+        var sessions: [(snapshot: SessionSnapshot, scrollback: String?)]
+        var layout: LayoutSnapshot.Node
+        var name: String?
+        var tabIndex: Int
+    }
+    /// Most recent last; in memory only.
+    private var recentlyClosed: [ClosedTab] = []
+    private static let recentlyClosedLimit = 10
+
+    var canReopenClosed: Bool { !recentlyClosed.isEmpty }
+
+    private func rememberClosed(tab: PaneNode, at tabIndex: Int, only leaf: UUID? = nil) {
+        let ids = leaf.map { [$0] } ?? tab.sessionIDs
+        let live = ids.compactMap(session)
+        guard !live.isEmpty else { return }
+        let index = Dictionary(uniqueKeysWithValues: live.enumerated().map { ($1.id, $0) })
+        let node: LayoutSnapshot.Node? = leaf == nil ? encodePane(tab, index: index) : .leaf(0)
+        guard let node else { return }
+        recentlyClosed.append(ClosedTab(
+            sessions: live.map { (snapshot(of: $0), $0.replayableScrollback()) },
+            layout: node,
+            name: leaf == nil && tab.sessionIDs.count > 1 ? tabName(tab) : nil,
+            tabIndex: tabIndex))
+        if recentlyClosed.count > Self.recentlyClosedLimit { recentlyClosed.removeFirst() }
+    }
+
+    /// ⇧⌘T: reopen the most recently closed tab (or pane, as its own tab) where
+    /// it was, reconnecting and replaying what was on screen.
+    func reopenClosed(store: HostStore) {
+        while let entry = recentlyClosed.popLast() {
+            let built = entry.sessions.map { item -> TerminalSession? in
+                guard let s = makeSession(from: item.snapshot, store: store) else { return nil }
+                s.pendingScrollback = item.scrollback.map { Data($0.utf8) }
+                return s
+            }
+            guard built.contains(where: { $0 != nil }) else { continue }   // its hosts are gone
+            for s in built.compactMap({ $0 }) { _ = spawn(s) }
+            guard let tab = buildPane(entry.layout, id: { built.indices.contains($0) ? built[$0]?.id : nil })
+            else { continue }
+            wlAnimateTerminalLayout {
+                tabs.insert(tab, at: min(entry.tabIndex, tabs.count))
+                if let name = entry.name, tab.sessionIDs.count > 1, let anchor = tab.sessionIDs.first {
+                    tabNames[anchor] = name
+                }
+                activeTabID = tab.id
+                activeID = tab.sessionIDs.first
+            }
+            persist()
+            return
+        }
+    }
+
+    func close(_ id: UUID, remember: Bool = true) {
         guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
+        if remember, let ti = tabIndex(containing: id) { rememberClosed(tab: tabs[ti], at: ti, only: id) }
         IslandCenter.shared.sessionGone(id)
         focusHistory.removeAll { $0 == id }
         // A split tab's name was keyed by this pane: hand it to a surviving one.
@@ -1438,20 +1557,7 @@ final class SessionStore {
     func persistLayout() {
         guard didRestore else { return }   // don't clobber it before it's been read
         let index = Dictionary(uniqueKeysWithValues: sessions.enumerated().map { ($1.id, $0) })
-        func encode(_ n: PaneNode) -> LayoutSnapshot.Node? {
-            switch n {
-            case .leaf(_, let s):
-                return index[s].map { .leaf($0) }
-            case .branch(let id, let axis, let a, let b):
-                switch (encode(a), encode(b)) {
-                case (let x?, let y?):
-                    return .branch(vertical: axis == .vertical, ratio: Double(ratio(for: id)), first: x, second: y)
-                case (let x?, nil): return x
-                case (nil, let y?): return y
-                case (nil, nil): return nil
-                }
-            }
-        }
+        func encode(_ n: PaneNode) -> LayoutSnapshot.Node? { encodePane(n, index: index) }
         var zoomed: [Int: Int] = [:]
         var names: [Int: String] = [:]
         for (ti, tab) in tabs.enumerated() {
@@ -1466,6 +1572,22 @@ final class SessionStore {
             names: names.isEmpty ? nil : names)
         if let data = try? JSONEncoder().encode(layout) {
             UserDefaults.standard.set(data, forKey: Self.layoutKey)
+        }
+    }
+
+    /// A live pane tree as a saved one, leaves named by `index` (session → position).
+    private func encodePane(_ n: PaneNode, index: [UUID: Int]) -> LayoutSnapshot.Node? {
+        switch n {
+        case .leaf(_, let s):
+            return index[s].map { .leaf($0) }
+        case .branch(let id, let axis, let a, let b):
+            switch (encodePane(a, index: index), encodePane(b, index: index)) {
+            case (let x?, let y?):
+                return .branch(vertical: axis == .vertical, ratio: Double(ratio(for: id)), first: x, second: y)
+            case (let x?, nil): return x
+            case (nil, let y?): return y
+            case (nil, nil): return nil
+            }
         }
     }
 
@@ -1494,6 +1616,35 @@ final class SessionStore {
                                directory: dir)
     }
 
+    /// A fresh (not yet started) session for a snapshot; nil when its host is gone.
+    private func makeSession(from snap: SessionSnapshot, store: HostStore) -> TerminalSession? {
+        let built: TerminalSession?
+        switch snap.kind {
+        case .ssh:
+            built = store.hosts.first { $0.alias == snap.alias }.map { h in
+                TerminalSession(kind: .ssh(alias: h.alias, password: store.password(for: h),
+                                           sudoPassword: store.sudoPassword(for: h),
+                                           autoSudo: h.autoSudo, args: h.launchArgTokens), title: snap.title)
+            }
+        case .sftp:
+            built = store.hosts.first { $0.alias == snap.alias }.map { h in
+                TerminalSession(kind: .sftp(alias: h.alias, password: store.password(for: h),
+                                            args: h.launchArgTokens), title: snap.title)
+            }
+        case .rdp:
+            built = store.hosts.first { $0.alias == snap.alias && $0.isRDP }.map { h in
+                TerminalSession(kind: .rdp(alias: h.alias, target: store.rdpTarget(for: h)), title: snap.title)
+            }
+        case .local:
+            built = TerminalSession(kind: .localShell, title: snap.title,
+                                    startDirectory: snap.directory.flatMap {
+                                        FileManager.default.fileExists(atPath: $0) ? $0 : nil
+                                    })
+        }
+        built?.isManuallyRenamed = snap.manuallyRenamed ?? false
+        return built
+    }
+
     /// Reopen (and reconnect) the sessions that were open at last quit. Runs once.
     /// SSH/SFTP sessions resolve their password from the Keychain via `store`.
     func restoreIfNeeded(store: HostStore) {
@@ -1503,36 +1654,13 @@ final class SessionStore {
               let snaps = try? JSONDecoder().decode([SessionSnapshot].self, from: data) else { return }
         var restored: [TerminalSession?] = []
         for snap in snaps {
-            let built: TerminalSession?
-            switch snap.kind {
-            case .ssh:
-                built = store.hosts.first { $0.alias == snap.alias }.map { h in
-                    TerminalSession(kind: .ssh(alias: h.alias, password: store.password(for: h),
-                                               sudoPassword: store.sudoPassword(for: h),
-                                               autoSudo: h.autoSudo, args: h.launchArgTokens), title: snap.title)
-                }
-            case .sftp:
-                built = store.hosts.first { $0.alias == snap.alias }.map { h in
-                    TerminalSession(kind: .sftp(alias: h.alias, password: store.password(for: h),
-                                                args: h.launchArgTokens), title: snap.title)
-                }
-            case .rdp:
-                built = store.hosts.first { $0.alias == snap.alias && $0.isRDP }.map { h in
-                    TerminalSession(kind: .rdp(alias: h.alias, target: store.rdpTarget(for: h)), title: snap.title)
-                }
-            case .local:
-                built = TerminalSession(kind: .localShell, title: snap.title,
-                                        startDirectory: snap.directory.flatMap {
-                                            FileManager.default.fileExists(atPath: $0) ? $0 : nil
-                                        })
-            }
+            let built = makeSession(from: snap, store: store)
             restored.append(built)
             guard let s = built else { continue }
             // Reuse the persisted key so we load THIS session's saved scrollback.
             if !snap.scrollbackKey.isEmpty { s.scrollbackKey = snap.scrollbackKey }
             s.pendingScrollback = loadScrollback(s.scrollbackKey)
             s.title = snap.title
-            s.isManuallyRenamed = snap.manuallyRenamed ?? false
             _ = spawn(s)                    // starts (start() replays scrollback first)
         }
         restoreLayout(restored)

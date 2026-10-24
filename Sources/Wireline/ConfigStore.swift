@@ -282,6 +282,8 @@ extension ConfigStore {
                  get: { $0?.terminalGPU ?? true }, set: { $0?.terminalGPU = $1 }),
             flag("window-inherit-working-directory", t, "New tabs start in the focused local shell's directory",
                  default: true, get: { $0?.inheritWorkingDirectory ?? true }, set: { $0?.inheritWorkingDirectory = $1 }),
+            flag("confirm-close-surface", t, "Ask before closing a tab or pane that's still running something",
+                 default: true, get: { $0?.confirmCloseRunning ?? true }, set: { $0?.confirmCloseRunning = $1 }),
             number("notify-on-command-finish-after", t,
                    "Notify when a command that ran this many seconds finishes in the background", 1...86400, default: 10,
                    get: { $0?.notifyCommandAfter ?? 10 }, set: { $0?.notifyCommandAfter = $1 }),

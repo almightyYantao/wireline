@@ -117,6 +117,7 @@ enum ShortcutAction: String, CaseIterable, Identifiable {
     case jumpToNextPrompt
     case copyLastOutput
     case toggleQuickTerminal
+    case reopenClosedTab
 
     var id: String { rawValue }
 
@@ -151,6 +152,7 @@ enum ShortcutAction: String, CaseIterable, Identifiable {
         case .jumpToNextPrompt:     return loc.t("跳到下一个提示符", "Jump to Next Prompt")
         case .copyLastOutput:       return loc.t("复制上一条命令的输出", "Copy Last Command Output")
         case .toggleQuickTerminal:  return loc.t("快捷终端（全局）", "Quick Terminal (global)")
+        case .reopenClosedTab:      return loc.t("重新打开关闭的标签", "Reopen Closed Tab")
         }
     }
 
@@ -185,6 +187,7 @@ enum ShortcutAction: String, CaseIterable, Identifiable {
         case .jumpToNextPrompt:     return KeyShortcut(key: "down")
         case .copyLastOutput:       return KeyShortcut(key: "c", option: true)
         case .toggleQuickTerminal:  return KeyShortcut(key: "`", command: false, control: true)
+        case .reopenClosedTab:      return KeyShortcut(key: "t", shift: true)   // like browsers
         }
     }
 }

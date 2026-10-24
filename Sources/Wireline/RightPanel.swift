@@ -681,7 +681,7 @@ struct SessionTab: View {
     }
 
     private func closeTab() {
-        for s in tab.sessionIDs { sessions.close(s) }
+        sessions.requestClose(tab.sessionIDs)
     }
 
     private func beginEdit() {
@@ -834,7 +834,7 @@ struct ConnectionInfoBar: View {
                 Button(action: reconnect) {
                     Image(systemName: "arrow.clockwise").font(.system(size: 11, weight: .medium))
                 }.buttonStyle(.wlIcon).help(loc("重新连接", "Reconnect"))
-                Button { sessions.close(session.id) } label: {
+                Button { sessions.requestClose([session.id]) } label: {
                     Image(systemName: "power").font(.system(size: 11, weight: .medium))
                 }.buttonStyle(.wlIcon).help(loc("断开", "Disconnect"))
             }

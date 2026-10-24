@@ -101,6 +101,10 @@ final class HostStore {
     var inheritWorkingDirectory: Bool {
         didSet { UserDefaults.standard.set(inheritWorkingDirectory, forKey: "inheritWorkingDirectory") }
     }
+    /// Ask before closing a tab / pane that's still running a command or agent.
+    var confirmCloseRunning: Bool {
+        didSet { UserDefaults.standard.set(confirmCloseRunning, forKey: "confirmCloseRunning") }
+    }
     /// Notify when a command that ran at least this long finishes while
     /// Wireline isn't frontmost (seconds).
     var notifyCommandAfter: Double {
@@ -242,6 +246,7 @@ final class HostStore {
         self.terminalPaddingX = UserDefaults.standard.object(forKey: "terminalPaddingX") as? Double ?? 16
         self.terminalPaddingY = UserDefaults.standard.object(forKey: "terminalPaddingY") as? Double ?? 10
         self.inheritWorkingDirectory = UserDefaults.standard.object(forKey: "inheritWorkingDirectory") as? Bool ?? true
+        self.confirmCloseRunning = UserDefaults.standard.object(forKey: "confirmCloseRunning") as? Bool ?? true
         self.notifyCommandAfter = UserDefaults.standard.object(forKey: "notifyCommandAfter") as? Double ?? 10
         self.quickTerminalHeight = UserDefaults.standard.object(forKey: "quickTerminalHeight") as? Double ?? 0.4
         self.quickTerminalAutohide = UserDefaults.standard.object(forKey: "quickTerminalAutohide") as? Bool ?? true

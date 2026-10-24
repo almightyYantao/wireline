@@ -93,6 +93,7 @@ struct ContentView: View {
         }
         .modifier(DrawerAutoClose(activeTab: sessions.activeTabID, selectedAlias: selectedAlias,
                                   operation: operation, close: { setSidebar(false) }))
+        .modifier(ToolPageCloseShortcut(active: operation != nil) { operation = nil; fileHost = nil })
         .onReceive(NotificationCenter.default.publisher(for: .toggleSidebar)) { _ in toggleSidebar() }
         .onReceive(NotificationCenter.default.publisher(for: .editHost)) { _ in
             if let host = currentHost { editing = HostEditContext(host: host) }
@@ -283,6 +284,7 @@ struct SettingsModal: ViewModifier {
 
 private struct ContentModals: ViewModifier {
     @Environment(HostStore.self) private var store
+    @Environment(SessionStore.self) private var sessions
     @Binding var editing: HostEditContext?
     @Binding var showBackup: Bool
     @Binding var showNewGroup: Bool
@@ -292,6 +294,9 @@ private struct ContentModals: ViewModifier {
     func body(content: Content) -> some View {
         content
             .wlModal(item: $editing) { ctx in HostEditorView(context: ctx) }
+            .wlModal(item: Binding(get: { sessions.pendingClose }, set: { sessions.pendingClose = $0 })) { request in
+                CloseRunningSheet(request: request) { sessions.confirmPendingClose() }
+            }
             .wlModal(isPresented: $showBackup) { BackupView() }
             .wlModal(isPresented: $showNewGroup) {
                 NewGroupSheet { name in store.createGroup(name) }
@@ -318,6 +323,32 @@ private struct ContentModals: ViewModifier {
             .frame(idealWidth: width, maxWidth: width, idealHeight: height, maxHeight: height)
             .clipShape(shape)
             .wlFloating(shape, shadow: 0.5, radius: 30, y: 14)
+    }
+}
+
+/// "Still running — close anyway?" for a tab / pane with a command or agent in it.
+private struct CloseRunningSheet: View {
+    let request: SessionStore.CloseRequest
+    var onConfirm: () -> Void
+    @Environment(\.wlDismiss) private var dismiss
+    @Environment(Localizer.self) private var loc
+
+    var body: some View {
+        let names = request.busyTitles.joined(separator: "、")
+        WLSheet(loc("关闭正在运行的会话？", "Close a running session?"), subtitle: names,
+                symbol: "exclamationmark.triangle", width: 420, scrolls: false, onClose: { dismiss() }) {
+            let reopen = KeyBindingStore.shared.shortcut(for: .reopenClosedTab).display
+            Text(loc("里面还有命令或 Claude Code 等在运行，关闭会终止它们。可以用 \(reopen) 重新打开标签，但正在运行的进程回不来。",
+                     "Something is still running in it; closing ends it. \(reopen) reopens the tab, but not the running process."))
+                .font(WL.body).foregroundStyle(WL.textDim)
+                .fixedSize(horizontal: false, vertical: true)
+        } footer: {
+            Spacer()
+            Button(loc("取消", "Cancel")) { dismiss() }
+                .buttonStyle(.wlSecondary).keyboardShortcut(.cancelAction)
+            Button(loc("关闭", "Close"), action: onConfirm)
+                .buttonStyle(.wlDestructive).keyboardShortcut(.defaultAction)
+        }
     }
 }
 
@@ -725,6 +756,48 @@ private struct ConfigToast: View {
         }
         .frame(maxWidth: .infinity)
         .allowsHitTesting(false)
+    }
+}
+
+/// On a tool page (port forwarding, SFTP, keys) the terminals aren't mounted,
+/// so the "close shell" shortcut (⌘W) would fall through to the window's Close —
+/// and closing the only main window quits the app. Catch it first and go back
+/// to the SSH home instead. Swallowed (no-op) while a modal is up.
+private struct ToolPageCloseShortcut: ViewModifier {
+    let active: Bool
+    let close: () -> Void
+    @State private var box = Box()
+
+    @MainActor final class Box {
+        weak var window: NSWindow?
+        var monitor: Any?
+        var active = false
+        var close: () -> Void = {}
+
+        func handle(_ event: NSEvent) -> Bool {
+            guard active, let w = window, event.window === w,
+                  KeyBindingStore.shared.shortcut(for: .closeShell).matches(event)
+            else { return false }
+            if !WLModalRegistry.shared.hasModal(in: w) { close() }
+            return true
+        }
+    }
+
+    func body(content: Content) -> some View {
+        box.active = active
+        box.close = close
+        return content
+            .background(WindowAccessor { [box] w in box.window = w })
+            .onAppear {
+                guard box.monitor == nil else { return }
+                box.monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [box] event in
+                    let consumed = MainActor.assumeIsolated { box.handle(event) }
+                    return consumed ? nil : event
+                }
+            }
+            .onDisappear {
+                if let m = box.monitor { NSEvent.removeMonitor(m); box.monitor = nil }
+            }
     }
 }
 

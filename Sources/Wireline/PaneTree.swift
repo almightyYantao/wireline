@@ -554,7 +554,7 @@ struct PaneLeafView: View {
                 wlAnimateTerminalLayout { sessions.activeID = session.id; sessions.toggleZoom() }
             }
             paneButton("xmark", loc("关闭分屏", "Close pane")) {
-                wlAnimateTerminalLayout { sessions.close(session.id) }
+                sessions.requestClose([session.id])
             }
         }
         .wlContextMenu(zoomed ? [] : [
@@ -563,7 +563,7 @@ struct PaneLeafView: View {
             },
             .divider,
             .item(loc("关闭分屏", "Close Pane"), systemImage: "xmark", destructive: true) {
-                wlAnimateTerminalLayout { sessions.close(session.id) }
+                sessions.requestClose([session.id])
             },
         ])
     }

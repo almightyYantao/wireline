@@ -157,6 +157,9 @@ struct WirelineApp: App {
                     .shortcut(.jumpToNextPrompt, keys)
                 Button("Copy Last Command Output") { copyLastOutput(sessions) }
                     .shortcut(.copyLastOutput, keys)
+                Button("Reopen Closed Tab") { sessions.reopenClosed(store: store) }
+                    .shortcut(.reopenClosedTab, keys)
+                    .disabled(!sessions.canReopenClosed)
                 Button("Quick Terminal") { QuickTerminalController.shared.toggle() }
                     .shortcut(.toggleQuickTerminal, keys)
                 Button("Edit Host") { NotificationCenter.default.post(name: .editHost, object: nil) }
