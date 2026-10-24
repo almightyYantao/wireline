@@ -42,9 +42,15 @@ final class AgentServer {
             let fd = accept(listenFD, nil, nil)
             guard fd >= 0 else { return }
             let conn = AgentConnection(fd: fd, queue: .main)
-            // Same user only. (The code-signature check of P4 goes here too.)
+            // Same user, and signed like us (PeerIdentity): anything else
+            // could type into these shells.
             guard conn.peerUID == getuid() else {
                 AgentLog.write("refused a client with uid \(conn.peerUID.map(String.init) ?? "?")")
+                conn.close()
+                continue
+            }
+            if case .refused(let why) = PeerIdentity.check(fd: fd) {
+                AgentLog.write("refused a client: \(why)")
                 conn.close()
                 continue
             }

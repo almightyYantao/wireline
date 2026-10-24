@@ -8,6 +8,8 @@ import WirelineCore
 ///       Run the agent: own the sessions' PTYs, serve the app over a Unix
 ///       socket (default: AgentProtocol.socketPath). One per socket path;
 ///       a second one exits at once. --foreground logs to stderr.
+///   wireline-agent probe [--socket PATH]
+///       Connect and say hello: prints `welcome …` (exit 0) or `refused`.
 ///   wireline-agent snapshot COLS ROWS < bytes > snapshot
 ///       Feed stdin to a headless terminal and print its snapshot (tests,
 ///       debugging a restore).
@@ -47,6 +49,24 @@ case "serve":
     // A run loop on the real main thread, not dispatchMain(): that parks the
     // main thread and drains the main queue elsewhere, which MainActor rejects.
     withExtendedLifetime(server) { while true { RunLoop.main.run() } }
+
+case "probe":
+    // Connect and say hello as a client would (checking an agent, and
+    // its client check: this binary sits beside the agent, signed alike).
+    let socketPath = option("--socket") ?? AgentProtocol.socketPath
+    guard let fd = try? AgentConnection.connect(path: socketPath) else { fail("no agent at \(socketPath)") }
+    let conn = AgentConnection(fd: fd, queue: .main)
+    conn.onFrame = { frame in
+        if case .control(.welcome(let proto, let version, _)) = frame {
+            print("welcome proto=\(proto) agent=\(version)")
+            exit(0)
+        }
+    }
+    conn.onClose = { print("refused"); exit(1) }
+    conn.start()
+    conn.send(.control(.hello(proto: AgentProtocol.version, client: "probe")))
+    DispatchQueue.main.asyncAfter(deadline: .now() + 5) { print("timeout"); exit(2) }
+    while true { RunLoop.main.run() }
 
 case "snapshot":
     let rest = Array(args.dropFirst())

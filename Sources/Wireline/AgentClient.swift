@@ -101,6 +101,13 @@ final class AgentClient {
     }
 
     private func open(_ fd: Int32) {
+        // Only a genuine agent gets spawn requests (they carry passwords).
+        if case .refused(let why) = PeerIdentity.check(fd: fd) {
+            terminalLog.error("refusing the session agent at \(self.socketPath, privacy: .public): \(why, privacy: .public)")
+            close(fd)
+            unavailable()
+            return
+        }
         let c = AgentConnection(fd: fd, queue: .main)
         c.onFrame = { [weak self] frame in MainActor.assumeIsolated { self?.received(frame) } }
         c.onClose = { [weak self] in MainActor.assumeIsolated { self?.lost() } }

@@ -188,4 +188,5 @@ fork 分支 `wireline-agent`：`ca918cbaa`、`9b88d5b08`、构建脚本一次。
 - App 端：agent 连不上时（3 秒内拉不起来），还没启动的会话改在 App 里运行（`AgentPTY.runsLocally`），所以打开终端永远不依赖 agent。
 - 输出帧带偏移量；客户端发现偏移对不上，就重新 attach、拿一份新快照。
 - 快捷终端不交给 agent（`allowsAgent: false`），因为它不存档，退出后接不回来。启动恢复时，agent 里没有标签对应的孤儿会话会被关掉。
-- 待 P4：代码签名校验（§3.8）、agent 升级时新旧版本并存的实测、首次 ⌘Q 的提示、真实 App 手测清单。
+- §3.8 已完成（`PeerIdentity`，两端都校验）：有 Team ID 时要求一致，ad-hoc 时要求同目录且签名有效。Debug 构建可以用 `WIRELINE_AGENT_TRUST_ANY=1` 放行（测试用），release 构建没有这个开关。已验证：xctest 被拒；同目录的 `wireline-agent probe` 被接受；正式包（Developer ID）里同一 Team 被接受、未签名的开发构建被拒。
+- 待 P4：agent 升级时新旧版本并存的实测、首次 ⌘Q 的提示、真实 App 手测清单；fork 推送和含 GhosttyVt 的 Release（需确认）。

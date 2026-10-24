@@ -23,6 +23,9 @@ final class AgentSessionHarnessTests: XCTestCase {
         let p = Process()
         p.executableURL = Bundle(for: Self.self).bundleURL.deletingLastPathComponent().appendingPathComponent("wireline-agent")
         p.arguments = ["serve", "--socket", dir + "/s.sock", "--idle-exit", "30", "--foreground"]
+        // xctest (Apple-signed) on one side: the debug-only escape hatch, both ends.
+        p.environment = ProcessInfo.processInfo.environment.merging(["WIRELINE_AGENT_TRUST_ANY": "1"]) { $1 }
+        setenv("WIRELINE_AGENT_TRUST_ANY", "1", 1)
         p.standardOutput = FileHandle.nullDevice
         p.standardError = FileHandle.nullDevice
         try p.run()
@@ -34,6 +37,7 @@ final class AgentSessionHarnessTests: XCTestCase {
 
     override func tearDown() async throws {
         UserDefaults.standard.removeObject(forKey: "sessionAgent")
+        unsetenv("WIRELINE_AGENT_TRUST_ANY")
         agent?.terminate()
         agent?.waitUntilExit()
         try? FileManager.default.removeItem(atPath: dir)

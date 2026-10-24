@@ -28,10 +28,14 @@ final class AgentIntegrationTests: XCTestCase {
         try? FileManager.default.removeItem(atPath: dir)
     }
 
-    private func startAgent(idleExit: Double) throws -> Process {
+    private func startAgent(idleExit: Double, trustAny: Bool = true) throws -> Process {
         let p = Process()
         p.executableURL = agentBinary
         p.arguments = ["serve", "--socket", socketPath, "--idle-exit", "\(idleExit)", "--foreground"]
+        // The test runner is xctest, signed by Apple: a debug-only escape hatch.
+        var env = ProcessInfo.processInfo.environment
+        env["WIRELINE_AGENT_TRUST_ANY"] = trustAny ? "1" : nil
+        p.environment = env
         // Not the test's stdout: an agent left behind would hold `swift test`'s pipe open.
         p.standardOutput = FileHandle.nullDevice
         p.standardError = FileHandle.nullDevice
@@ -179,5 +183,31 @@ final class AgentIntegrationTests: XCTestCase {
         let idle = try startAgent(idleExit: 0.5)       // nothing to do: leaves on its own
         agent = idle
         XCTAssertTrue(wait(5) { !idle.isRunning }, "idle agent exits")
+    }
+
+    /// Without the debug escape hatch: a client signed differently (xctest,
+    /// Apple's) is refused; one beside the agent, signed alike, is welcome.
+    func testOnlyClientsSignedLikeTheAgent() throws {
+        agent?.terminate(); agent?.waitUntilExit()
+        agent = try startAgent(idleExit: 30, trustAny: false)
+
+        let stranger = try Client(path: socketPath)
+        stranger.send(.hello(proto: AgentProtocol.version, client: "xctest"))
+        XCTAssertTrue(wait(5) { stranger.closed }, "xctest is refused")
+        XCTAssertFalse(stranger.controls.contains { if case .welcome = $0 { true } else { false } })
+
+        let probe = Process()
+        probe.executableURL = agentBinary
+        probe.arguments = ["probe", "--socket", socketPath]
+        var env = ProcessInfo.processInfo.environment
+        env["WIRELINE_AGENT_TRUST_ANY"] = nil
+        probe.environment = env
+        let out = Pipe()
+        probe.standardOutput = out
+        try probe.run()
+        probe.waitUntilExit()
+        let said = String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        XCTAssertEqual(probe.terminationStatus, 0, said)
+        XCTAssertTrue(said.hasPrefix("welcome"), said)
     }
 }
