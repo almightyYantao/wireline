@@ -107,9 +107,9 @@ public enum IslandMode: Equatable, Sendable {
     /// Not shown at all.
     case hidden
     /// Only the hardware notch's own shape (no ears): invisible on a notched
-    /// screen, but hovering it still opens the list. Off-notch: hidden.
+    /// screen, but hovering it peeks and a click opens the list. Off-notch: hidden.
     case dormant
-    /// Notch plus small ears.
+    /// Notch plus small ears: something is running, or the pointer is on it.
     case collapsed
     /// A wider collapsed capsule carrying one line ("✓ 完成 · 12s").
     case pulse(IslandPulse)
@@ -138,8 +138,6 @@ public struct IslandBoard: Equatable, Sendable {
 
     /// How long a finished row stays listed.
     public var linger: TimeInterval = 45
-    /// How long a new "needs you" (without a confirmation) holds the card open.
-    public var attentionPeek: TimeInterval = 8
     /// How long a completion pulse shows.
     public var pulseLength: TimeInterval = 2.6
     /// A row pulses at most once per this long — an agent that pauses
@@ -159,6 +157,7 @@ public struct IslandBoard: Equatable, Sendable {
     public mutating func upsert(_ new: IslandItem, at now: Date) {
         guard let i = items.firstIndex(where: { $0.id == new.id }) else {
             items.append(new)
+            if new.needsUser, new.confirmation == nil { flashAttention(new, at: now) }
             return
         }
         let old = items[i]
@@ -175,6 +174,7 @@ public struct IslandBoard: Equatable, Sendable {
                 ? old.detail == new.detail : old.confirmation?.asks(new.confirmation) == true)
             merged.attentionAt = same ? old.attentionAt : now
             if !same { dismissed.remove(new.id) }
+            if !same, new.confirmation == nil { flashAttention(merged, at: now) }
         } else {
             merged.attentionAt = nil
             dismissed.remove(new.id)
@@ -196,6 +196,17 @@ public struct IslandBoard: Equatable, Sendable {
             pulse = IslandPulse(itemID: id, source: item.source, text: text,
                                 tone: item.tone, until: now.addingTimeInterval(pulseLength))
         }
+    }
+
+    /// A "waiting for you" without a question to answer (an agent at its
+    /// prompt) only flashes: it doesn't keep the island up.
+    private mutating func flashAttention(_ item: IslandItem, at now: Date) {
+        guard pulseAllowed(item.id, at: now) else { return }
+        lastPulse[item.id] = now
+        lastAnyPulse = now
+        let text = item.detail.isEmpty ? item.title : item.title + " · " + item.detail
+        pulse = IslandPulse(itemID: item.id, source: item.source, text: text,
+                            tone: .attention, until: now.addingTimeInterval(pulseLength))
     }
 
     /// Failures always get through; successes respect the cooldowns.
@@ -233,29 +244,26 @@ public struct IslandBoard: Equatable, Sendable {
         }
     }
 
-    /// Is this row a reason to show the island at all?
-    private func isLive(_ item: IslandItem, at now: Date) -> Bool {
-        switch item.tone {
-        case .working, .attention: return true
-        case .idle: return item.confirmation != nil
-        case .success, .failure:
-            return item.finishedAt.map { now.timeIntervalSince($0) < linger } ?? false
-        }
+    /// Is this row a reason to show the island at all? Only work in progress
+    /// and a question to answer: an idle or finished agent, a done command,
+    /// keep it tucked behind the notch (their moment was the pulse).
+    private func isLive(_ item: IslandItem) -> Bool {
+        item.tone == .working || item.confirmation != nil
     }
 
-    /// Whether something should hold the card open without a hover.
-    private func forcesOpen(_ item: IslandItem, at now: Date) -> Bool {
-        guard item.needsUser, !dismissed.contains(item.id) else { return false }
-        if item.confirmation != nil { return true }
-        return item.attentionAt.map { now.timeIntervalSince($0) < attentionPeek } ?? false
+    /// Whether something should hold the card open without a click: a
+    /// confirmation (an AI waiting on Allow / Deny), until it's folded away.
+    private func forcesOpen(_ item: IslandItem) -> Bool {
+        item.confirmation != nil && !dismissed.contains(item.id)
     }
 
-    public func mode(at now: Date, hovering: Bool, alwaysShow: Bool) -> IslandMode {
-        if hovering && (!items.isEmpty || alwaysShow) { return .expanded }
-        if items.contains(where: { forcesOpen($0, at: now) }) { return .expanded }
+    /// `hovering` only peeks (the ears come out, saying "click me"); `pinned`
+    /// is the user's click, which opens the card even with nothing in it.
+    public func mode(at now: Date, hovering: Bool, pinned: Bool = false, alwaysShow: Bool) -> IslandMode {
+        if pinned || items.contains(where: forcesOpen) { return .expanded }
         if let pulse, pulse.until > now { return .pulse(pulse) }
-        if alwaysShow || items.contains(where: { isLive($0, at: now) }) { return .collapsed }
-        return items.isEmpty ? .hidden : .dormant
+        if hovering || alwaysShow || items.contains(where: isLive) { return .collapsed }
+        return .dormant
     }
 
     /// Rows in display order: needs-you first, then running, then the rest
@@ -306,10 +314,6 @@ public struct IslandBoard: Equatable, Sendable {
         for item in items {
             if let done = item.finishedAt, !item.persistent || now.timeIntervalSince(done) < linger {
                 let end = done.addingTimeInterval(linger)
-                if end > now { dates.append(end) }
-            }
-            if item.needsUser, item.confirmation == nil, !dismissed.contains(item.id), let at = item.attentionAt {
-                let end = at.addingTimeInterval(attentionPeek)
                 if end > now { dates.append(end) }
             }
         }

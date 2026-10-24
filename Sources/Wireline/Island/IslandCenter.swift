@@ -41,15 +41,24 @@ final class IslandCenter {
     static let shared = IslandCenter()
 
     private(set) var board = IslandBoard()
-    /// The pointer is over the island.
+    /// The pointer is over the island: it peeks (ears out). Leaving folds a
+    /// card the user opened.
     var hovering = false {
-        didSet { if hovering != oldValue { now = Date() } }
+        didSet {
+            guard hovering != oldValue else { return }
+            now = Date()
+            if !hovering { pinned = false }
+        }
+    }
+    /// The user clicked the island open.
+    private(set) var pinned = false {
+        didSet { if pinned != oldValue { now = Date() } }
     }
     /// Advanced on every change and at every deadline, so `mode` re-evaluates.
     private(set) var now = Date()
 
     var mode: IslandMode {
-        board.mode(at: now, hovering: hovering, alwaysShow: IslandSettings.shared.alwaysShow)
+        board.mode(at: now, hovering: hovering, pinned: pinned, alwaysShow: IslandSettings.shared.alwaysShow)
     }
 
     /// For jumping to a pane.
@@ -105,7 +114,19 @@ final class IslandCenter {
     func dismissAttention() {
         now = Date()
         board.dismissAttention()
+        pinned = false
         reschedule()
+    }
+
+    /// A click on the island: open it, or fold it back.
+    func toggleOpen() {
+        if mode == .expanded {
+            pinned = false
+            board.dismissAttention()     // a forced-open card folds too
+        } else {
+            pinned = true
+        }
+        now = Date()
     }
 
     func setDecision(_ id: String, _ handler: ((IslandDecision) -> Void)?) {
@@ -123,6 +144,7 @@ final class IslandCenter {
 
     /// Bring Wireline forward on the row's pane.
     func jump(_ item: IslandItem) {
+        pinned = false
         NSApp.activate(ignoringOtherApps: true)
         if let sid = item.sessionID, let sessions, sessions.session(sid) != nil {
             sessions.focusSession(sid)

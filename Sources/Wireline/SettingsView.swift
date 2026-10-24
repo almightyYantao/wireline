@@ -381,14 +381,14 @@ struct SettingsView: View {
                 .animation(Motion.disclose, value: store.backgroundMonitor)
 
                 section(loc("刘海岛", "Notch Island"),
-                        footer: loc("在屏幕顶部刘海处显示 AI 与终端里编码 Agent（Claude Code、Codex…）的实时状态：思考中、等你确认、已完成。高危命令和工具调用可以直接在岛上允许或拒绝；点一行回到对应终端。没有刘海的屏幕显示在菜单栏下方。",
-                                    "Live status of the AI and of coding agents in your panes (Claude Code, Codex…) around the notch: thinking, waiting for you, done. Allow or deny risky commands and tool calls right there; click a row to jump to its terminal. Screens without a notch get a pill under the menu bar.")) {
+                        footer: loc("在屏幕顶部刘海处显示 AI 与终端里编码 Agent（Claude Code、Codex…）的实时状态。平时藏在刘海里，有任务在跑或等你确认时才露出来；随时可以点刘海展开。高危命令和工具调用可以直接在岛上允许或拒绝；点一行回到对应终端。没有刘海的屏幕显示在菜单栏下方。",
+                                    "Live status of the AI and of coding agents in your panes (Claude Code, Codex…) around the notch. It stays tucked in the notch until something runs or needs your OK; click the notch to open it any time. Allow or deny risky commands and tool calls right there; click a row to jump to its terminal. Screens without a notch get a pill under the menu bar.")) {
                     Toggle(isOn: $island.enabled) { rowLabel(loc("刘海岛", "Notch island")) }
                         .toggleStyle(.wlSwitch).frame(minHeight: 38).wlConfigLocked("notch-island")
                     if island.enabled {
                         WLFormDivider()
                         Toggle(isOn: Binding(get: { !island.alwaysShow }, set: { island.alwaysShow = !$0 })) {
-                            rowLabel(loc("仅在有活动时显示", "Only show when something's going on"))
+                            rowLabel(loc("仅在有任务运行时显示", "Only show while something runs"))
                         }
                         .toggleStyle(.wlSwitch).frame(minHeight: 38).wlConfigLocked("notch-island-always")
                         .transition(.wlDisclose)

@@ -135,26 +135,27 @@ final class IslandBoardTests: XCTestCase {
                    confirmation: confirmation, persistent: persistent, at: at(s))
     }
 
-    func testHiddenWhenEmpty() {
+    func testEmptyStaysBehindTheNotchUntilClicked() {
         let b = IslandBoard()
-        XCTAssertEqual(b.mode(at: t0, hovering: false, alwaysShow: false), .hidden)
-        XCTAssertEqual(b.mode(at: t0, hovering: true, alwaysShow: false), .hidden)
+        XCTAssertEqual(b.mode(at: t0, hovering: false, alwaysShow: false), .dormant)
+        XCTAssertEqual(b.mode(at: t0, hovering: true, alwaysShow: false), .collapsed)   // peek
+        XCTAssertEqual(b.mode(at: t0, hovering: true, pinned: true, alwaysShow: false), .expanded)
         XCTAssertEqual(b.mode(at: t0, hovering: false, alwaysShow: true), .collapsed)
-        XCTAssertEqual(b.mode(at: t0, hovering: true, alwaysShow: true), .expanded)
         XCTAssertEqual(b.status(at: t0), .none)
     }
 
-    func testWorkingCollapsedHoverExpands() {
+    func testWorkingShowsEarsAndHoverOnlyPeeks() {
         var b = IslandBoard()
         b.upsert(item("a", .working), at: t0)
         b.upsert(item("b", .working), at: t0)
         XCTAssertEqual(b.mode(at: t0, hovering: false, alwaysShow: false), .collapsed)
-        XCTAssertEqual(b.mode(at: t0, hovering: true, alwaysShow: false), .expanded)
+        XCTAssertEqual(b.mode(at: t0, hovering: true, alwaysShow: false), .collapsed)
+        XCTAssertEqual(b.mode(at: t0, hovering: true, pinned: true, alwaysShow: false), .expanded)
         XCTAssertEqual(b.status(at: t0), .working(2))
         XCTAssertEqual(b.leadSource, .ai)
     }
 
-    func testFinishPulsesThenLingersThenGoes() {
+    func testFinishPulsesThenTucksAway() {
         var b = IslandBoard()
         b.upsert(item("a", .working), at: t0)
         b.finish("a", success: true, detail: "完成", pulse: "✓ 完成 · 12s", at: at(12))
@@ -165,11 +166,12 @@ final class IslandBoardTests: XCTestCase {
         XCTAssertEqual(b.status(at: at(13)), .success)
         let afterPulse = at(12 + b.pulseLength + 0.1)
         b.prune(at: afterPulse)
-        XCTAssertEqual(b.mode(at: afterPulse, hovering: false, alwaysShow: false), .collapsed)
+        // Still in the list for a while, but nothing runs: no ears.
+        XCTAssertEqual(b.items.count, 1)
+        XCTAssertEqual(b.mode(at: afterPulse, hovering: false, alwaysShow: false), .dormant)
         XCTAssertEqual(b.nextDeadline(after: afterPulse), at(12 + b.linger))
         b.prune(at: at(12 + b.linger))
         XCTAssertTrue(b.items.isEmpty)
-        XCTAssertEqual(b.mode(at: at(12 + b.linger), hovering: false, alwaysShow: false), .hidden)
     }
 
     func testConfirmationForcesOpenUntilDismissedOrAnswered() {
@@ -181,6 +183,7 @@ final class IslandBoardTests: XCTestCase {
         XCTAssertEqual(b.status(at: at(1)), .attention(1))
         XCTAssertEqual(b.ordered.first?.id, "ai")
         b.dismissAttention()
+        // Folded, but a question is still waiting: the ears stay out.
         XCTAssertEqual(b.mode(at: at(100), hovering: false, alwaysShow: false), .collapsed)
         // A different question re-opens it.
         b.upsert(item("ai", .attention, confirmation: IslandConfirmation(kind: .toolCall, subject: "x.y")), at: at(101))
@@ -196,21 +199,24 @@ final class IslandBoardTests: XCTestCase {
         XCTAssertNil(b.item("ai")?.finishedAt)
     }
 
-    func testDismissOneRow() {
+    /// An agent sitting at its prompt ("waiting for your input") isn't work:
+    /// it flashes once and tucks away, instead of holding the island up.
+    func testAgentWaitingFlashesThenTucksAway() {
         var b = IslandBoard()
-        b.upsert(item("viewed", .attention), at: t0)
-        b.dismiss("viewed")
-        XCTAssertEqual(b.mode(at: at(1), hovering: false, alwaysShow: false), .collapsed)
-        b.upsert(item("other", .attention), at: at(1))
-        XCTAssertEqual(b.mode(at: at(2), hovering: false, alwaysShow: false), .expanded)
-    }
-
-    func testAttentionWithoutConfirmationPeeksThenFolds() {
-        var b = IslandBoard()
-        b.upsert(item("agent", .attention, persistent: true), at: t0)
-        XCTAssertEqual(b.mode(at: at(1), hovering: false, alwaysShow: false), .expanded)
-        XCTAssertEqual(b.nextDeadline(after: at(1)), at(b.attentionPeek))
-        XCTAssertEqual(b.mode(at: at(b.attentionPeek), hovering: false, alwaysShow: false), .collapsed)
+        b.upsert(IslandItem(id: "agent", source: .codingAgent("claude"), title: "Claude", detail: "等你回复",
+                            tone: .attention, persistent: true, at: t0), at: t0)
+        guard case .pulse(let p) = b.mode(at: at(1), hovering: false, alwaysShow: false) else {
+            return XCTFail("expected a flash")
+        }
+        XCTAssertEqual(p.text, "Claude · 等你回复")
+        XCTAssertEqual(p.tone, .attention)
+        b.prune(at: at(b.pulseLength + 0.1))
+        XCTAssertEqual(b.mode(at: at(b.pulseLength + 0.1), hovering: false, alwaysShow: false), .dormant)
+        XCTAssertEqual(b.status(at: at(10)), .attention(1))     // the ear still says so on a peek
+        // The same request again doesn't flash again.
+        b.upsert(IslandItem(id: "agent", source: .codingAgent("claude"), title: "Claude", detail: "等你回复",
+                            tone: .attention, persistent: true, at: at(20)), at: at(20))
+        XCTAssertEqual(b.mode(at: at(20.5), hovering: false, alwaysShow: false), .dormant)
     }
 
     func testQuietPersistentRowsLeaveIslandDormant() {
@@ -220,7 +226,7 @@ final class IslandBoardTests: XCTestCase {
         b.prune(at: at(500))
         XCTAssertEqual(b.items.count, 1)                     // still listed while the process runs
         XCTAssertEqual(b.mode(at: at(500), hovering: false, alwaysShow: false), .dormant)
-        XCTAssertEqual(b.mode(at: at(500), hovering: true, alwaysShow: false), .expanded)
+        XCTAssertEqual(b.mode(at: at(500), hovering: false, pinned: true, alwaysShow: false), .expanded)
         XCTAssertEqual(b.status(at: at(500)), .none)
         XCTAssertNil(b.nextDeadline(after: at(500)))
     }

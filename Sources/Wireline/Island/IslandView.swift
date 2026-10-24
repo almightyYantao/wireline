@@ -75,6 +75,8 @@ struct IslandRootView: View {
 
     /// What's drawn — follows `center.mode` with an animation chosen by direction.
     @State private var shown: IslandMode
+    /// The pointer is down on the closed island (press feedback).
+    @State private var pressed = false
 
     init() { _shown = State(initialValue: IslandCenter.shared.mode) }
 
@@ -135,6 +137,15 @@ struct IslandRootView: View {
                 .shadow(color: .black.opacity(mode == .expanded ? 0.45 : 0), radius: 18, y: 8)
         }
         .contentShape(shape)
+        // Closed: a click anywhere on it opens the card. Open: only the top
+        // strip folds it (rows and buttons below have their own taps).
+        .onTapGesture { if mode != .expanded { center.toggleOpen() } }
+        .simultaneousGesture(DragGesture(minimumDistance: 0)
+            .onChanged { _ in if mode != .expanded, !pressed { pressed = true } }
+            .onEnded { _ in pressed = false })
+        // Pressed: dip like the island's buttons, from the top edge so it stays on the notch.
+        .scaleEffect(pressed && mode != .expanded && !Motion.reduce ? 0.97 : 1, anchor: .top)
+        .animation(Motion.resolved(Motion.state), value: pressed)
         .opacity(visible ? 1 : 0)
         .offset(x: layout.centerX - size.width / 2)
         .animation(Motion.resolved(Motion.state), value: controller.listHeight)
@@ -160,6 +171,8 @@ private struct IslandContent: View {
             }
             .frame(height: layout.core.height)
             .opacity(ears ? 1 : 0)
+            .contentShape(Rectangle())
+            .onTapGesture { if mode == .expanded { center.toggleOpen() } }
 
             if case .pulse(let p) = mode {
                 IslandPulseLine(pulse: p)
