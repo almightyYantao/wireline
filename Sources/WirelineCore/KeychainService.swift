@@ -88,6 +88,21 @@ public struct KeychainService: Sendable {
         }
     }
 
+    /// Every account with an item under this service. Attributes only: macOS
+    /// keychains won't return data for a match-all query.
+    public func accounts() -> [String] {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecReturnAttributes as String: true,
+            kSecMatchLimit as String: kSecMatchLimitAll
+        ]
+        var items: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &items) == errSecSuccess,
+              let list = items as? [[String: Any]] else { return [] }
+        return list.compactMap { $0[kSecAttrAccount as String] as? String }
+    }
+
     /// Rename an alias's keychain entry (used when a host is renamed).
     public func rename(from old: String, to new: String) throws {
         guard old != new, let pw = try password(for: old) else { return }

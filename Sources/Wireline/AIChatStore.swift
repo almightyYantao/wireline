@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import WirelineCore
 
 /// Persists AI conversations per host (and per local shell), so each machine
 /// keeps its own history across panel opens / app restarts.
@@ -30,9 +31,16 @@ final class AIChatStore {
 
     func load(_ key: String) -> Convo { convos[key] ?? Convo() }
 
+    /// The model's side is saved masked, the way it was sent; the display side
+    /// is what the terminal already showed.
     func save(_ key: String, display: [AIMessage], model: [AIMessage]) {
-        convos[key] = Convo(display: Array(display.suffix(maxMessages)),
-                            model: Array(model.suffix(maxMessages)))
+        let masker = PrivacyContext.masker(conversation: key, level: AIConfig.shared.privacyLevel)
+        let model = model.suffix(maxMessages).map { m in
+            var m = m
+            if let masker { m.content = masker.mask(m.content) }
+            return m
+        }
+        convos[key] = Convo(display: Array(display.suffix(maxMessages)), model: model)
         persist()
     }
 

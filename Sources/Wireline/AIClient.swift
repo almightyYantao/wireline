@@ -1,4 +1,5 @@
 import Foundation
+import WirelineCore
 
 struct AIMessage: Codable, Sendable, Identifiable, Equatable {
     enum Role: String, Codable, Sendable { case user, assistant, system }
@@ -29,11 +30,20 @@ struct AIClient: Sendable {
 
     /// Stream assistant token deltas for the given system prompt + conversation.
     /// `model` overrides the configured default (for per-task model switching).
-    func stream(system: String, messages: [AIMessage], model: String? = nil) -> AsyncThrowingStream<String, Error> {
+    ///
+    /// Privacy is enforced here, for every caller: what goes out is masked and
+    /// the reply comes back restored, so callers deal in real values only. A
+    /// conversation passes its own `masker` so placeholders stay stable across
+    /// turns; otherwise each request gets a fresh one.
+    func stream(system: String, messages: [AIMessage], model: String? = nil,
+                masker: PrivacyMasker? = nil) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
                     guard config.isConfigured else { throw AIClientError.notConfigured }
+                    let masker = masker ?? PrivacyContext.masker(config.privacyLevel)
+                    if let masker { PrivacyContext.refresh(masker) }
+                    let restorer = masker?.streamRestorer()
                     let base = config.activeBaseURL.trimmingCharacters(in: CharacterSet(charactersIn: " /"))
                     guard let url = URL(string: base + "/chat/completions") else { throw AIClientError.badURL }
 
@@ -44,8 +54,10 @@ struct AIClient: Sendable {
                     let key = config.apiKey
                     if !key.isEmpty { req.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization") }
 
-                    var wire: [[String: String]] = [["role": "system", "content": system]]
-                    wire += messages.map { ["role": $0.role.rawValue, "content": $0.content] }
+                    let out = { (text: String) in masker?.mask(text) ?? text }
+                    let note = masker == nil ? "" : "\n\n" + Self.placeholderNote
+                    var wire: [[String: String]] = [["role": "system", "content": out(system) + note]]
+                    wire += messages.map { ["role": $0.role.rawValue, "content": out($0.content)] }
                     // Only the required fields. Optional sampling parameters
                     // (temperature, top_p …) are rejected by some models — e.g.
                     // recent Claude models refuse a non-default temperature — so
@@ -74,8 +86,10 @@ struct AIClient: Sendable {
                               let choices = obj["choices"] as? [[String: Any]],
                               let delta = choices.first?["delta"] as? [String: Any],
                               let content = delta["content"] as? String else { continue }
-                        continuation.yield(content)
+                        let shown = restorer?.feed(content) ?? content
+                        if !shown.isEmpty { continuation.yield(shown) }
                     }
+                    if let rest = restorer?.finish(), !rest.isEmpty { continuation.yield(rest) }
                     continuation.finish()
                 } catch {
                     continuation.finish(throwing: error)
@@ -84,6 +98,12 @@ struct AIClient: Sendable {
             continuation.onTermination = { _ in task.cancel() }
         }
     }
+
+    /// Tells the model what the placeholders are, so it passes them through.
+    static let placeholderNote = """
+    【脱敏说明】上下文中形如 [WL…_SECRET_1]、[WL…_IP_2]、[WL…_HOST_3]（… 是四位随机字符）的是脱敏占位符，各代表一个真实的密钥 / IP / 主机名。\
+    需要用到时（命令、文件内容、参数里）原样照抄占位符即可，本地执行前会自动还原成真实值；不要猜测、拆分或改写它，也不要因为看不到真实值而拒绝执行。
+    """
 }
 
 /// Rough local token estimate (no API dependency): ~4 ASCII chars/token, and
@@ -95,25 +115,5 @@ enum AITokenEstimator {
             t += scalar.isASCII ? 0.25 : 0.7
         }
         return Int(t.rounded())
-    }
-}
-
-/// Best-effort redaction of obvious secrets before sending context to the model.
-enum AIRedactor {
-    static func redact(_ text: String) -> String {
-        var out = text
-        let patterns = [
-            // key=secret / password: secret / token "..."
-            #"(?i)(password|passwd|passphrase|secret|token|api[_-]?key|access[_-]?key)\s*[:=]\s*\S+"#,
-            // long base64/hex blobs that look like credentials
-            #"\b[A-Fa-f0-9]{32,}\b"#,
-            #"\b[A-Za-z0-9+/]{40,}={0,2}\b"#
-        ]
-        for p in patterns {
-            guard let re = try? NSRegularExpression(pattern: p) else { continue }
-            let range = NSRange(out.startIndex..., in: out)
-            out = re.stringByReplacingMatches(in: out, range: range, withTemplate: "«redacted»")
-        }
-        return out
     }
 }

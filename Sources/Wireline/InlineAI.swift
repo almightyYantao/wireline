@@ -171,14 +171,13 @@ final class InlineAIController {
         return s
     }
 
-    /// Fold the recent terminal output into the user's request as context (redacted
-    /// when the user has that enabled). Only the first turn carries the transcript
-    /// of screen output; follow-ups are just the user's answer.
+    /// Fold the recent terminal output into the user's request as context (masked
+    /// by `AIClient`). Only the first turn carries the transcript of screen
+    /// output; follow-ups are just the user's answer.
     private func contextualize(_ nl: String, session: TerminalSession) -> String {
         guard transcript.isEmpty else { return nl }   // follow-up: no need to re-send context
         let out = String(session.recentOutput.suffix(1500))
-        let ctx = ai.redact ? AIRedactor.redact(out) : out
-        return "终端最近内容（供参考）：\n\(ctx)\n\n需求：\(nl)"
+        return "终端最近内容（供参考）：\n\(out)\n\n需求：\(nl)"
     }
 
     /// Split a reply into (explanation, command). The command comes from the first

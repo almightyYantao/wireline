@@ -578,10 +578,16 @@ struct SettingsView: View {
                 }
 
                 section(loc("隐私", "Privacy"),
-                        footer: loc("开启后，发给模型的终端输出会自动打码明显的密码 / 密钥 / token。",
-                                    "Terminal output sent to the model has obvious passwords/keys/tokens masked.")) {
-                    Toggle(isOn: $ai.redact) { rowLabel(loc("发送前脱敏（密码 / token 等）", "Redact secrets before sending")) }
-                        .toggleStyle(.wlSwitch).frame(minHeight: 38).wlConfigLocked("ai-redact")
+                        footer: loc("发给模型前，把密码、token、私钥（以及可选的 IP 和真实主机名）换成占位符；模型回传的命令和文件内容在本地还原后再执行，真实值不离开本机。主机别名不会被替换。",
+                                    "Before anything reaches the model, passwords, tokens and keys (and optionally IPs and real hostnames) become placeholders; commands and file edits coming back are restored locally before they run, so the real values never leave this Mac. Host aliases are kept.")) {
+                    WLFormRow(loc("发送前脱敏", "Mask before sending")) {
+                        WLMenuPicker(selection: $ai.privacyLevel, options: [
+                            WLOption(PrivacyPolicy.Level.off, loc("关闭", "Off")),
+                            WLOption(PrivacyPolicy.Level.secrets, loc("密钥", "Secrets")),
+                            WLOption(PrivacyPolicy.Level.all, loc("密钥 + 地址", "Secrets + addresses"))
+                        ], minWidth: 150)
+                        .wlConfigLocked("ai-privacy").wlConfigLocked("ai-redact")
+                    }
                 }
             }
             .padding(22)

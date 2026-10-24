@@ -9,7 +9,8 @@ import WirelineCore
 @MainActor
 final class HostStore {
     private(set) var document: SSHConfig.Document
-    private(set) var hosts: [Host]
+    /// Mirrored into `PrivacyContext` so the AI masker knows the real addresses.
+    private(set) var hosts: [Host] { didSet { PrivacyContext.setHosts(hosts) } }
     var statuses: [String: HostStatus] = [:]
     var lastError: String?
 

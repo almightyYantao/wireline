@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import WirelineCore
 
 /// Live state of one AI conversation (one per host; all local shells share
 /// `__local__`), owned *outside* the panel view.
@@ -56,6 +57,8 @@ final class AIConvoState {
     /// Output of the last command the agent ran this turn — used to catch the
     /// model handing a line of that output back as if it were a new command.
     var lastOutput = ""
+    /// Masks what this conversation sends (see `PrivacyContext`).
+    var masker: PrivacyMasker? { PrivacyContext.masker(conversation: key, level: AIConfig.shared.privacyLevel) }
     /// Whether the persisted transcript has been merged in — once per app run,
     /// after which this object (not the file) is the live source of truth.
     var loadedFromDisk = false

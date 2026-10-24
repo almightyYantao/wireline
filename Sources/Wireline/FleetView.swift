@@ -218,9 +218,8 @@ struct FleetView: View {
         summarizing = true
         let client = AIClient(config: ai)
         let joined = results.map { "### \($0.alias) (exit \($0.exitCode))\n\($0.output)" }.joined(separator: "\n\n")
-        let ctx = ai.redact ? AIRedactor.redact(joined) : joined
         let sys = "你是运维助手。根据多台主机执行同一命令的结果，用中文给出简明汇总：整体结论、异常/需要关注的主机（点名），必要时用简单表格或列表。"
-        let msg = AIMessage(role: .user, content: "命令：\(command)\n\n各主机结果：\n\(String(ctx.suffix(8000)))")
+        let msg = AIMessage(role: .user, content: "命令：\(command)\n\n各主机结果：\n\(String(joined.suffix(8000)))")
         task = Task {
             var text = ""
             do { for try await d in client.stream(system: sys, messages: [msg]) { text += d } }

@@ -33,8 +33,8 @@ final class AIConfig: @unchecked Sendable {
     var ollamaModelFast: String { didSet { d.set(ollamaModelFast, forKey: "ai.ollama.modelFast") } }
     /// Optional price per 1K tokens (in your currency); 0 hides cost.
     var pricePer1k: Double { didSet { d.set(pricePer1k, forKey: "ai.pricePer1k") } }
-    /// Redact obvious secrets (passwords, tokens) from context before sending.
-    var redact: Bool { didSet { d.set(redact, forKey: "ai.redact") } }
+    /// What is masked (reversibly) before anything reaches the model.
+    var privacyLevel: PrivacyPolicy.Level { didSet { d.set(privacyLevel.rawValue, forKey: "ai.privacy") } }
     /// Agent mode: run AI commands in the visible terminal (true) so the user
     /// sees exactly what runs, vs. an out-of-band channel (false).
     var agentInTerminal: Bool { didSet { d.set(agentInTerminal, forKey: "ai.agentInTerminal") } }
@@ -76,7 +76,9 @@ final class AIConfig: @unchecked Sendable {
         ollamaModel = d.string(forKey: "ai.ollama.model") ?? "qwen2.5"
         ollamaModelFast = d.string(forKey: "ai.ollama.modelFast") ?? ""
         pricePer1k = (d.object(forKey: "ai.pricePer1k") as? Double) ?? 0
-        redact = (d.object(forKey: "ai.redact") as? Bool) ?? true
+        // Before 1.4 this was the on/off `ai.redact` (secrets only).
+        privacyLevel = PrivacyPolicy.Level(rawValue: d.string(forKey: "ai.privacy") ?? "")
+            ?? ((d.object(forKey: "ai.redact") as? Bool) == false ? .off : .secrets)
         agentInTerminal = (d.object(forKey: "ai.agentInTerminal") as? Bool) ?? true
         agentMode = d.bool(forKey: "ai.agentMode")
         fontSize = (d.object(forKey: "ai.fontSize") as? Double) ?? 13

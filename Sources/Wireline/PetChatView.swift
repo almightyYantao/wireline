@@ -219,10 +219,11 @@ struct PetChatView: View {
         let client = AIClient(config: ai)
         let sys = systemPrompt()
         let history = modelMessages
+        let masker = PrivacyContext.masker(conversation: convoKey, level: ai.privacyLevel)
         task = Task {
             var text = ""
             do {
-                for try await d in client.stream(system: sys, messages: history) {
+                for try await d in client.stream(system: sys, messages: history, masker: masker) {
                     text += d
                     await MainActor.run { streaming = text }
                 }
@@ -237,6 +238,19 @@ struct PetChatView: View {
     private func finishTurn(_ text: String) {
         streaming = ""
         if !text.isEmpty { modelMessages.append(AIMessage(role: .assistant, content: text)) }
+
+        // Placeholders the reply still carries didn't restore (an earlier
+        // session's): never let them reach a host.
+        let payload = PetPlan.parse(text)?.command ?? WLAction.parse(from: text).map { String(describing: $0) }
+        if let payload, steps < maxSteps, PrivacyMasker.containsPlaceholder(payload) {
+            let stale = Array(Set(PrivacyMasker.placeholders(in: payload))).sorted().joined(separator: "、")
+            steps += 1
+            items.append(PetChatItem(kind: .note, text: loc("⛔ 占位符 \(stale) 已失效（来自之前的会话），未执行。",
+                                                             "⛔ Placeholder \(stale) is stale (from an earlier session), not run.")))
+            modelMessages.append(AIMessage(role: .user, content: "占位符 \(stale) 已失效，无法还原成真实值，没有执行。请先用命令重新读取需要的值（读到的新占位符可以直接用），不要再使用旧占位符。"))
+            startTurn()
+            return
+        }
 
         // If the model asked to execute (a `plan` block) and we still have budget,
         // resolve targets → run → feed results back for a summary.
@@ -359,12 +373,12 @@ struct PetChatView: View {
         isBusy = true
         items.append(PetChatItem(kind: .note,
             text: loc("▶︎ 调用 MCP 工具：\(call.server).\(call.tool)", "▶︎ Calling MCP tool: \(call.server).\(call.tool)")))
-        let cap = mcpResultCap, redact = ai.redact
+        let cap = mcpResultCap
         task = Task {
             let raw: String
             do { raw = try await MCPStore.shared.callTool(server: call.server, tool: call.tool, argsJSON: call.argsJSON) }
             catch { raw = loc("工具调用失败：", "Tool call failed: ") + ((error as? MCPError)?.description ?? error.localizedDescription) }
-            let shown = redact ? AIRedactor.redact(String(raw.prefix(cap))) : String(raw.prefix(cap))
+            let shown = String(raw.prefix(cap))
             await MainActor.run {
                 items.append(PetChatItem(kind: .note, text: shown))
                 modelMessages.append(AIMessage(role: .user,
@@ -393,9 +407,8 @@ struct PetChatView: View {
             await MainActor.run {
                 items.append(PetChatItem(kind: .results, text: "", results: results))
                 let joined = results.map { "### \($0.alias) (exit \($0.exitCode))\n\($0.output)" }.joined(separator: "\n\n")
-                let ctx = ai.redact ? AIRedactor.redact(joined) : joined
                 modelMessages.append(AIMessage(role: .user, content:
-                    "命令 `\(cmd)` 在这些机器的执行结果如下：\n\(String(ctx.suffix(8000)))\n请用中文给出简明汇总：整体结论 + 逐机要点/异常点名。若确实需要再执行命令才能回答，可再给一个 plan 块。"))
+                    "命令 `\(cmd)` 在这些机器的执行结果如下：\n\(String(joined.suffix(8000)))\n请用中文给出简明汇总：整体结论 + 逐机要点/异常点名。若确实需要再执行命令才能回答，可再给一个 plan 块。"))
                 startTurn()
             }
         }

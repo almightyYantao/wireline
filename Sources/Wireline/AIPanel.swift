@@ -560,8 +560,7 @@ struct AIPanelView: View {
             let token = "@" + s.alias
             guard !s.alias.isEmpty, out.contains(token) else { continue }
             let clean = String(s.recentOutput.suffix(3000))
-            let body = ai.redact ? AIRedactor.redact(clean) : clean
-            out = out.replacingOccurrences(of: token, with: "\n\n[主机 \(s.alias) 最近输出]\n" + body)
+            out = out.replacingOccurrences(of: token, with: "\n\n[主机 \(s.alias) 最近输出]\n" + clean)
         }
         return out
     }
@@ -598,8 +597,7 @@ struct AIPanelView: View {
         guard let session else { return "(无会话)" }
         let cmd = "tail -n 300 ~/.zsh_history 2>/dev/null || tail -n 300 ~/.bash_history 2>/dev/null || fc -l 1 2>/dev/null | tail -n 300"
         let out = await session.runCapturing(cmd)   // out-of-band: don't spam the terminal
-        let trimmed = String(out.suffix(6000))
-        return ai.redact ? AIRedactor.redact(trimmed) : trimmed
+        return String(out.suffix(6000))
     }
 
     private func generateCommand() {
@@ -661,6 +659,11 @@ struct AIPanelView: View {
 
     /// Execute a confirmed app action (create tunnel / add host).
     private func executeAction(_ action: WLAction) {
+        if let stale = unresolvedPlaceholders(String(describing: action)) {
+            messages.append(AIMessage(role: .system, content: loc("⛔ 占位符 \(stale) 已失效（来自之前的会话），未执行。",
+                                                                  "⛔ Placeholder \(stale) is stale (from an earlier session), not run.")))
+            return
+        }
         switch action {
         case let .portForward(host, lp, rh, rp):
             let f = PortForward(hostAlias: host, localPort: lp, remoteHost: rh, remotePort: rp,
@@ -701,14 +704,14 @@ struct AIPanelView: View {
             if let t = PendingTransfer.from(action, continueAgent: false) { requestTransfer(t) }
         case let .mcpCall(server, tool, argsJSON):
             // Card path (non-agent): run the tool once and show the result.
-            let cap = mcpResultCap, redact = ai.redact
+            let cap = mcpResultCap
             messages.append(AIMessage(role: .system,
                 content: loc("▶︎ 调用 MCP 工具：\(server).\(tool)", "▶︎ Calling MCP tool: \(server).\(tool)")))
             Task {
                 let raw: String
                 do { raw = try await MCPStore.shared.callTool(server: server, tool: tool, argsJSON: argsJSON) }
                 catch { raw = loc("工具调用失败：", "Tool call failed: ") + ((error as? MCPError)?.description ?? error.localizedDescription) }
-                let shown = redact ? AIRedactor.redact(String(raw.prefix(cap))) : String(raw.prefix(cap))
+                let shown = String(raw.prefix(cap))
                 await MainActor.run { messages.append(AIMessage(role: .system, content: shown)) }
             }
         }
@@ -716,8 +719,7 @@ struct AIPanelView: View {
 
     private func contextOutput() -> String {
         let raw = session?.recentOutput ?? ""
-        let trimmed = String(raw.suffix(4000))
-        return ai.redact ? AIRedactor.redact(trimmed) : trimmed
+        return String(raw.suffix(4000))
     }
 
     private func lastCommandLine() -> String {
@@ -765,12 +767,13 @@ struct AIPanelView: View {
         let system = systemPrompt()
         let history = modelMessages
         let model = (useFast && ai.hasFastModel) ? ai.activeModelFast : nil
+        let masker = convo.masker
         // Estimate the prompt tokens sent this turn (system + full history).
         lastPromptTokens = AITokenEstimator.estimate(system + history.map(\.content).joined(separator: "\n"))
         task = Task {
             var text = ""
             do {
-                for try await delta in client.stream(system: system, messages: history, model: model) {
+                for try await delta in client.stream(system: system, messages: history, model: model, masker: masker) {
                     text += delta
                     await MainActor.run { streaming = text }
                 }
@@ -796,7 +799,11 @@ struct AIPanelView: View {
         // Agent mode: if the model proposed a command or an MCP tool call, run it
         // and feed the result back.
         let proposal = (ai.agentMode && agentSteps < maxAgentSteps) ? proposedCommand(in: text) : CommandProposal.none
-        if case let .rejected(note) = proposal {
+        // What would reach a host: the command, or the action's arguments.
+        let payload = proposal.command ?? WLAction.parse(from: text).map { String(describing: $0) }
+        if ai.agentMode, agentSteps < maxAgentSteps, let payload, let stale = unresolvedPlaceholders(payload) {
+            refuseUnresolved(stale)
+        } else if case let .rejected(note) = proposal {
             // The reply fenced something that isn't a command (output, a config,
             // a line echoed back from the last result). Never auto-run it — leave
             // it as a code block the user can run deliberately.
@@ -925,7 +932,6 @@ struct AIPanelView: View {
         isStreaming = true
         convo.currentStep = loc("调用 \(call.server).\(call.tool)", "Calling \(call.server).\(call.tool)")
         let cap = mcpResultCap
-        let redact = ai.redact
         task = Task {
             let raw: String
             do {
@@ -933,8 +939,7 @@ struct AIPanelView: View {
             } catch {
                 raw = loc("工具调用失败：", "Tool call failed: ") + ((error as? MCPError)?.description ?? error.localizedDescription)
             }
-            let trimmed = String(raw.prefix(cap))
-            let shown = redact ? AIRedactor.redact(trimmed) : trimmed
+            let shown = String(raw.prefix(cap))
             await MainActor.run {
                 messages.append(AIMessage(role: .system, content: shown))
                 modelMessages.append(AIMessage(role: .user,
@@ -982,8 +987,7 @@ struct AIPanelView: View {
                 } else {
                     timeoutStreak = 0
                 }
-                let forModel = ai.redact ? AIRedactor.redact(shown) : shown
-                modelMessages.append(AIMessage(role: .user, content: "命令 `\(cmd)` 的输出：\n\(forModel)\n请根据输出继续（执行下一条命令，或给出最终结论）。"))
+                modelMessages.append(AIMessage(role: .user, content: "命令 `\(cmd)` 的输出：\n\(shown)\n请根据输出继续（执行下一条命令，或给出最终结论）。"))
                 startTurn()
             }
         }
@@ -1011,6 +1015,24 @@ struct AIPanelView: View {
         /// A shell-ish fence we refuse to auto-run, with the reason to show.
         case rejected(String)
         case none
+
+        var command: String? { if case let .runnable(c) = self { return c } else { return nil } }
+    }
+
+    /// Placeholders a reply still carries after `AIClient` restored it: from a
+    /// conversation before an app restart, or made up. Never sent to a host.
+    private func unresolvedPlaceholders(_ text: String) -> String? {
+        guard PrivacyMasker.containsPlaceholder(text) else { return nil }
+        return Array(Set(PrivacyMasker.placeholders(in: text))).sorted().joined(separator: "、")
+    }
+
+    /// Bounce a command / action with unresolvable placeholders back to the model.
+    private func refuseUnresolved(_ placeholders: String) {
+        agentSteps += 1
+        messages.append(AIMessage(role: .system, content: loc("⛔ 占位符 \(placeholders) 已失效（来自之前的会话），未执行。",
+                                                              "⛔ Placeholder \(placeholders) is stale (from an earlier session), not run.")))
+        modelMessages.append(AIMessage(role: .user, content: "占位符 \(placeholders) 已失效，无法还原成真实值，命令没有执行。请先用命令重新读取需要的值（读到的新占位符可以直接用），不要再使用旧占位符。"))
+        startTurn()
     }
 
     /// Decide whether a reply actually asked for a command to be executed.
@@ -1216,23 +1238,28 @@ private struct MessageBubble: View {
                     BracketButton(loc.t("存片段", "Save")) { onSave(cmd) }
                     if let session {
                         BracketButton(loc.t("插入", "Insert")) { session.insertIntoTerminal(cmd) }
-                        if runTargets.count > 1 {
-                            // Multiple hosts connected: pick which one to run on.
-                            Menu {
-                                ForEach(runTargets) { t in
-                                    Button(t.title) { t.runInTerminal(cmd) }
+                        Group {
+                            if runTargets.count > 1 {
+                                // Multiple hosts connected: pick which one to run on.
+                                Menu {
+                                    ForEach(runTargets) { t in
+                                        Button(t.title) { t.runInTerminal(cmd) }
+                                    }
+                                } label: {
+                                    HStack(spacing: 4) {
+                                        Text(loc.t("运行", "Run"))
+                                        Image(systemName: "chevron.down").font(.system(size: 7, weight: .bold))
+                                    }
                                 }
-                            } label: {
-                                HStack(spacing: 4) {
-                                    Text(loc.t("运行", "Run"))
-                                    Image(systemName: "chevron.down").font(.system(size: 7, weight: .bold))
-                                }
+                                .menuStyle(.button).buttonStyle(.wlChip()).menuIndicator(.hidden).fixedSize()
+                                .help(loc.t("选择要运行的主机", "Choose a host to run on"))
+                            } else {
+                                BracketButton(loc.t("运行", "Run")) { session.runInTerminal(cmd) }
                             }
-                            .menuStyle(.button).buttonStyle(.wlChip()).menuIndicator(.hidden).fixedSize()
-                            .help(loc.t("选择要运行的主机", "Choose a host to run on"))
-                        } else {
-                            BracketButton(loc.t("运行", "Run")) { session.runInTerminal(cmd) }
                         }
+                        // A placeholder that didn't restore (an earlier session's)
+                        // would run as literal text: insert it and edit instead.
+                        .disabled(PrivacyMasker.containsPlaceholder(cmd))
                     }
                 }
             }
