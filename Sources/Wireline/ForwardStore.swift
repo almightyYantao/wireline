@@ -57,6 +57,8 @@ final class ForwardStore {
 
     func isRunning(_ forward: PortForward) -> Bool { manager.isRunning(forward.id) }
 
+    func stop(_ forward: PortForward) { manager.stop(forward.id) }
+
     func toggle(_ forward: PortForward, store: HostStore) {
         if manager.isRunning(forward.id) {
             manager.stop(forward.id)

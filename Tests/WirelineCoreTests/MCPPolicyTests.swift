@@ -38,6 +38,14 @@ final class MCPPolicyTests: XCTestCase {
         XCTAssertEqual(MCPPolicy.fileWrite(mode: .trust), .allow)
     }
 
+    func testAlwaysAskAndMinor() {
+        if case .deny = MCPPolicy.alwaysAsk(mode: .readOnly) {} else { XCTFail() }
+        XCTAssertEqual(MCPPolicy.alwaysAsk(mode: .trust), .ask(dangerous: false))
+        XCTAssertEqual(MCPPolicy.alwaysAsk(mode: .confirm, dangerous: true), .ask(dangerous: true))
+        if case .deny = MCPPolicy.minor(mode: .readOnly) {} else { XCTFail() }
+        XCTAssertEqual(MCPPolicy.minor(mode: .confirm), .allow)
+    }
+
     func testDiff() {
         let old = "a\nb\nc\nd\ne\nf\ng\nh\ni\nj"
         let new = "a\nb\nc\nd\nE\nf\ng\nh\ni\nj\nk"

@@ -118,36 +118,45 @@ enum FleetRunner {
         return await runOne(alias: alias, password: password, command: command, timeout: timeout, input: input)
     }
 
+    /// `ssh alias command`, set up like every fleet run: the host's ssh
+    /// config, its Keychain password through askpass (key-only hosts never
+    /// block on a prompt), the Touch ID agent. Call `cleanup` once it exits.
+    private static func sshProcess(alias: String, password: String?, command: String,
+                                   timeout: Int) -> (process: Process, cleanup: @Sendable () -> Void) {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
+        var args = ["-o", "StrictHostKeyChecking=accept-new",
+                    "-o", "ConnectTimeout=\(timeout)",
+                    "-o", "NumberOfPasswordPrompts=1"]
+        var env = ProcessInfo.processInfo.environment
+        var askpass: URL?
+        if let password, !password.isEmpty, let script = makeAskpassScript() {
+            askpass = script
+            env["SSH_ASKPASS"] = script.path
+            env["SSH_ASKPASS_REQUIRE"] = "force"
+            env["WIRELINE_ASKPASS_PW"] = password
+        } else {
+            args = ["-o", "BatchMode=yes"] + args
+        }
+        SSHAgentEnvironment.apply(to: &env)
+        p.arguments = args + [alias, command]
+        p.environment = env
+        let script = askpass
+        return (p, { if let script { try? FileManager.default.removeItem(at: script) } })
+    }
+
     private static func runOne(alias: String, password: String?, command: String, timeout: Int,
                                input: Data? = nil) async -> FleetResult {
         await withCheckedContinuation { cont in
             DispatchQueue.global().async {
-                let p = Process()
-                p.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
-                var args = ["-o", "StrictHostKeyChecking=accept-new",
-                            "-o", "ConnectTimeout=\(timeout)",
-                            "-o", "NumberOfPasswordPrompts=1"]
-                var env = ProcessInfo.processInfo.environment
-                var askpass: URL?
-                if let password, !password.isEmpty, let script = makeAskpassScript() {
-                    askpass = script
-                    env["SSH_ASKPASS"] = script.path
-                    env["SSH_ASKPASS_REQUIRE"] = "force"
-                    env["WIRELINE_ASKPASS_PW"] = password
-                } else {
-                    args = ["-o", "BatchMode=yes"] + args   // key-only: never block on a prompt
-                }
-                SSHAgentEnvironment.apply(to: &env)
-                args.append(alias)
-                args.append(command)
-                p.arguments = args
-                p.environment = env
+                let (p, cleanup) = sshProcess(alias: alias, password: password, command: command, timeout: timeout)
                 let pipe = Pipe()
                 p.standardOutput = pipe
                 p.standardError = pipe
                 let stdin = input.map { _ in Pipe() }
                 p.standardInput = stdin ?? FileHandle.nullDevice
                 do { try p.run() } catch {
+                    cleanup()
                     cont.resume(returning: FleetResult(alias: alias, output: "(启动失败: \(error.localizedDescription))", exitCode: -1))
                     return
                 }
@@ -162,13 +171,41 @@ enum FleetRunner {
                 }
                 let data = pipe.fileHandleForReading.readDataToEndOfFile()
                 p.waitUntilExit()
-                if let askpass { try? FileManager.default.removeItem(at: askpass) }
+                cleanup()
                 let text = String(data: data, encoding: .utf8) ?? ""
                 cont.resume(returning: FleetResult(alias: alias,
                                                    output: text.trimmingCharacters(in: .whitespacesAndNewlines),
                                                    exitCode: p.terminationStatus))
             }
         }
+    }
+
+    /// A command left running on one host (an MCP job: `tail -f`, a build):
+    /// output arrives through `onOutput` as it comes, and `onExit` gets the
+    /// status. No time limit; stop it by terminating the returned process.
+    static func spawn(command: String, on alias: String, keychain: KeychainService = KeychainService(),
+                      onOutput: @escaping @Sendable (Data) -> Void,
+                      onExit: @escaping @Sendable (Int32) -> Void) -> Process? {
+        let password = (try? keychain.password(for: alias)) ?? nil
+        let (p, cleanup) = sshProcess(alias: alias, password: password, command: command, timeout: 20)
+        let pipe = Pipe()
+        p.standardOutput = pipe
+        p.standardError = pipe
+        p.standardInput = FileHandle.nullDevice
+        pipe.fileHandleForReading.readabilityHandler = { h in
+            let data = h.availableData
+            if !data.isEmpty { onOutput(data) }
+        }
+        p.terminationHandler = { proc in
+            pipe.fileHandleForReading.readabilityHandler = nil
+            // Whatever was still buffered when it exited.
+            let rest = pipe.fileHandleForReading.readDataToEndOfFile()
+            if !rest.isEmpty { onOutput(rest) }
+            cleanup()
+            onExit(proc.terminationStatus)
+        }
+        do { try p.run() } catch { cleanup(); return nil }
+        return p
     }
 
     private static func makeAskpassScript() -> URL? {

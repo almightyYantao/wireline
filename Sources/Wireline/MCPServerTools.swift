@@ -8,7 +8,8 @@ import WirelineCore
 /// `MCPPolicy` and, when that says so, the user (`MCPApprovalCenter`).
 @MainActor
 enum MCPServerTools {
-    struct Outcome {
+    /// An `Error` too, so a lookup can hand back the outcome that ends the call.
+    struct Outcome: Error {
         var text: String
         var isError = false
         /// For the audit log: "ok", "auto", "approved", "denied", "refused".
@@ -101,7 +102,8 @@ enum MCPServerTools {
                            "path": ["type": "string"],
                            "content": ["type": "string", "description": "The complete new content"],
                            "expected_sha256": ["type": "string", "description": "sha256 file_read returned"]],
-                          required: ["alias", "path", "content"]))
+                          required: ["alias", "path", "content"])),
+            loaderDefinition
         ]
     }
 
@@ -123,7 +125,15 @@ enum MCPServerTools {
         case "host_open":       return await hostOpen(hosts, sessions, alias: args["alias"] as? String, conn: conn)
         case "session_close":   return sessionClose(sessions, id: args["session_id"] as? String, conn: conn)
         case "file_write":      return await fileWrite(hosts, args, conn: conn)
-        default:                return .error("Unknown tool: \(name)")
+        case "load_tools":      return loadTools(args["toolset"] as? String, conn: conn)
+        case "call_loaded_tool":
+            guard let inner = args["name"] as? String, isToolsetTool(inner) else {
+                return .error("call_loaded_tool reaches tools added by load_tools; \(args["name"] as? String ?? "(missing)") isn't one.")
+            }
+            return await run(inner, args["arguments"] as? [String: Any] ?? [:], conn: conn)
+        default:
+            return await runToolset(name, args, conn: conn, hosts: hosts, sessions: sessions)
+                ?? .error("Unknown tool: \(name)")
         }
     }
 
@@ -159,13 +169,13 @@ enum MCPServerTools {
         }
     }
 
-    private static func withAudit(_ o: Outcome, _ audit: String) -> Outcome {
+    static func withAudit(_ o: Outcome, _ audit: String) -> Outcome {
         var o = o
         if o.audit == "ok" { o.audit = audit }
         return o
     }
 
-    private static func int(_ v: Any?) -> Int? {
+    static func int(_ v: Any?) -> Int? {
         switch v {
         case let i as Int: return i
         case let d as Double: return Int(d)
@@ -174,7 +184,7 @@ enum MCPServerTools {
         }
     }
 
-    private static func json(_ object: Any) -> String {
+    static func json(_ object: Any) -> String {
         guard let data = try? JSONSerialization.data(withJSONObject: object,
                                                      options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]) else { return "{}" }
         return String(decoding: data, as: UTF8.self)
@@ -343,7 +353,7 @@ enum MCPServerTools {
 
     // MARK: session_exec
 
-    private static func sessionExec(_ sessions: SessionStore, _ args: [String: Any], conn: MCPServerConnection) async -> Outcome {
+    static func sessionExec(_ sessions: SessionStore, _ args: [String: Any], conn: MCPServerConnection) async -> Outcome {
         guard let id = args["session_id"] as? String, let uuid = UUID(uuidString: id), let s = sessions.session(uuid) else {
             return .error("No open session with id \(args["session_id"] as? String ?? "(missing)"). Call get_environment, or host_open one.")
         }

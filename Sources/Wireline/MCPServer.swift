@@ -37,6 +37,8 @@ final class MCPServerHost {
 
     @ObservationIgnored weak var hosts: HostStore?
     @ObservationIgnored weak var sessions: SessionStore?
+    @ObservationIgnored weak var snippets: SnippetStore?
+    @ObservationIgnored weak var forwards: ForwardStore?
     @ObservationIgnored private var listenFD: Int32 = -1
     @ObservationIgnored private var acceptSource: DispatchSourceRead?
     @ObservationIgnored private var clients: [ObjectIdentifier: (AgentConnection, MCPServerConnection)] = [:]
@@ -70,9 +72,11 @@ final class MCPServerHost {
         src.resume()
     }
 
-    func attach(hosts: HostStore, sessions: SessionStore) {
+    func attach(hosts: HostStore, sessions: SessionStore, snippets: SnippetStore, forwards: ForwardStore) {
         self.hosts = hosts
         self.sessions = sessions
+        self.snippets = snippets
+        self.forwards = forwards
     }
 
     private func acceptAll() {
@@ -101,6 +105,7 @@ final class MCPServerHost {
             }
             conn.onClose = { [weak self] in
                 MainActor.assumeIsolated {
+                    server.closed()
                     self?.clients[key] = nil
                     self?.clientCount = self?.clients.count ?? 0
                 }
@@ -132,6 +137,10 @@ final class MCPServerConnection {
     var alwaysAllowed: Set<String> = []
     /// Sessions this client opened: the only ones it may close.
     var opened: Set<UUID> = []
+    /// Toolsets `load_tools` added to this connection's list.
+    var loadedToolsets: Set<String> = []
+    /// Background commands (`exec_start`), by id.
+    var jobs: [String: MCPJob] = [:]
 
     init(send: @escaping (String) -> Void) {
         self.send = send
@@ -145,6 +154,12 @@ final class MCPServerConnection {
         Task {
             if let reply = await respond(to: msg) { send(MCPBridge.encode(reply)) }
         }
+    }
+
+    /// The client went away: its background commands go with it.
+    func closed() {
+        for job in jobs.values { job.stop() }
+        jobs = [:]
     }
 
     func notify(_ method: String) {
@@ -172,7 +187,7 @@ final class MCPServerConnection {
             return MCPBridge.result(id: id, [:])
         case "tools/list":
             return MCPBridge.result(id: id, ["tools": MCPServerSettings.shared.enabled
-                                             ? MCPServerTools.definitions : [MCPBridge.statusTool]])
+                                             ? MCPServerTools.tools(for: self) : [MCPBridge.statusTool]])
         case "tools/call":
             guard let name = params["name"] as? String else {
                 return MCPBridge.error(id: id, code: MCPBridge.invalidParams, "missing tool name")

@@ -72,7 +72,7 @@ struct WirelineApp: App {
                     if store.autoCheckOnLaunch { await store.checkAll() }
                     store.startMonitoring()
                     store.startAutoBackup()
-                    MCPServerHost.shared.attach(hosts: store, sessions: sessions)
+                    MCPServerHost.shared.attach(hosts: store, sessions: sessions, snippets: snippets, forwards: forwards)
                     // Reconnect enabled MCP servers so their tools are available to the AI.
                     await MCPStore.shared.connectEnabled()
                     // Float the desktop pet on launch (unless the user disabled it).

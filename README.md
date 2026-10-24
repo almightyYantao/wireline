@@ -98,7 +98,19 @@ AI is the lever that makes the above feel effortless — not a bolt-on. In Setti
 - **Session recap → Runbook**: turn what you just did into a Markdown runbook (steps / commands / rollback)
 - **Offline triage**: when a monitored host drops, AI suggests likely causes in the notification
 - **Context references**: `@output` / `@host` / `@history` (semantic command-history recall)
-- **Per-host persisted chat history**, **token usage estimate**, **main/fast model switching**, **redaction before sending**, **save-as-snippet**
+- **Per-host persisted chat history**, **token usage estimate**, **main/fast model switching**, **reversible masking before sending**, **save-as-snippet**
+
+---
+
+## 🔌 MCP server: Wireline for Claude Code, Codex & co.
+
+Turn it around: let the AI you already use drive Wireline. Settings → AI → **MCP server**, then one click adds it to **Claude Code** or **Codex** (or copy the JSON for any other client).
+
+- **Your host graph, as tools**: `get_environment`, `hosts_list`, `session_read`, `file_read`; `session_exec` (visible in your terminal by default), `fleet_run` across aliases and `@groups` with no session needed, `host_open` (a background tab, never steals your focus), `file_write` with a diff and an `expected_sha256` guard
+- **More on demand**: `load_tools` adds files (list / rename / delete / upload / download), background jobs (`exec_start` / `exec_poll`), port forwards, your snippets, and host editing; a Claude Code skill tells Claude when to reach for them
+- **You stay in charge**: read-only / confirm / trust modes; read-only commands just run, anything else asks on the notch island and in the window (no answer in 120 s is a no); risky commands, deletions, transfers to or from your Mac and `~/.ssh/config` edits always ask
+- **Private by default**: the same reversible masking as the built-in assistant, scoped to each client connection, and a local audit log of every call
+- **Nothing listens on the network**: clients launch `wireline-mcp`, which talks to the app over a Unix socket; both ends verify each other's code signature
 
 ---
 
@@ -216,7 +228,8 @@ Dependencies: libghostty (terminal, Wireline fork) · SwiftTerm (fallback termin
 ## 🔒 Security
 
 - Passwords and the AI key live only in the macOS Keychain; config files keep just an `auth=password` marker.
-- AI: optional redaction before sending; generated commands **never auto-run**; dangerous commands require confirmation in agent mode, with an optional read-only sandbox.
+- AI: passwords, tokens and keys (optionally addresses too) are **masked reversibly** before anything reaches a model: the model sees placeholders, and the commands and file edits it sends back are restored locally before they run. Generated commands **never auto-run**; dangerous commands require confirmation in agent mode, with an optional read-only sandbox.
+- MCP server: off by default; reached only through a local Unix socket by a code-signature-checked `wireline-mcp`; non-read-only actions follow the access mode, risky ones always ask; every call is logged locally.
 - The backup passphrase is never written to disk or uploaded; lose it and the backup is unrecoverable.
 - No network traffic except to the AI endpoint you configure; SSH connections go straight from your machine to the target.
 - `~/.ssh/config` is timestamp-backed-up before writes and forced to 0600.

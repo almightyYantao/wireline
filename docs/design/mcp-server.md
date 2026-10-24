@@ -1,6 +1,6 @@
 # 对外开放 MCP + 可还原脱敏 设计
 
-> 状态：§9 已拍板（2026-10-24，全部按建议）；P1 已实现（`privacy-masker`，c0d6d54），P2 已实现（9088a07），P3 已实现（分支 `mcp-exec`）。
+> 状态：§9 已拍板（2026-10-24，全部按建议）；P1 已实现（`privacy-masker`，c0d6d54），P2 已实现（9088a07），P3 已实现（3163c5a），P4 已实现（分支 `mcp-toolsets`）。
 > 参考：Netcatty（GPL-3.0，只借思路不搬代码）的 `electron/mcp/`、`docs/features/external-mcp-privacy.md`。
 
 ## 0. 目标与非目标
@@ -133,6 +133,14 @@ MCP 客户端会自动给工具名加上 server 名做命名空间（`mcp__wirel
 - 外部 AI 打开的标签上有一个 ✦ 角标，悬停显示是哪个客户端打开的。
 
 ---
+
+### 3.5 P4 实现备注
+
+- 工具集在 `MCPToolsets.swift`。`load_tools` 把工具集加进这个连接的列表并发 `tools/list_changed`，同时把新工具的 schema 一并返回；加载过任何工具集后会多出 `call_loaded_tool(name, arguments)`，给不刷新列表的客户端用（只能调工具集里的工具）。
+- 新增规则：`MCPPolicy.change`（目录、改名、端口转发：确认档问、信任档放行）、`alwaysAsk`（删除、上传 / 下载、改 `~/.ssh/config`：除只读档外一律问）、`minor`（主机备注：除只读档外直接放行）。
+- 端口转发只开在 127.0.0.1，不提供 `-R`（反向转发会把本机端口暴露给服务器）。
+- `exec_start` 的后台任务在客户端断开时一并结束；输出最多保留 2 MB，`exec_poll` 每次最多返回 64 KB，被丢弃的字节数会报给模型。
+- 设置页的「Claude skill」按钮写入 `~/.claude/skills/wireline/SKILL.md`。
 
 ## 4. 可还原脱敏（PrivacyMasker）
 

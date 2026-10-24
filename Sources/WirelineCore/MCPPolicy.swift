@@ -38,12 +38,28 @@ public enum MCPPolicy {
         return .allow
     }
 
-    public static func fileWrite(mode: MCPAccessMode) -> MCPVerdict {
+    static let readOnlyRefusal = "Wireline only allows reads for MCP clients right now (Settings → AI → MCP server)."
+
+    /// An ordinary change: writing a file, making a directory, a tunnel.
+    public static func change(mode: MCPAccessMode) -> MCPVerdict {
         switch mode {
-        case .readOnly: return .deny("Wireline only allows reads for MCP clients right now (Settings → AI → MCP server).")
+        case .readOnly: return .deny(readOnlyRefusal)
         case .confirm: return .ask(dangerous: false)
         case .trust: return .allow
         }
+    }
+
+    public static func fileWrite(mode: MCPAccessMode) -> MCPVerdict { change(mode: mode) }
+
+    /// Asks in every mode: deleting files, moving data on or off this Mac,
+    /// editing ~/.ssh/config.
+    public static func alwaysAsk(mode: MCPAccessMode, dangerous: Bool = false) -> MCPVerdict {
+        mode == .readOnly ? .deny(readOnlyRefusal) : .ask(dangerous: dangerous)
+    }
+
+    /// Wireline's own bookkeeping (host notes): no question, but not in read-only.
+    public static func minor(mode: MCPAccessMode) -> MCPVerdict {
+        mode == .readOnly ? .deny(readOnlyRefusal) : .allow
     }
 }
 

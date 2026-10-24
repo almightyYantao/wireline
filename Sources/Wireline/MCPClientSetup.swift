@@ -58,6 +58,44 @@ enum MCPClientSetup {
             : Outcome(ok: false, message: "添加失败：" + r.output.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
+    // MARK: Claude Code skill
+
+    static var skillFile: URL {
+        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude/skills/wireline/SKILL.md")
+    }
+
+    /// Tells Claude Code when to reach for Wireline instead of its own shell.
+    static let skill = """
+    ---
+    name: wireline
+    description: Use when the user asks about or wants to operate their SSH servers, host groups, open terminal sessions, remote files, port forwards or saved snippets — anything Wireline (their SSH client) manages. Reach the hosts through the wireline MCP tools, not your own shell.
+    ---
+
+    # Wireline
+
+    Wireline is the user's SSH client. Its MCP server (`wireline`) knows every host in `~/.ssh/config`, the host groups, and what is open right now.
+
+    - Start with `get_environment`; use `hosts_list` to find hosts. Address hosts by their ssh-config alias, groups as `@group`.
+    - One command on many hosts: `fleet_run` (no session needed). In an open session: `session_exec` (visible in the user's terminal by default), then `session_read`.
+    - Files: `file_read`, then `file_write` with the `expected_sha256` it returned.
+    - More tools on demand: `load_tools` with `files`, `jobs` (long-running commands), `forwards`, `snippets`, `hosts_admin`, or `all`.
+    - Don't run `ssh` / `scp` yourself for these hosts.
+    - Commands that may change something can wait for the user's approval in Wireline. A denial or refusal is final: say what you wanted to do instead of retrying another way.
+    - Values like `[WL…_SECRET_1]` (… = four random characters) are masked placeholders for real secrets / addresses. Pass them back verbatim; Wireline restores them locally. Never guess them.
+    """
+
+    static func installSkill() -> Outcome {
+        let url = skillFile
+        do {
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            let existed = FileManager.default.fileExists(atPath: url.path)
+            try skill.write(to: url, atomically: true, encoding: .utf8)
+            return Outcome(ok: true, message: (existed ? "已更新 " : "已安装 ") + url.path)
+        } catch {
+            return Outcome(ok: false, message: "写入 \(url.path) 失败：\(error.localizedDescription)")
+        }
+    }
+
     // MARK: Codex
 
     static var codexConfig: URL {
@@ -136,6 +174,9 @@ struct MCPServerSection: View {
                         Task { status = await MCPClientSetup.addToClaudeCode(); working = false }
                     }
                     Button("Codex") { status = MCPClientSetup.addToCodex() }
+                    Button(loc("Claude skill", "Claude skill")) { status = MCPClientSetup.installSkill() }
+                        .help(loc("写入 ~/.claude/skills/wireline/SKILL.md，让 Claude Code 知道什么时候该用 Wireline",
+                                  "Writes ~/.claude/skills/wireline/SKILL.md so Claude Code knows when to use Wireline"))
                     Button(loc("复制配置", "Copy JSON")) {
                         NSPasteboard.general.clearContents()
                         NSPasteboard.general.setString(MCPClientSetup.genericJSON, forType: .string)
