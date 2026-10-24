@@ -179,12 +179,16 @@ struct RightPanel: View {
                 // The tabs share the title-bar row with the traffic lights,
                 // centred on them; they block window dragging themselves (see
                 // SessionTabBar), the empty rest of the row still moves it.
-                SessionTabBar()
-                    .padding(.leading, sidebarCollapsed ? TitleBand.shared.lightsTrailing + 44 : 8)
-                    .padding(.trailing, 8)
-                    .overlay(alignment: .trailing) { broadcastToggle.padding(.trailing, 12) }
-                    // Centred in the title row: the same gap above and below.
-                    .frame(height: TitleBand.shared.height)
+                // Broadcast sits beside the tabs, not over them: when the
+                // window is narrow the tab strip gives way (and scrolls).
+                HStack(spacing: 8) {
+                    SessionTabBar()
+                    broadcastToggle.fixedSize()
+                }
+                .padding(.leading, sidebarCollapsed ? TitleBand.shared.lightsTrailing + 44 : 8)
+                .padding(.trailing, 12)
+                // Centred in the title row: the same gap above and below.
+                .frame(height: TitleBand.shared.height)
                 if showBroadcast {
                     broadcastBar
                         .clipShape(RoundedRectangle(cornerRadius: WL.radius(10), style: .continuous))
