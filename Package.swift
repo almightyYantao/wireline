@@ -38,6 +38,7 @@ let package = Package(
     ],
     products: [
         .executable(name: "Wireline", targets: ["Wireline"]),
+        .executable(name: "wireline-agent", targets: ["WirelineAgent"]),
         .library(name: "WirelineCore", targets: ["WirelineCore"])
     ],
     dependencies: [
@@ -54,6 +55,15 @@ let package = Package(
         // libghostty (static lib + ghostty.h). ~150 MB, never committed: run
         // scripts/fetch-ghosttykit.sh once to put it in Vendor/.
         .binaryTarget(name: "GhosttyKit", path: "Vendor/GhosttyKit.xcframework"),
+        // libghostty-vt (the headless terminal + snapshot codec) for the session
+        // agent; from the same fork build, never committed. Not a binaryTarget,
+        // for the same reason as CFreeRDPShim: two xcframeworks' module maps
+        // collide in the shared include dir.
+        .target(
+            name: "CGhosttyVt",
+            cSettings: [.unsafeFlags(["-I\(packageRoot)/Vendor/GhosttyVt/include"])],
+            linkerSettings: [.unsafeFlags(["\(packageRoot)/Vendor/GhosttyVt/lib/libghostty-vt.a"])]
+        ),
         // The C side of RDP panes: FreeRDP callbacks, its event-loop thread,
         // a shadow framebuffer. Swift talks to it through include/wlrdp.h only.
         // FreeRDP 3 + OpenSSL (static, ~35 MB universal) is never committed: run
@@ -87,6 +97,13 @@ let package = Package(
                 .unsafeFlags(["-Xlinker", "-interposable"], .when(configuration: .debug))
             ]
         ),
+        // The session agent: owns the PTYs so sessions outlive the app
+        // (docs/design/wireline-agent.md). Ships as Contents/MacOS/wireline-agent.
+        .executableTarget(
+            name: "WirelineAgent",
+            dependencies: ["WirelineCore", "CGhosttyVt"],
+            swiftSettings: [.unsafeFlags(["-Xcc", "-I\(packageRoot)/Vendor/GhosttyVt/include"])]
+        ),
         .testTarget(
             name: "WirelineCoreTests",
             dependencies: ["WirelineCore"]
@@ -95,7 +112,7 @@ let package = Package(
         // WIRELINE_GHOSTTY_HARNESS=1).
         .testTarget(
             name: "WirelineGhosttyHarness",
-            dependencies: ["Wireline", "GhosttyKit", .product(name: "SwiftTerm", package: "SwiftTerm")]
+            dependencies: ["Wireline", "GhosttyKit", "WirelineAgent", .product(name: "SwiftTerm", package: "SwiftTerm")]
         )
     ]
 )

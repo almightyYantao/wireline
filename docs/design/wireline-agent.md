@@ -135,23 +135,32 @@ spawn 请求里带着环境变量，包括 askpass 用的密码；socket 另一�
 | A→C | `foreground{id, job}` / `exited{id, status}` | |
 | C→A | `kill{id, signal}` / `release{id}` | 关闭标签：先 SIGHUP，再 SIGKILL，然后释放 |
 
-## 5. 需要 fork 补的接口
+## 5. fork 补的接口（P1，已完成 2026-10-24）
 
-| 接口 | 用途 | 估计 |
+fork 分支 `wireline-agent`：`ca918cbaa`、`9b88d5b08`、构建脚本一次。只在本地，没有推送。
+
+| 接口 | 用途 | 状态 |
 |---|---|---|
-| 编出 libghostty-vt 静态库（`ghostty_terminal_*`、`ghostty_snapshot_*`），加进 `build-ghosttykit.sh` 和 Release | agent 用无界面 VT。现在的 GhosttyKit 里只有 `ghostty_surface_*`，没有这些符号（已确认） | 1 天 |
-| `ghostty_surface_io_restore(surface, reader)` | 客户端用 READY 之前的快照恢复 surface | 2–3 天 |
-| 往历史前面插入页（restore 的增量模式） | 历史从新到旧补齐 | 含在上一项 |
-| `io_write_cb` 区分查询回复和用户输入 | §3.2 | 0.5–1 天 |
-| agent 侧：可设置应答用的颜色和像素尺寸 | §3.2 | 0.5 天 |
+| `build-ghosttykit.sh` 同时输出 `GhosttyVt/include` 和 `GhosttyVt/lib`（libghostty-vt，`ghostty_terminal_*`、`ghostty_snapshot_*`） | agent 用的无界面 VT | ✅ |
+| `ghostty_surface_io_restore(surface, bytes, len)` | 用 READY 之前的快照原地替换 surface 的 terminal | ✅ |
+| `ghostty_surface_io_restore_history(surface, bytes, len)` | 往前补历史；每块必须在 PAGE 记录后切开（`SnapshotFraming`） | ✅ |
+| `ghostty_surface_io_set_replies(surface, bool)` | 客户端不回答查询 | ✅ |
+| ~~agent 侧可设置应答用的颜色和像素尺寸~~ | 不需要改 fork：libghostty-vt 原生就有 `WRITE_PTY`、`SIZE`、`COLOR_*`、`DEVICE_ATTRIBUTES` 等选项 | — |
 
-fork 每次更新后都要发新的预编译 Release，并改 `scripts/fetch-ghosttykit.sh` 里的 `FORK_REV`、`RELEASE` 和两个 sha256（见记忆中的 libghostty 迁移笔记）。
+实现要点：
+
+- restore 和 history 都走 manual backend 的输入队列，和 `io_feed` 的字节严格按顺序处理。所以可以先 restore，马上接着喂实时字节，历史在后面陆续补。
+- 恢复时保留 surface 自己的尺寸、配置里的默认颜色和**滚动缓冲上限**。上限这一点是踩出来的：libghostty-vt 默认只保留 10 KB，恢复后第一段实时输出就会把补回来的历史整页淘汰。agent 的 VT 也改成 50 MB，和 Ghostty 的默认值一致；以后由 App 把用户的配置传过去。
+- 恢复的历史会立即压缩。
+- 验证：`SnapshotRestoreHarnessTests` 让两个真实的 surface 对比，一个直接喂全部字节，另一个恢复 agent 生成的快照、补历史、再喂剩下的字节，结果屏幕、滚动缓冲、视口逐字一致。覆盖了切点在转义序列中间、补历史前已经有实时输出、切点在备用屏里这几种情况。同时确认恢复的 surface 不回答查询。原有的 `GhosttyHarnessTests` 没有回归。
+
+合回 main 之前要做：fork 推送并发新的预编译 Release，其中包含 GhosttyVt；然后更新 `fetch-ghosttykit.sh` 的固定版本和 sha256。现在这个分支只能用本地构建（`GHOSTTYKIT_SRC=…`）。
 
 ## 6. 分期
 
 | 期 | 内容 | 验收 | 估计 |
 |---|---|---|---|
-| P1 fork | §5 全部；vt 静态库进 Release | 快照编码→`io_restore`→画面逐格一致（沿用 spike 的对比工具） | 4–6 天 |
+| P1 fork | §5 全部 | ✅ 2026-10-24（`SnapshotRestoreHarnessTests`） | — |
 | P2 agent | `wireline-agent` 可执行目标（复用 `PTYProcess`）、socket 服务、协议编解码、每会话 VT、快照、应答、前台进程、退出保留、单实例、空闲退出 | 协议单测；进程内 agent 加假客户端的集成测试：spawn → 输出 → attach → 快照 → 一致 | 5–7 天 |
 | P3 App 接入 | `PTYBackend`（`LocalPTY` / `AgentPTY`）、`AgentClient`、GhosttyIO 的 attach 流程、`SessionSnapshot` 增加 `agentSessionID`、启动时先接 agent 里还活着的会话、原地重连走 `respawn`、设置开关「会话常驻（实验）」默认关闭 | 开 vim 和 `top`，退出 App 再打开，画面和进程都在；关掉开关后行为和现在一样 | 4–6 天 |
 | P4 收尾 | 代码签名校验、版本握手和新旧 agent 并存、agent 崩溃兜底、打包和签名、⌘Q 的交互、「结束所有后台会话」菜单 | 冒烟清单（升级、崩溃、未授权客户端被拒） | 3–4 天 |

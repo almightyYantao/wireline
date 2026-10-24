@@ -4,6 +4,7 @@
 #   Vendor/GhosttyKit.xcframework          static libghostty + ghostty.h (Package.swift binaryTarget)
 #   Vendor/ghostty-share/ghostty/          shell-integration (bundle.sh -> Contents/Resources/ghostty)
 #   Vendor/ghostty-share/terminfo/         xterm-ghostty     (bundle.sh -> Contents/Resources/terminfo)
+#   Vendor/GhosttyVt/                      libghostty-vt headers + static lib (the session agent)
 #
 # Both are git-ignored (~300 MB unpacked). libghostty comes from Wireline's
 # Ghostty fork, https://github.com/almightyYantao/ghostty (branch `wireline`:
@@ -29,8 +30,13 @@ install_from_dir() {   # a fork build output: GhosttyKit.xcframework + share/
         echo "no GhosttyKit.xcframework in ${src}" >&2
         exit 1
     fi
-    rm -rf Vendor/GhosttyKit.xcframework Vendor/ghostty-share
+    rm -rf Vendor/GhosttyKit.xcframework Vendor/ghostty-share Vendor/GhosttyVt
     cp -R "${src}/GhosttyKit.xcframework" Vendor/
+    if [[ -d "${src}/GhosttyVt" ]]; then
+        cp -R "${src}/GhosttyVt" Vendor/
+    else
+        echo "warning: no GhosttyVt in ${src} (older fork build): wireline-agent won't build" >&2
+    fi
     mkdir -p Vendor/ghostty-share/ghostty
     # Themes are not needed: Wireline generates every colour itself.
     cp -R "${src}/share/ghostty/shell-integration" Vendor/ghostty-share/ghostty/
