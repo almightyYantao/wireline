@@ -1,6 +1,6 @@
 # wireline-agent：会话常驻进程设计
 
-> 状态：草案，待评审（2026-10-24）。分支 `wireline-agent`。
+> 状态：已评审，§7 已定（2026-10-24）。分支 `wireline-agent`。
 > 相关代码：[`TerminalIO.swift`](../../Sources/Wireline/TerminalIO.swift)、[`PTYProcess.swift`](../../Sources/WirelineCore/PTYProcess.swift)、[`GhosttyIO.swift`](../../Sources/Wireline/Ghostty/GhosttyIO.swift)、[`SessionStore.swift`](../../Sources/Wireline/SessionStore.swift)。
 > Ghostty fork：`~/Desktop/Private/ghostty-wireline`，分支 `wireline`。
 
@@ -158,13 +158,12 @@ fork 每次更新后都要发新的预编译 Release，并改 `scripts/fetch-gho
 
 合计约 3–4 周。每期结束合回分支里一个可运行的状态；设置开关打开之前，main 上的行为不变。
 
-## 7. 待拍板的问题
+## 7. 已定的问题（2026-10-24）
 
-1. **⌘Q 的语义**：退出 App 时，会话默认留在后台吗？
-   - 建议：打开「会话常驻」后，⌘Q 就是「关掉窗口、会话留着」。第一次退出时弹一次说明，菜单里加「退出并结束所有会话」（⌥⌘Q）。
-2. **第一期覆盖哪些会话**：建议本地 shell 和 SSH。快捷终端和交互式 `sftp` 会话放到 P4 以后；RDP 和 SwiftTerm 不走 agent。
-3. **App 没开时会话保留多久**：建议一直保留到进程自己结束，不设超时。SSH 断线由 ssh 自己的 `ServerAlive` 处理。
-4. **没人接入期间的通知**：比如「命令完成」。第一期不做，因为判断逻辑在 App 里；以后可以让 agent 用 OSC 133 自己判断并发系统通知。
+1. **⌘Q**：打开「会话常驻」后，⌘Q 只关窗口，会话留在后台，下次打开原样接上。第一次退出时提示一次；菜单里加「退出并结束所有会话」（⌥⌘Q）。
+2. **第一期覆盖**：本地 shell 和 SSH。快捷终端和交互式 `sftp` 会话放到以后；RDP 和 SwiftTerm 内核不走 agent。
+3. **App 没开时保留多久**：可配置。设置里给一个时长（一直保留 / 1 小时 / 8 小时 / 24 小时），默认一直保留；超时的会话由 agent 发 SIGHUP。配置文件键 `session-agent-keep-alive`。
+4. **没人接入期间的通知**（「命令完成」等）：第一期不做，因为判断逻辑在 App 里；以后可以让 agent 用 OSC 133 自己判断并发系统通知。
 
 ## 8. 风险
 
