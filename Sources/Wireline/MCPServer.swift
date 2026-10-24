@@ -16,8 +16,14 @@ final class MCPServerSettings {
         }
     }
 
+    /// What runs without asking (`MCPPolicy`). Default: confirm.
+    var mode: MCPAccessMode {
+        didSet { UserDefaults.standard.set(mode.rawValue, forKey: "mcp.server.mode") }
+    }
+
     private init() {
         enabled = UserDefaults.standard.bool(forKey: "mcp.server.enabled")
+        mode = MCPAccessMode(rawValue: UserDefaults.standard.string(forKey: "mcp.server.mode") ?? "") ?? .confirm
     }
 }
 
@@ -122,6 +128,10 @@ final class MCPServerConnection {
     /// client reconnects, rather than silently switching protection.
     private var level: PrivacyPolicy.Level?
     private var masker: PrivacyMasker?
+    /// "Don't ask again" answers, by request key; this connection only.
+    var alwaysAllowed: Set<String> = []
+    /// Sessions this client opened: the only ones it may close.
+    var opened: Set<UUID> = []
 
     init(send: @escaping (String) -> Void) {
         self.send = send
@@ -189,7 +199,9 @@ final class MCPServerConnection {
             return MCPBridge.toolText("参数里的占位符 \(stale) 无法还原（不属于本次连接），未执行。请重新读取需要的值。"
                                       + " / Placeholder \(stale) doesn't belong to this connection; not run.", isError: true)
         }
-        let outcome = await MCPServerTools.run(name, args, clientName: clientName)
+        let outcome = await MCPServerTools.run(name, args, conn: self)
+        MCPAudit.record(.init(time: Date(), client: clientName, tool: name, arguments: MCPAudit.summarize(args),
+                              outcome: outcome.isError && outcome.audit == "ok" ? "error" : outcome.audit))
         let text = masker?.mask(outcome.text) ?? outcome.text
         return MCPBridge.toolText(text, isError: outcome.isError)
     }

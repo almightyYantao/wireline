@@ -620,6 +620,11 @@ struct SessionTab: View {
                 Text(title).font(WL.small.weight(isActive ? .semibold : .regular))
                     .foregroundStyle(isActive ? WL.textPrimary : WL.textDim).lineLimit(1)
             }
+            if let client = tab.sessionIDs.lazy.compactMap({ sessions.session($0)?.openedBy }).first {
+                Image(systemName: "sparkles").font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(WL.amber)
+                    .help(loc("由 \(client) 通过 MCP 打开", "Opened by \(client) over MCP"))
+            }
             if !isActive && waiting {
                 WaitingBadge()
             } else if !isActive && running {

@@ -1,4 +1,5 @@
 import SwiftUI
+import WirelineCore
 
 /// Registers Wireline's MCP server with the clients users run. Each writes the
 /// user's own client config, so it only ever runs from a button press.
@@ -95,15 +96,36 @@ struct MCPServerSection: View {
     @State private var host = MCPServerHost.shared
     @State private var status: MCPClientSetup.Outcome?
     @State private var working = false
+    @State private var showAudit = false
 
     var body: some View {
         WLFormSection(loc("对外开放（MCP）", "MCP Server"),
-                      footer: loc("让 Claude Code、Codex 等外部 AI 通过 MCP 使用 Wireline：查看会话和主机、读输出、读远程文件。现阶段只开放只读工具；发出的内容按上面的「隐私」档位脱敏。",
-                                  "Let Claude Code, Codex and other AI clients use Wireline over MCP: sessions, hosts, output, remote files. Read-only tools for now; what they receive is masked per the Privacy setting.")) {
+                      footer: loc("让 Claude Code、Codex 等外部 AI 通过 MCP 使用 Wireline：看会话和主机、在会话里或批量执行命令、读写远程文件。只读命令直接执行；其余按权限档位处理，高危命令在任何档位都要你确认。发出的内容按「隐私」档位脱敏，每次调用都记在审计日志里。",
+                                  "Let Claude Code, Codex and other AI clients use Wireline over MCP: sessions, hosts, commands in a session or across a fleet, remote files. Read-only commands just run; the rest follow the access level, and risky commands always ask. What they receive is masked per Privacy; every call is in the audit log.")) {
             Toggle(isOn: $settings.enabled) {
                 Text(loc("允许外部 AI 使用 Wireline", "Allow AI clients to use Wireline")).font(WL.body).foregroundStyle(WL.textPrimary)
             }
             .toggleStyle(.wlSwitch).frame(minHeight: 38).wlConfigLocked("mcp-server")
+            WLFormDivider()
+            WLFormRow(loc("权限", "Access"), detail: modeDetail) {
+                WLMenuPicker(selection: $settings.mode, options: [
+                    WLOption(MCPAccessMode.readOnly, loc("只读", "Read-only")),
+                    WLOption(MCPAccessMode.confirm, loc("确认", "Confirm")),
+                    WLOption(MCPAccessMode.trust, loc("信任", "Trust"))
+                ], minWidth: 120)
+                .wlConfigLocked("mcp-mode")
+            }
+            WLFormDivider()
+            WLFormRow(loc("审计日志", "Audit log")) {
+                HStack(spacing: 6) {
+                    Button(loc("查看…", "View…")) { showAudit = true }
+                    Button(loc("在访达中显示", "Show in Finder")) {
+                        NSWorkspace.shared.activateFileViewerSelecting([MCPAudit.url])
+                    }
+                    .disabled(!FileManager.default.fileExists(atPath: MCPAudit.url.path))
+                }
+                .buttonStyle(.wlSecondary)
+            }
             WLFormDivider()
             WLFormRow(loc("添加到客户端", "Add to a client"),
                       detail: host.lastError.map { loc("监听失败：", "Can't listen: ") + $0 }
@@ -129,5 +151,56 @@ struct MCPServerSection: View {
                     .frame(maxWidth: .infinity, alignment: .leading).padding(.bottom, 6)
             }
         }
+        .wlModal(isPresented: $showAudit) {
+            MCPAuditView { wlAnimate(Motion.flipOut) { showAudit = false } }
+        }
+    }
+
+    private var modeDetail: String {
+        switch settings.mode {
+        case .readOnly: loc("只能读和执行只读命令，其余一律拒绝", "Reads and read-only commands only")
+        case .confirm: loc("会改动东西的命令和写文件，逐次问你", "Asks before anything that may change something")
+        case .trust: loc("直接执行；高危命令和超过 5 台的批量写仍要确认", "Runs without asking, except risky commands and wide fleet writes")
+        }
+    }
+}
+
+/// The last 200 MCP tool calls, newest first.
+struct MCPAuditView: View {
+    @Environment(Localizer.self) private var loc
+    var onClose: () -> Void
+    @State private var entries: [MCPAudit.Entry] = []
+
+    var body: some View {
+        WLSheet(loc("MCP 审计日志", "MCP Audit Log"), subtitle: loc("最近 200 次调用", "Last 200 calls"),
+                symbol: "list.bullet.rectangle", width: 640, height: 520, onClose: onClose) {
+            if entries.isEmpty {
+                Text(loc("还没有调用记录。", "No calls yet.")).font(WL.body).foregroundStyle(WL.textDim)
+                    .frame(maxWidth: .infinity).padding(.vertical, 40)
+            } else {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(entries.enumerated()), id: \.element.id) { i, e in
+                        if i > 0 { WLFormDivider() }
+                        VStack(alignment: .leading, spacing: 3) {
+                            HStack(spacing: 6) {
+                                Text(e.tool).font(WL.mono(12).weight(.semibold)).foregroundStyle(WL.textPrimary)
+                                Text(e.outcome).font(WL.caption)
+                                    .foregroundStyle(e.outcome == "denied" || e.outcome == "refused" || e.outcome == "error" ? WL.red : WL.textDim)
+                                Spacer()
+                                Text(e.client + " · " + e.time.formatted(date: .abbreviated, time: .standard))
+                                    .font(WL.caption).foregroundStyle(WL.textDim)
+                            }
+                            Text(e.arguments).font(WL.mono(11)).foregroundStyle(WL.textDim)
+                                .lineLimit(3).textSelection(.enabled)
+                        }
+                        .padding(.vertical, 7)
+                    }
+                }
+            }
+        } footer: {
+            Spacer()
+            Button(loc("完成", "Done"), action: onClose).buttonStyle(.wlPrimary).keyboardShortcut(.defaultAction)
+        }
+        .onAppear { entries = MCPAudit.recent() }
     }
 }

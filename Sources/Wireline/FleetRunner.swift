@@ -110,7 +110,16 @@ enum FleetRunner {
         }
     }
 
-    private static func runOne(alias: String, password: String?, command: String, timeout: Int) async -> FleetResult {
+    /// Run one command on one host with `input` on its stdin (file_write sends
+    /// a file this way: a command line is capped at 128 KB on Linux).
+    static func run(command: String, on alias: String, input: Data,
+                    keychain: KeychainService = KeychainService(), timeout: Int = 30) async -> FleetResult {
+        let password = (try? keychain.password(for: alias)) ?? nil
+        return await runOne(alias: alias, password: password, command: command, timeout: timeout, input: input)
+    }
+
+    private static func runOne(alias: String, password: String?, command: String, timeout: Int,
+                               input: Data? = nil) async -> FleetResult {
         await withCheckedContinuation { cont in
             DispatchQueue.global().async {
                 let p = Process()
@@ -136,10 +145,17 @@ enum FleetRunner {
                 let pipe = Pipe()
                 p.standardOutput = pipe
                 p.standardError = pipe
-                p.standardInput = FileHandle.nullDevice
+                let stdin = input.map { _ in Pipe() }
+                p.standardInput = stdin ?? FileHandle.nullDevice
                 do { try p.run() } catch {
                     cont.resume(returning: FleetResult(alias: alias, output: "(启动失败: \(error.localizedDescription))", exitCode: -1))
                     return
+                }
+                if let stdin, let input {
+                    DispatchQueue.global().async {
+                        try? stdin.fileHandleForWriting.write(contentsOf: input)
+                        try? stdin.fileHandleForWriting.close()
+                    }
                 }
                 DispatchQueue.global().asyncAfter(deadline: .now() + Double(timeout) + 10) {
                     if p.isRunning { p.terminate() }

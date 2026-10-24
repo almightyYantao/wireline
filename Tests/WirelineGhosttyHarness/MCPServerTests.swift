@@ -50,7 +50,8 @@ final class MCPServerTests: XCTestCase {
         let c = await initialized()
         let on = (await c.respond(to: request(2, "tools/list"))?["result"] as? [String: Any])?["tools"] as? [[String: Any]]
         XCTAssertEqual(Set(on?.compactMap { $0["name"] as? String } ?? []),
-                       ["get_environment", "hosts_list", "session_read", "file_read"])
+                       ["get_environment", "hosts_list", "session_read", "file_read",
+                        "session_exec", "fleet_run", "host_open", "session_close", "file_write"])
 
         MCPServerSettings.shared.enabled = false
         let off = (await c.respond(to: request(3, "tools/list"))?["result"] as? [String: Any])?["tools"] as? [[String: Any]]
@@ -185,7 +186,7 @@ final class MCPServerTests: XCTestCase {
         XCTAssertEqual(((replies.first?["result"] as? [String: Any])?["serverInfo"] as? [String: Any])?["name"] as? String,
                        "wireline")
         let tools = (replies.last?["result"] as? [String: Any])?["tools"] as? [[String: Any]]
-        XCTAssertEqual(tools?.count, 4)
+        XCTAssertEqual(tools?.count, MCPServerTools.definitions.count)
         stdin.fileHandleForWriting.closeFile()
     }
 

@@ -76,29 +76,127 @@ public enum AICommandSafety {
         "helm": ["list", "status", "get", "history", "version", "show"]
     ]
 
+    /// Whether `command` only reads. Read-only commands run without asking
+    /// (the agent's sandbox, the MCP server's confirm / trust modes), so when
+    /// in doubt this says no.
     public static func isReadOnly(_ command: String) -> Bool {
-        // No output redirection or elevation.
-        if command.range(of: #"(>>?|<|\btee\b|\bsudo\b|\bsu\b)"#, options: .regularExpression) != nil {
-            // `>` redirect writes; sudo elevates — disallow in sandbox.
-            if command.contains(">") || command.range(of: #"\bsudo\b|\bsu\b"#, options: .regularExpression) != nil {
-                return false
-            }
+        // Output redirection writes; elevation; command / process substitution
+        // runs anything inside an otherwise harmless `echo`.
+        if command.contains(">") || command.contains("`") || command.contains("$(")
+            || command.contains("<(") || command.range(of: #"\b(sudo|su|doas)\b"#, options: .regularExpression) != nil {
+            return false
         }
         // Split into pipeline / chain segments; every segment must be allowlisted.
         let segments = command.split(whereSeparator: { "|;&\n".contains($0) })
         guard !segments.isEmpty else { return false }
         for seg in segments {
             let tokens = seg.split(whereSeparator: { $0 == " " || $0 == "\t" }).map(String.init)
-            guard let cmd = tokens.first(where: { !$0.contains("=") })?.lowercased() else { return false }
-            let base = (cmd as NSString).lastPathComponent
+            // Leading `VAR=value` assignments are fine; the command comes after.
+            guard let i = tokens.firstIndex(where: { !$0.contains("=") }) else { return false }
+            let base = (tokens[i].lowercased() as NSString).lastPathComponent
             guard readOnlyCommands.contains(base) else { return false }
+            let args = Array(tokens[(i + 1)...])
             if let subs = readOnlySubcommands[base] {
-                let sub = tokens.dropFirst().first { !$0.hasPrefix("-") }?.lowercased()
+                let sub = args.first { !$0.hasPrefix("-") }?.lowercased()
                 guard let sub, subs.contains(sub) else { return false }
             }
-            // `sed -i` mutates in place.
-            if base == "sed", tokens.contains(where: { $0.hasPrefix("-i") }) { return false }
+            guard argumentsOnlyRead(base, args) else { return false }
         }
         return true
+    }
+
+    /// Per-command flags and forms that turn an allowlisted reader into a writer.
+    private static func argumentsOnlyRead(_ base: String, _ args: [String]) -> Bool {
+        // Case matters (curl -X is the method, -x a proxy), so flags are
+        // compared as written.
+        let lower = args.map { $0.lowercased() }
+        func has(_ flags: Set<String>) -> Bool {
+            args.contains { a in flags.contains(a) || flags.contains { $0.hasPrefix("--") && a.hasPrefix($0 + "=") } }
+        }
+        let positional = args.filter { !$0.hasPrefix("-") }
+        switch base {
+        case "sed":
+            return !args.contains { $0.hasPrefix("-i") || $0.hasPrefix("--in-place") }
+        case "env":
+            // `env cmd …` runs cmd.
+            return !args.contains { !$0.hasPrefix("-") && !$0.contains("=") }
+        case "tee":
+            return positional.isEmpty
+        case "awk":
+            return !args.joined(separator: " ").contains("system")
+        case "find":
+            return !has(["-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf", "-fls"])
+        case "sort":
+            return !args.contains { $0 == "-o" || $0.hasPrefix("--output") || ($0.hasPrefix("-") && !$0.hasPrefix("--") && $0.contains("o")) }
+        case "curl":
+            let writes: Set<String> = ["-d", "--data", "--data-raw", "--data-binary", "--data-urlencode", "--data-ascii",
+                                       "--json", "-F", "--form", "--form-string", "-T", "--upload-file", "-o", "--output",
+                                       "--output-dir", "-O", "--remote-name", "--remote-name-all", "-K", "--config"]
+            if has(writes) { return false }
+            // Clustered short flags (-sSO, -dfoo) hide the same letters.
+            if args.contains(where: { $0.hasPrefix("-") && !$0.hasPrefix("--") && $0.count > 2
+                && $0.dropFirst().contains(where: { "dFTOoK".contains($0) }) }) { return false }
+            let readMethods: Set<String> = ["GET", "HEAD", "OPTIONS"]
+            for (n, a) in args.enumerated() {
+                if a == "-X" || a == "--request" {
+                    guard n + 1 < args.count, readMethods.contains(args[n + 1].uppercased()) else { return false }
+                } else if a.hasPrefix("--request=") {
+                    guard readMethods.contains(String(a.dropFirst("--request=".count)).uppercased()) else { return false }
+                } else if a.hasPrefix("-X") {
+                    guard readMethods.contains(String(a.dropFirst(2)).uppercased()) else { return false }
+                }
+            }
+            return true
+        case "wget":
+            // wget saves to a file unless told to print or only check; -o / -a write a log.
+            let joined = args.joined(separator: " ")
+            let toStdout = ["-O -", "-O-", "-qO-", "-qO -", "--output-document=-", "--spider"].contains { joined.contains($0) }
+            return toStdout && !has(["-o", "--output-file", "-a", "--append-output"])
+        case "ip":
+            let verbs: Set<String> = ["add", "del", "delete", "set", "change", "replace", "flush", "append",
+                                      "prepend", "up", "down", "save", "restore", "exec", "attach", "detach"]
+            return !lower.contains { verbs.contains($0) }
+        case "ifconfig":
+            return positional.count <= 1
+        case "mount":
+            return positional.isEmpty
+        case "hostname":
+            return positional.isEmpty
+        case "date":
+            return !has(["-s", "--set"])
+        case "dmesg":
+            return !has(["-c", "-C", "--clear", "--read-clear", "-n", "--console-level", "-D", "-E",
+                         "--console-off", "--console-on"])
+        case "journalctl":
+            return !lower.contains { $0.hasPrefix("--vacuum") || $0 == "--rotate" || $0 == "--flush" || $0 == "--relinquish-var" || $0.hasPrefix("--setup-keys") }
+        case "docker":
+            if positional.first?.lowercased() == "image" {
+                return ["ls", "list", "inspect", "history"].contains(positional.dropFirst().first?.lowercased() ?? "ls")
+            }
+            return true
+        case "kubectl":
+            if positional.first?.lowercased() == "config" {
+                return ["view", "get-contexts", "current-context", "get-clusters", "get-users"]
+                    .contains(positional.dropFirst().first?.lowercased() ?? "")
+            }
+            return true
+        case "git":
+            switch positional.first?.lowercased() {
+            case "branch":
+                // Listing only: no names (create / rename) and no mutating flags.
+                return positional.count == 1 && !has(["-d", "-D", "--delete", "-m", "-M", "--move", "-c", "-C", "--copy",
+                                                      "-f", "--force", "-u", "--set-upstream-to", "--unset-upstream",
+                                                      "--edit-description", "-t", "--track"])
+            case "remote":
+                return positional.count == 1 || ["show", "get-url"].contains(positional[1].lowercased())
+            case "config":
+                return lower.contains { $0 == "--get" || $0.hasPrefix("--get-") || $0 == "--list" || $0 == "-l" }
+                    && !lower.contains { ["--add", "--unset", "--unset-all", "--replace-all", "--rename-section", "--remove-section", "-e", "--edit"].contains($0) }
+            default:
+                return true
+            }
+        default:
+            return true
+        }
     }
 }

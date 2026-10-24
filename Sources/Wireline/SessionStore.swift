@@ -40,6 +40,8 @@ final class TerminalSession: Identifiable {
     /// True once the user has renamed this tab by hand, which pins the title so
     /// automatic directory-tracking (see `applyReportedDirectory`) leaves it alone.
     var isManuallyRenamed = false
+    /// The MCP client that opened it ("claude-code"), marked on its tab.
+    var openedBy: String?
 
     /// Drives the prompt-inline AI command flow (⌘; or a `# …` request line).
     let inlineAI = InlineAIController()
@@ -1007,11 +1009,13 @@ final class SessionStore {
     /// Open an SSH session for a host. `password` is fetched from the Keychain
     /// by the caller (nil for key auth).
     @discardableResult
-    func open(host: Host, password: String?, sudoPassword: String? = nil) -> UUID {
+    /// `focus: false` opens it as a background tab (an MCP client's: it mustn't
+    /// take over the tab the user is typing in).
+    func open(host: Host, password: String?, sudoPassword: String? = nil, focus: Bool = true) -> UUID {
         add(TerminalSession(
             kind: .ssh(alias: host.alias, password: password, sudoPassword: sudoPassword,
                        autoSudo: host.autoSudo, args: host.launchArgTokens),
-            title: host.alias))
+            title: host.alias), focus: focus)
     }
 
     /// Open an interactive SFTP file-transfer session for a host.
@@ -1038,13 +1042,15 @@ final class SessionStore {
         return add(TerminalSession(kind: .localShell, title: "Local Shell", startDirectory: dir))
     }
 
-    private func add(_ session: TerminalSession) -> UUID {
+    private func add(_ session: TerminalSession, focus: Bool = true) -> UUID {
         let id = spawn(session)
         // Every new session starts as its own single-pane tab.
         let tab = PaneNode.makeLeaf(id)
         tabs.append(tab)
-        activeTabID = tab.id
-        activeID = id
+        if focus || activeTabID == nil {
+            activeTabID = tab.id
+            activeID = id
+        }
         persist()
         return id
     }

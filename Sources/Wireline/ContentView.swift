@@ -118,6 +118,7 @@ struct ContentView: View {
         }
         .modifier(SettingsModal())
         .modifier(QuitNoticeModal())
+        .modifier(MCPApprovalModal())
         .modifier(ContentModals(editing: $editing, showBackup: $showBackup, showNewGroup: $showNewGroup,
                                 showQuickConnect: $showQuickConnect, showCommandPalette: $showCommandPalette))
         .onReceive(NotificationCenter.default.publisher(for: .showQuickConnect)) { _ in

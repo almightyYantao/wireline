@@ -1,6 +1,6 @@
 # 对外开放 MCP + 可还原脱敏 设计
 
-> 状态：§9 已拍板（2026-10-24，全部按建议）；P1 已实现（`privacy-masker`，c0d6d54），P2 已实现（分支 `mcp-server`）。
+> 状态：§9 已拍板（2026-10-24，全部按建议）；P1 已实现（`privacy-masker`，c0d6d54），P2 已实现（9088a07），P3 已实现（分支 `mcp-exec`）。
 > 参考：Netcatty（GPL-3.0，只借思路不搬代码）的 `electron/mcp/`、`docs/features/external-mcp-privacy.md`。
 
 ## 0. 目标与非目标
@@ -66,10 +66,10 @@ MCP 客户端会自动给工具名加上 server 名做命名空间（`mcp__wirel
 | `session_read(session_id, lines=200)` | 会话最近输出（去掉 ANSI） | `TerminalSession.recentOutput` | 读 |
 | `session_exec(session_id, command, visible?, timeout?)` | 在会话里执行并取回输出。`visible=true` 时在终端里打字执行（用户看得到），否则走 ControlMaster 在后台执行 | `runInTerminalCapturing` / `runCapturing` | 视命令而定 |
 | `fleet_run(targets, command, timeout?, max_concurrent?)` | `targets` 可以写别名，也可以写 `@分组`；不用先连接，并发执行，返回每台主机的退出码和输出（逐台截断） | `FleetRunner.run` | 视命令而定 |
-| `host_open(alias, split?)` | 打开一个 SSH 会话，等连上后返回 `session_id` | `SessionStore.open` / `splitHost` | 写（低风险） |
+| `host_open(alias)` | 在**后台标签**打开一个 SSH 会话（不抢用户当前的标签），等连上后返回 `session_id` 和屏幕最后几行 | `SessionStore.open(focus: false)` | 低风险，各档都直接放行 |
 | `file_read(alias, path, max_bytes?)` | 读远程文件，同时返回 sha256 | `SFTPService` | 读 |
 | `file_write(alias, path, content, expected_sha256?)` | 写远程文件。审批框里用现有的变更评审界面显示 diff；sha 不匹配就拒绝，防止覆盖别人刚改过的文件 | `AIFileEditView` 的评审 | 写 |
-| `session_close(session_id)` | 只能关闭本连接打开的会话 | `SessionStore.close` | 写 |
+| `session_close(session_id)` | 只能关闭本连接打开的会话 | `SessionStore.close` | 低风险，各档都直接放行 |
 | `load_tools(toolset)` | 加载下面的扩展工具集，并发送 `notifications/tools/list_changed` | — | — |
 
 ### 2.2 按需加载的工具集
@@ -121,8 +121,16 @@ MCP 客户端会自动给工具名加上 server 名做命名空间（`mcp__wirel
 
 ### 3.3 审计日志
 
-- 每次工具调用追加一行到 `~/Library/Application Support/Wireline/mcp-audit.jsonl`：时间、客户端名、工具、目标、**真实命令**、审批结果、退出码。这个文件只在本机，存真实值。
+- 每次工具调用追加一行到 `~/Library/Application Support/Wireline/mcp-audit.jsonl`：时间、客户端名、工具、参数（真实值；`file_write` 的内容只记字节数）、结果（auto / approved / denied / refused / error / ok）。文件只在本机，超过 5 MB 轮转一次。
 - 设置页能查看最近 200 条，也能一键在访达中显示。
+
+### 3.4 P3 实现备注
+
+- 规则在 `WirelineCore/MCPPolicy.swift`（纯函数，有单测）；审批在 `MCPApprovals.swift`：一次只问一个，刘海岛、主窗口卡片、后台时的系统通知三处同时出现，先答的算；关掉卡片或 120 秒没人答都算拒绝。危险命令在内置 AI 已配置时附一句影响评估。
+- "本连接不再询问"按「工具 + 目标 + 命令（或路径）」记，只对这个连接有效；危险命令和写文件不提供这个选项。
+- 只读判断（`AICommandSafety.isReadOnly`）这次补了一批漏洞：命令替换 / 进程替换、`env cmd`、`tee 文件`、`curl -X POST / -d / -o`、`wget` 存文件、`find -delete/-exec`、`awk system()`、`sort -o`、`ip … set/add`、`mount 设备`、`hostname 新名`、`date -s`、`dmesg -c`、`journalctl --vacuum`、`docker image rm`、`kubectl config use-context`、`git branch -D / remote add / config 写值`。内置 AI 的只读沙盒同样受益。
+- `file_write`：先读一遍当前内容（diff + 校验 `expected_sha256`，超过 2 MB 或二进制拒绝），内容经 stdin 传过去（Linux 单个参数上限 128 KB），远端先落到 `mktemp` 再 `cat` 覆盖目标，保留属主和权限，断线不会留下半个文件。
+- 外部 AI 打开的标签上有一个 ✦ 角标，悬停显示是哪个客户端打开的。
 
 ---
 
