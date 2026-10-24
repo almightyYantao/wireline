@@ -19,10 +19,11 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 FORK_REPO="almightyYantao/ghostty"
-FORK_REV="8b01b39beb84eb8d13234d3cd0461e1fbade542a"
-RELEASE="wireline-8b01b39"
-KIT_SHA256="63f7b5e0d16cc0fe1e7f026e363275a6a830ae076da6757009b0d94960e071ab"
-SHARE_SHA256="846e1148a38c4d864250d6b0669fc33c6be45c8c147e38a6d8f5702d2c581744"
+FORK_REV="484039fb2c1d817d02fcb959d603cfe111208130"
+RELEASE="wireline-484039f"
+KIT_SHA256="e71c0691c5bb1a129d3d143a8b122f2ad8824017ba115b1b1a0333b30ac79b52"
+SHARE_SHA256="f049d84acbd2a85ad4523ef1ac38ea40a8383bee0af982d8469a6332cb638457"
+VT_SHA256="733020d4724352eea2ecf7843a518c4e3f2de579f3c1a0f31c6aa3f745e08323"
 
 install_from_dir() {   # a fork build output: GhosttyKit.xcframework + share/
     local src="$1"
@@ -75,10 +76,13 @@ else
     BASE="https://github.com/${FORK_REPO}/releases/download/${RELEASE}"
     download "${BASE}/GhosttyKit.xcframework.zip" "${KIT_SHA256}" "${TMP}/kit.zip"
     download "${BASE}/ghostty-share.tar.gz" "${SHARE_SHA256}" "${TMP}/share.tar.gz"
-    rm -rf Vendor/GhosttyKit.xcframework Vendor/ghostty-share
+    download "${BASE}/GhosttyVt.tar.gz" "${VT_SHA256}" "${TMP}/vt.tar.gz"
+    rm -rf Vendor/GhosttyKit.xcframework Vendor/ghostty-share Vendor/GhosttyVt
     ditto -x -k "${TMP}/kit.zip" Vendor/
     tar -C Vendor -xzf "${TMP}/share.tar.gz"
+    tar -C Vendor -xzf "${TMP}/vt.tar.gz"
 fi
 
 echo "✓ Vendor/GhosttyKit.xcframework ($(du -sh Vendor/GhosttyKit.xcframework | cut -f1))"
 echo "✓ Vendor/ghostty-share"
+echo "✓ Vendor/GhosttyVt"
