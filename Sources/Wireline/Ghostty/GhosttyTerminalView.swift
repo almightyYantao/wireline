@@ -303,6 +303,30 @@ final class GhosttyTerminalView: NSView, TerminalEngine {
         guard a != terminalAppearance else { return }
         terminalAppearance = a
         applyConfig()
+        io?.themeChanged(a.theme)
+    }
+
+    // MARK: Session agent
+
+    func restoreSnapshot(_ bytes: [UInt8]) {
+        #if WIRELINE_GHOSTTY_MANUAL_IO
+        guard let s = surface?.raw else { return }
+        bytes.withUnsafeBufferPointer { ghostty_surface_io_restore(s, $0.baseAddress, UInt($0.count)) }
+        #endif
+    }
+
+    func restoreSnapshotHistory(_ bytes: [UInt8]) {
+        #if WIRELINE_GHOSTTY_MANUAL_IO
+        guard let s = surface?.raw else { return }
+        bytes.withUnsafeBufferPointer { ghostty_surface_io_restore_history(s, $0.baseAddress, UInt($0.count)) }
+        #endif
+    }
+
+    func setQueryReplies(_ enabled: Bool) {
+        #if WIRELINE_GHOSTTY_MANUAL_IO
+        guard let s = surface?.raw else { return }
+        ghostty_surface_io_set_replies(s, enabled)
+        #endif
     }
 
     private func applyConfig() {

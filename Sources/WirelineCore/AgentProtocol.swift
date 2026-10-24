@@ -105,6 +105,9 @@ public enum AgentControl: Codable, Equatable, Sendable {
     case theme(id: UUID, theme: AgentTheme)
     /// How long a session lives with nobody attached (nil: until it ends).
     case keepAlive(id: UUID, seconds: Double?)
+    /// End the process (SIGHUP, then SIGKILL) but keep the session, for a
+    /// `respawn` (reconnecting a live session in place).
+    case hangup(id: UUID)
     /// End the process (SIGHUP, then SIGKILL) and forget the session.
     case close(id: UUID)
 

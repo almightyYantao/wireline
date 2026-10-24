@@ -73,6 +73,15 @@ protocol TerminalEngine: NSView, TerminalScrollable {
     /// a full-screen app owns the alternate screen).
     var renderedBuffer: Data { get }
 
+    // MARK: Session agent
+
+    /// Replace the screen with a session agent's snapshot (through READY).
+    func restoreSnapshot(_ bytes: [UInt8])
+    /// Prepend the snapshot's history records (after `restoreSnapshot`).
+    func restoreSnapshotHistory(_ bytes: [UInt8])
+    /// Whether the engine answers the program's queries (the agent does for its sessions).
+    func setQueryReplies(_ enabled: Bool)
+
     // MARK: Search
 
     func findNext(_ term: String, options: SearchOptions, scrollToResult: Bool) -> Bool
@@ -82,6 +91,11 @@ protocol TerminalEngine: NSView, TerminalScrollable {
 }
 
 extension TerminalEngine {
+    // Only libghostty can restore a snapshot; SwiftTerm sessions never use the agent.
+    func restoreSnapshot(_ bytes: [UInt8]) {}
+    func restoreSnapshotHistory(_ bytes: [UInt8]) {}
+    func setQueryReplies(_ enabled: Bool) {}
+
     @discardableResult
     func findNext(_ term: String, options: SearchOptions) -> Bool {
         findNext(term, options: options, scrollToResult: true)

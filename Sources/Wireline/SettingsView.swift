@@ -177,6 +177,26 @@ struct SettingsView: View {
                     Toggle(isOn: $store.inheritWorkingDirectory) { rowLabel(loc("新标签继承当前目录", "New tabs inherit the directory")) }
                         .toggleStyle(.wlSwitch).frame(minHeight: 38).wlConfigLocked("window-inherit-working-directory")
                     WLFormDivider()
+                    Toggle(isOn: $store.sessionAgentEnabled) {
+                        WLFormRow(loc("会话常驻（实验）", "Keep sessions running (experimental)"),
+                                  detail: loc("新开的 SSH 和本地终端交给后台的 wireline-agent：⌘Q 退出后进程照常运行，再打开 Wireline 原样接上。⌥⌘Q 退出并结束所有会话。只对 libghostty 内核生效。",
+                                              "New SSH and local sessions run in the background wireline-agent: they keep going after ⌘Q and come back as they were. ⌥⌘Q quits and ends them. libghostty engine only.")) { EmptyView() }
+                    }
+                    .toggleStyle(.wlSwitch).wlConfigLocked("session-agent")
+                    if store.sessionAgentEnabled {
+                        WLFormDivider()
+                        WLFormRow(loc("Wireline 关闭时保留", "Keep while Wireline is closed"),
+                                  detail: loc("超过这个时长没人接入，会话会被结束", "A session nobody has attached to for this long is ended")) {
+                            WLSegmented(selection: $store.sessionAgentKeepAlive, options: [
+                                WLOption(0.0, loc("一直", "Always")),
+                                WLOption(3600.0, loc("1 小时", "1 h")),
+                                WLOption(8 * 3600.0, loc("8 小时", "8 h")),
+                                WLOption(24 * 3600.0, loc("24 小时", "24 h")),
+                            ], fill: false)
+                            .wlConfigLocked("session-agent-keep-alive")
+                        }
+                    }
+                    WLFormDivider()
                     Toggle(isOn: $store.confirmCloseRunning) {
                         WLFormRow(loc("关闭前确认", "Confirm before closing"),
                                   detail: loc("标签或分屏里还有命令、Claude Code 等在运行时，关闭前先问一下", "Ask before closing a tab or pane that's still running a command or a coding agent")) { EmptyView() }

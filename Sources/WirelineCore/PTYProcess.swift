@@ -169,6 +169,7 @@ public final class PTYWindowSize: Sendable {
     private struct State {
         var fd: Int32 = -1
         var size: winsize?
+        var observer: (@Sendable (winsize) -> Void)?
     }
     private let state = OSAllocatedUnfairLock(initialState: State())
 
@@ -183,7 +184,15 @@ public final class PTYWindowSize: Sendable {
         state.withLock { s in
             s.size = size
             Self.apply(s)
+            s.observer?(size)
         }
+    }
+
+    /// Hear every size set, on the setter's thread, under the lock (so in
+    /// order) — for a PTY that lives in another process (the session agent).
+    /// Must not block or call back into this object.
+    public func observe(_ observer: (@Sendable (winsize) -> Void)?) {
+        state.withLock { $0.observer = observer }
     }
 
     /// A new child's master (a dup this owns). If the size moved since the PTY

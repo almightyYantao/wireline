@@ -101,6 +101,15 @@ final class HostStore {
     var inheritWorkingDirectory: Bool {
         didSet { UserDefaults.standard.set(inheritWorkingDirectory, forKey: "inheritWorkingDirectory") }
     }
+    /// New SSH and local sessions live in the session agent (wireline-agent)
+    /// and survive quitting the app (experimental, off by default).
+    var sessionAgentEnabled: Bool {
+        didSet { UserDefaults.standard.set(sessionAgentEnabled, forKey: "sessionAgent") }
+    }
+    /// How long the agent keeps a session nobody is attached to; 0 = until it ends.
+    var sessionAgentKeepAlive: Double {
+        didSet { UserDefaults.standard.set(sessionAgentKeepAlive, forKey: "sessionAgentKeepAlive") }
+    }
     /// Ask before closing a tab / pane that's still running a command or agent.
     var confirmCloseRunning: Bool {
         didSet { UserDefaults.standard.set(confirmCloseRunning, forKey: "confirmCloseRunning") }
@@ -247,6 +256,8 @@ final class HostStore {
         self.terminalPaddingY = UserDefaults.standard.object(forKey: "terminalPaddingY") as? Double ?? 10
         self.inheritWorkingDirectory = UserDefaults.standard.object(forKey: "inheritWorkingDirectory") as? Bool ?? true
         self.confirmCloseRunning = UserDefaults.standard.object(forKey: "confirmCloseRunning") as? Bool ?? true
+        self.sessionAgentEnabled = UserDefaults.standard.bool(forKey: "sessionAgent")
+        self.sessionAgentKeepAlive = UserDefaults.standard.double(forKey: "sessionAgentKeepAlive")
         self.notifyCommandAfter = UserDefaults.standard.object(forKey: "notifyCommandAfter") as? Double ?? 10
         self.quickTerminalHeight = UserDefaults.standard.object(forKey: "quickTerminalHeight") as? Double ?? 0.4
         self.quickTerminalAutohide = UserDefaults.standard.object(forKey: "quickTerminalAutohide") as? Bool ?? true

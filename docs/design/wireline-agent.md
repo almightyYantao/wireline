@@ -1,6 +1,6 @@
 # wireline-agent：会话常驻进程设计
 
-> 状态：已评审，§7 已定（2026-10-24）。分支 `wireline-agent`。
+> 状态：P1–P3 已完成，P4 未开始（2026-10-24）。分支 `wireline-agent`。
 > 相关代码：[`TerminalIO.swift`](../../Sources/Wireline/TerminalIO.swift)、[`PTYProcess.swift`](../../Sources/WirelineCore/PTYProcess.swift)、[`GhosttyIO.swift`](../../Sources/Wireline/Ghostty/GhosttyIO.swift)、[`SessionStore.swift`](../../Sources/Wireline/SessionStore.swift)。
 > Ghostty fork：`~/Desktop/Private/ghostty-wireline`，分支 `wireline`。
 
@@ -161,8 +161,8 @@ fork 分支 `wireline-agent`：`ca918cbaa`、`9b88d5b08`、构建脚本一次。
 | 期 | 内容 | 验收 | 估计 |
 |---|---|---|---|
 | P1 fork | §5 全部 | ✅ 2026-10-24（`SnapshotRestoreHarnessTests`） | — |
-| P2 agent | `wireline-agent` 可执行目标（复用 `PTYProcess`）、socket 服务、协议编解码、每会话 VT、快照、应答、前台进程、退出保留、单实例、空闲退出 | 协议单测；进程内 agent 加假客户端的集成测试：spawn → 输出 → attach → 快照 → 一致 | 5–7 天 |
-| P3 App 接入 | `PTYBackend`（`LocalPTY` / `AgentPTY`）、`AgentClient`、GhosttyIO 的 attach 流程、`SessionSnapshot` 增加 `agentSessionID`、启动时先接 agent 里还活着的会话、原地重连走 `respawn`、设置开关「会话常驻（实验）」默认关闭 | 开 vim 和 `top`，退出 App 再打开，画面和进程都在；关掉开关后行为和现在一样 | 4–6 天 |
+| P2 agent | `wireline-agent` 可执行目标（复用 `PTYProcess`）、socket 服务、协议编解码、每会话 VT、快照、应答、前台进程、退出保留、单实例、空闲退出 | ✅ 2026-10-24（`AgentProtocolTests`、`AgentIntegrationTests`） | — |
+| P3 App 接入 | `PTYBackend`（`PTYProcess` / `AgentPTY`）、`AgentClient`、attach 流程、`SessionSnapshot` 增加 `agentID` 和 `controlSocket`、启动时先接 agent 里还活着的会话、原地重连走 `respawn`、设置开关「会话常驻（实验）」默认关闭、⌥⌘Q、`bundle.sh` 打包 agent | ✅ 2026-10-24（`AgentSessionHarnessTests`：本地 shell 和 SSH 都能在「App 退出」后接回同一个进程；agent 不可用时退回本地 PTY）；还没在真实 App 里手测 | — |
 | P4 收尾 | 代码签名校验、版本握手和新旧 agent 并存、agent 崩溃兜底、打包和签名、⌘Q 的交互、「结束所有后台会话」菜单 | 冒烟清单（升级、崩溃、未授权客户端被拒） | 3–4 天 |
 
 合计约 3–4 周。每期结束合回分支里一个可运行的状态；设置开关打开之前，main 上的行为不变。
@@ -180,3 +180,12 @@ fork 分支 `wireline-agent`：`ca918cbaa`、`9b88d5b08`、构建脚本一次。
 - **快照格式 v1 不稳定**：上游一改格式，App 和 agent 的版本就必须匹配。所以有握手和 VT 退路（§3.7），fork 升级时也要 diff `snapshot.h`。
 - **agent 里的 VT 和 App 里的 surface 状态分叉**：两边吃的是同一串字节，配置差异（比如 `scrollback-limit`）会让历史长度不同。agent 的配置以 App 传过去的为准。
 - **安全校验做错了等于开了后门**（§3.8）：P4 要有一条专门的测试，确认用别的签名的进程连上来会被拒绝。
+
+## 9. 实现记录（P2–P3）
+
+- agent 用 `RunLoop.main` 驱动主线程，不能用 `dispatchMain()`：后者会让主线程退出，主队列改由别的线程执行，Swift 6 对 MainActor 的检查会直接崩溃。
+- `AgentConnection` 释放时要先恢复被挂起的写端 DispatchSource，否则 libdispatch 会触发陷阱。
+- App 端：agent 连不上时（3 秒内拉不起来），还没启动的会话改在 App 里运行（`AgentPTY.runsLocally`），所以打开终端永远不依赖 agent。
+- 输出帧带偏移量；客户端发现偏移对不上，就重新 attach、拿一份新快照。
+- 快捷终端不交给 agent（`allowsAgent: false`），因为它不存档，退出后接不回来。启动恢复时，agent 里没有标签对应的孤儿会话会被关掉。
+- 待 P4：代码签名校验（§3.8）、agent 升级时新旧版本并存的实测、首次 ⌘Q 的提示、真实 App 手测清单。

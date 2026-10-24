@@ -212,8 +212,24 @@ final class TerminalSession: Identifiable {
     /// history reappears as if the app was never closed.
     var pendingScrollback: Data?
 
+    /// Attaching to a session the agent already holds (restored at launch)
+    /// rather than starting a process.
+    private let attachesToAgent: Bool
+
+    /// New SSH and local sessions live in the session agent when it's on —
+    /// libghostty only (restoring needs its snapshot support).
+    private static func usesAgent(_ kind: SessionKind, engine: any TerminalEngine) -> Bool {
+        guard AgentClient.isEnabled, engine is GhosttyTerminalView else { return false }
+        switch kind {
+        case .ssh, .localShell: return true
+        case .sftp, .rdp: return false
+        }
+    }
+
+    /// `allowsAgent: false` keeps the process in the app even with the agent on
+    /// (the quick terminal: never saved, so nothing could reattach to it).
     init(kind: SessionKind, title: String, sharingControlSocket shared: String? = nil,
-         startDirectory: String? = nil) {
+         startDirectory: String? = nil, attachingToAgent agentID: UUID? = nil, allowsAgent: Bool = true) {
         self.kind = kind
         self.title = title
         self.controlSocket = shared ?? NSTemporaryDirectory() + "wl-\(UUID().uuidString.prefix(8)).sock"
@@ -226,20 +242,25 @@ final class TerminalSession: Identifiable {
         case .localShell: self.alias = ""
         case .rdp(let a, _): self.alias = a
         }
-        switch kind {
-        case .ssh(_, let password, let sudoPassword, let autoSudo, _):
-            self.io = TerminalIO(password: password, sudoPassword: sudoPassword, autoSudo: autoSudo)
-        case .sftp, .localShell, .rdp:
-            self.io = TerminalIO(password: nil, autoSudo: false)
-        }
+        let view: any TerminalEngine
         if case .rdp(_, let target) = kind {
             rdp = RDPSession(target: target)
             // Never shown or launched: the plain engine, without libghostty's
             // renderer thread.
-            self.terminalView = WirelineTerminalView(frame: CGRect(x: 0, y: 0, width: 800, height: 480))
+            view = WirelineTerminalView(frame: CGRect(x: 0, y: 0, width: 800, height: 480))
         } else {
             rdp = nil
-            self.terminalView = TerminalEngineKind.makeEngine(frame: CGRect(x: 0, y: 0, width: 800, height: 480))
+            view = TerminalEngineKind.makeEngine(frame: CGRect(x: 0, y: 0, width: 800, height: 480))
+        }
+        self.terminalView = view
+        let backend: AgentPTY? = agentID.map { AgentPTY(id: $0, existing: true) }
+            ?? (allowsAgent && Self.usesAgent(kind, engine: view) ? AgentPTY() : nil)
+        self.attachesToAgent = agentID != nil
+        switch kind {
+        case .ssh(_, let password, let sudoPassword, let autoSudo, _):
+            self.io = TerminalIO(password: password, sudoPassword: sudoPassword, autoSudo: autoSudo, backend: backend)
+        case .sftp, .localShell, .rdp:
+            self.io = TerminalIO(password: nil, autoSudo: false, backend: backend)
         }
         // Engine ⇄ PTY: output goes to the engine, keystrokes and grid changes
         // come back to the PTY.
@@ -547,6 +568,14 @@ final class TerminalSession: Identifiable {
 
     func start() {
         if let rdp { rdp.start(); return }
+        if attachesToAgent {
+            // The process never stopped: its screen comes back as the agent's
+            // snapshot, then live output. Nothing to dial, nothing to replay.
+            io.attachToAgentSession()
+            if case .ssh = kind { stats.start(socket: controlSocket, alias: alias) }
+            startBusyPolling()
+            return
+        }
         // Replay prior scrollback (with colors) so a reopened tab looks untouched,
         // then a dim separator before the fresh live session begins.
         if let sb = pendingScrollback, !sb.isEmpty {
@@ -600,6 +629,8 @@ final class TerminalSession: Identifiable {
         // Preserve the user's locale so remote/local shells render UTF-8 correctly.
         if let lang = ProcessInfo.processInfo.environment["LANG"] { env.append("LANG=\(lang)") }
 
+        // The agent deletes the askpass script when the process ends.
+        io.agent?.cleanupPaths = []
         switch kind {
         case .ssh(let alias, let password, _, _, let extraArgs):
             // For password hosts, feed the password to ssh deterministically via
@@ -607,6 +638,7 @@ final class TerminalSession: Identifiable {
             // typing it into the PTY — no prompt-scraping, no dropped characters.
             if let password, !password.isEmpty, let script = Self.makeAskpassScript() {
                 askpassURL = script
+                io.agent?.cleanupPaths = [script.path]
                 env.append("SSH_ASKPASS=\(script.path)")
                 env.append("SSH_ASKPASS_REQUIRE=force")
                 env.append("WIRELINE_ASKPASS_PW=\(password)")
@@ -728,7 +760,8 @@ final class TerminalSession: Identifiable {
             connectionState = .disconnected
             return
         }
-        guard isRunning else { return }
+        // An exited agent session is still held there (for a respawn): release it.
+        guard isRunning else { io.agent?.close(); return }
         isRunning = false
         connectionState = .disconnected
         busyTimer?.cancel()
@@ -737,7 +770,7 @@ final class TerminalSession: Identifiable {
         connect.stop()
         io.stopLogging()
         isLogging = false
-        io.terminate()
+        io.close()
         if ownsControlSocket { try? FileManager.default.removeItem(atPath: controlSocket) }
         if let askpassURL { try? FileManager.default.removeItem(at: askpassURL) }
         askpassURL = nil
@@ -902,6 +935,11 @@ struct SessionSnapshot: Codable, Sendable {
     var manuallyRenamed: Bool?
     /// A local shell's working directory, so it reopens where it was.
     var directory: String?
+    /// The session agent's id for it, when its process lives there: the next
+    /// launch attaches instead of reconnecting.
+    var agentID: UUID?
+    /// An SSH session's ControlMaster socket (kept by an agent session's ssh).
+    var controlSocket: String?
 }
 
 /// The tab / split arrangement, saved next to the session list. Leaves refer to
@@ -1611,20 +1649,24 @@ final class SessionStore {
         }
         var dir: String?
         if case .localShell = s.kind { dir = s.currentDirectory }
+        let agentID = s.io.agent.flatMap { $0.runsLocally ? nil : $0.id }
         return SessionSnapshot(kind: kind, alias: s.alias, title: s.title,
                                scrollbackKey: s.scrollbackKey, manuallyRenamed: s.isManuallyRenamed,
-                               directory: dir)
+                               directory: dir, agentID: agentID,
+                               controlSocket: agentID != nil && kind == .ssh ? s.controlSocket : nil)
     }
 
     /// A fresh (not yet started) session for a snapshot; nil when its host is gone.
-    private func makeSession(from snap: SessionSnapshot, store: HostStore) -> TerminalSession? {
+    private func makeSession(from snap: SessionSnapshot, store: HostStore, attachingTo agentID: UUID? = nil) -> TerminalSession? {
         let built: TerminalSession?
         switch snap.kind {
         case .ssh:
             built = store.hosts.first { $0.alias == snap.alias }.map { h in
                 TerminalSession(kind: .ssh(alias: h.alias, password: store.password(for: h),
                                            sudoPassword: store.sudoPassword(for: h),
-                                           autoSudo: h.autoSudo, args: h.launchArgTokens), title: snap.title)
+                                           autoSudo: h.autoSudo, args: h.launchArgTokens), title: snap.title,
+                                sharingControlSocket: agentID != nil ? snap.controlSocket : nil,
+                                attachingToAgent: agentID)
             }
         case .sftp:
             built = store.hosts.first { $0.alias == snap.alias }.map { h in
@@ -1639,7 +1681,8 @@ final class SessionStore {
             built = TerminalSession(kind: .localShell, title: snap.title,
                                     startDirectory: snap.directory.flatMap {
                                         FileManager.default.fileExists(atPath: $0) ? $0 : nil
-                                    })
+                                    },
+                                    attachingToAgent: agentID)
         }
         built?.isManuallyRenamed = snap.manuallyRenamed ?? false
         return built
@@ -1647,19 +1690,30 @@ final class SessionStore {
 
     /// Reopen (and reconnect) the sessions that were open at last quit. Runs once.
     /// SSH/SFTP sessions resolve their password from the Keychain via `store`.
-    func restoreIfNeeded(store: HostStore) {
+    func restoreIfNeeded(store: HostStore) async {
         guard !didRestore else { return }
         didRestore = true
         guard let data = UserDefaults.standard.data(forKey: Self.persistKey),
               let snaps = try? JSONDecoder().decode([SessionSnapshot].self, from: data) else { return }
+        // Sessions still running in the agent come back as they are: attach.
+        // (Asked even with the setting now off, so nothing it holds is orphaned.)
+        let held = snaps.contains { $0.agentID != nil }
+        let alive = held || AgentClient.isEnabled ? Set(await AgentClient.shared.listSessions().map(\.id)) : []
+        // Agent sessions no tab refers to (the app died before saving) can't
+        // be reached again: end them rather than leave them running.
+        for orphan in alive.subtracting(snaps.compactMap(\.agentID)) {
+            AgentClient.shared.send(.control(.close(id: orphan)))
+        }
         var restored: [TerminalSession?] = []
         for snap in snaps {
-            let built = makeSession(from: snap, store: store)
+            let attach = snap.agentID.flatMap { alive.contains($0) ? $0 : nil }
+            let built = makeSession(from: snap, store: store, attachingTo: attach)
             restored.append(built)
             guard let s = built else { continue }
             // Reuse the persisted key so we load THIS session's saved scrollback.
             if !snap.scrollbackKey.isEmpty { s.scrollbackKey = snap.scrollbackKey }
-            s.pendingScrollback = loadScrollback(s.scrollbackKey)
+            // An attached session's screen is the agent's; no replay.
+            if attach == nil { s.pendingScrollback = loadScrollback(s.scrollbackKey) }
             s.title = snap.title
             _ = spawn(s)                    // starts (start() replays scrollback first)
         }

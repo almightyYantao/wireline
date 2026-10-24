@@ -119,6 +119,8 @@ final class AgentServer {
             sessions[id]?.setTheme(theme)
         case let .keepAlive(id, seconds):
             sessions[id]?.keepAlive = seconds
+        case .hangup(let id):
+            sessions[id]?.hangup()
         case .close(let id):
             sessions[id]?.close()
         case .welcome, .sessions, .spawned, .foreground, .exited, .failure:

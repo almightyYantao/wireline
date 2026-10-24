@@ -17,21 +17,59 @@ final class TerminalIO {
     private let autoSudo: Bool
 
     /// The renderer this session's output goes to.
-    weak var engine: (any TerminalEngine)?
+    weak var engine: (any TerminalEngine)? {
+        // The agent answers the program's queries for its sessions.
+        didSet { if agent != nil { engine?.setQueryReplies(false) } }
+    }
 
-    /// The child process in its PTY.
-    private let process = PTYProcess()
+    /// The child process in its PTY: here (`PTYProcess`), or in the session
+    /// agent (`AgentPTY`).
+    private let process: any PTYBackend
 
     /// The PTY's size, settable from any thread — for an engine that
     /// `coalescesResize` and must resize the PTY in step with its grid.
-    nonisolated var ptyWindowSize: PTYWindowSize { process.windowSize }
+    nonisolated let ptyWindowSize: PTYWindowSize
 
-    init(password: String?, sudoPassword: String? = nil, autoSudo: Bool) {
+    /// The agent's handle on this session, when it lives there.
+    var agent: AgentPTY? { process as? AgentPTY }
+
+    init(password: String?, sudoPassword: String? = nil, autoSudo: Bool, backend: (any PTYBackend)? = nil) {
         self.password = password
         self.sudoPassword = sudoPassword
         self.autoSudo = autoSudo
+        let process = backend ?? PTYProcess()
+        self.process = process
+        self.ptyWindowSize = process.windowSize
         process.onOutput = { [weak self] in self?.received($0) }
         process.onExit = { [weak self] in self?.terminated(exitCode: $0.code) }
+        if let agent = process as? AgentPTY {
+            agent.onSnapshotReady = { [weak self] bytes in
+                guard let self else { return }
+                self.engine?.restoreSnapshot(bytes)
+                // An attached session is up as soon as its screen is.
+                if !self.hasConnected { self.hasConnected = true; self.onConnected?() }
+            }
+            agent.onSnapshotHistory = { [weak self] in self?.engine?.restoreSnapshotHistory($0) }
+        }
+    }
+
+    /// Attach to the agent session this IO was made for (instead of `start`).
+    func attachToAgentSession() { agent?.attach() }
+
+    /// The tab is closing: end the process — and its agent session, if any.
+    func close() {
+        if let agent { agent.close() } else { process.terminate() }
+    }
+
+    /// The theme the engine now draws with (the agent answers color queries).
+    func themeChanged(_ theme: TerminalTheme) {
+        agent?.setTheme(AgentTheme(foreground: Self.hex(theme.foreground), background: Self.hex(theme.background),
+                                   cursor: Self.hex(theme.cursor)))
+    }
+
+    private static func hex(_ c: [Double]) -> String {
+        func b(_ i: Int) -> Int { min(255, max(0, Int(((c.count > i ? c[i] : 0) * 255).rounded()))) }
+        return String(format: "#%02x%02x%02x", b(0), b(1), b(2))
     }
 
     // MARK: Events
@@ -72,7 +110,7 @@ final class TerminalIO {
                execName: String? = nil, currentDirectory: String? = nil) {
         // An engine that sizes the PTY itself has already set the size it wants
         // (and may update it concurrently): don't overwrite it with a read of ours.
-        let ownsSize = engine?.coalescesResize == true && process.windowSize.current != nil
+        let ownsSize = engine?.coalescesResize == true && ptyWindowSize.current != nil
         do {
             try process.start(executable: executable, args: args,
                               environment: environment ?? Terminal.getEnvironmentVariables(termName: "xterm-256color"),

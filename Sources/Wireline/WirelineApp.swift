@@ -55,8 +55,9 @@ struct WirelineApp: App {
                     store.currentTodos = { [todos] in todos.todos }
                     store.restoreTodos = { [todos] items in todos.replaceAll(items) }
                     Notifier.requestAuthorization()
-                    // Reopen the tabs that were open at last quit (reconnects).
-                    sessions.restoreIfNeeded(store: store)
+                    // Reopen the tabs that were open at last quit (reconnects, or
+                    // re-attaches to sessions the session agent kept running).
+                    await sessions.restoreIfNeeded(store: store)
                     // Flush scrollback (and snapshots) on quit so the very last
                     // output is restored next launch, not just up to the last tab change.
                     // Tunnels are ssh children that would outlive us holding their ports.
@@ -215,6 +216,17 @@ struct WirelineApp: App {
             }
             CommandGroup(after: .appInfo) {
                 Button("检查更新…") { Updater.shared.checkForUpdates() }
+            }
+            // With the session agent on, ⌘Q leaves sessions running; this ends them.
+            CommandGroup(after: .appTermination) {
+                if store.sessionAgentEnabled {
+                    Button(loc("退出并结束所有会话", "Quit and End All Sessions")) {
+                        sessions.closeAll()
+                        // Let the close messages reach the agent before we go.
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { NSApp.terminate(nil) }
+                    }
+                    .keyboardShortcut("q", modifiers: [.command, .option])
+                }
             }
             #if DEBUG
             CommandMenu("Debug") {

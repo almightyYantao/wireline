@@ -24,7 +24,7 @@ final class QuickTerminalController {
         // A shell you `exit`ed is replaced by a fresh one.
         if session == nil || session?.connectionState == .disconnected {
             session?.terminate()
-            let s = TerminalSession(kind: .localShell, title: "Quick Terminal")
+            let s = TerminalSession(kind: .localShell, title: "Quick Terminal", allowsAgent: false)
             s.terminalView.onCloseRequested = { [weak self] in self?.hide() }
             s.start()
             session = s

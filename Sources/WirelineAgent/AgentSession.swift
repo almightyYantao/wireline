@@ -133,6 +133,12 @@ final class AgentSession {
         client.send(.control(.foreground(id: id, job: fg)))
     }
 
+    /// End the process but keep the session (its screen) for a respawn.
+    func hangup() {
+        process.terminate()
+        cleanUp()
+    }
+
     /// End it now: the process (SIGHUP, then SIGKILL) and the session.
     func close() {
         keepAliveWork?.cancel(); keepAliveWork = nil
