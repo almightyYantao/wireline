@@ -1534,6 +1534,32 @@ final class SessionStore {
         persist()
     }
 
+    // MARK: - Quit
+
+    /// Sessions whose process lives in the session agent (they outlive the app).
+    var keptByAgent: Int { sessions.filter { $0.io.agent.map { !$0.runsLocally } ?? false }.count }
+    private static let quitNoticeKey = "sessionAgentQuitNoticeShown"
+
+    /// ⌘Q. The first time it would leave sessions running in the agent, say
+    /// so first (ContentView shows QuitNoticeSheet); after that, just quit.
+    func requestQuit() {
+        if keptByAgent > 0, !UserDefaults.standard.bool(forKey: Self.quitNoticeKey) {
+            NSApp.activate(ignoringOtherApps: true)
+            NotificationCenter.default.post(name: .confirmQuit, object: nil)
+            return
+        }
+        NSApp.terminate(nil)
+    }
+
+    /// Quit, leaving agent sessions running, or ending every session (⌥⌘Q).
+    func quit(endingSessions: Bool) {
+        UserDefaults.standard.set(true, forKey: Self.quitNoticeKey)
+        guard endingSessions else { NSApp.terminate(nil); return }
+        closeAll()
+        // Let the close messages reach the agent before we go.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { NSApp.terminate(nil) }
+    }
+
     func closeAll() {
         sessions.forEach { $0.terminate() }
         sessions.removeAll()

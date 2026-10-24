@@ -218,14 +218,13 @@ struct WirelineApp: App {
                 Button("检查更新…") { Updater.shared.checkForUpdates() }
             }
             // With the session agent on, ⌘Q leaves sessions running; this ends them.
-            CommandGroup(after: .appTermination) {
+            CommandGroup(replacing: .appTermination) {
+                Button(loc("退出 Wireline", "Quit Wireline")) { sessions.requestQuit() }
+                    .keyboardShortcut("q", modifiers: [.command])
+                // With the session agent on, ⌘Q leaves sessions running; this ends them.
                 if store.sessionAgentEnabled {
-                    Button(loc("退出并结束所有会话", "Quit and End All Sessions")) {
-                        sessions.closeAll()
-                        // Let the close messages reach the agent before we go.
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { NSApp.terminate(nil) }
-                    }
-                    .keyboardShortcut("q", modifiers: [.command, .option])
+                    Button(loc("退出并结束所有会话", "Quit and End All Sessions")) { sessions.quit(endingSessions: true) }
+                        .keyboardShortcut("q", modifiers: [.command, .option])
                 }
             }
             #if DEBUG

@@ -188,4 +188,40 @@ final class AgentSessionHarnessTests: XCTestCase {
         second.terminate()
         window.close()
     }
+
+    /// The agent dies: the session shows as disconnected; Reconnect starts it
+    /// again in a fresh agent.
+    func testAgentCrashThenReconnect() throws {
+        let window = setUpWindow()
+        let s = TerminalSession(kind: .localShell, title: "Local Shell")
+        host(s, in: window)
+        s.start()
+        XCTAssertTrue(wait(10) { s.connectionState == .connected })
+        s.io.send(txt: "echo before-crash\r")
+        XCTAssertTrue(wait(5) { self.screen(s).contains("before-crash") })
+
+        kill(agent!.processIdentifier, SIGKILL)
+        agent!.waitUntilExit()
+        XCTAssertTrue(wait(5) { s.connectionState == .disconnected }, "crash shows as a disconnect")
+
+        // A new agent (the app would start one beside itself).
+        let p = Process()
+        p.executableURL = agent!.executableURL
+        p.arguments = agent!.arguments
+        p.environment = agent!.environment
+        p.standardOutput = FileHandle.nullDevice
+        p.standardError = FileHandle.nullDevice
+        try p.run()
+        agent = p
+        _ = wait(3) { (try? AgentConnection.connect(path: self.dir + "/s.sock")).map { close($0); return true } ?? false }
+
+        s.reconnect()
+        XCTAssertTrue(wait(10) { s.connectionState == .connected }, "reconnected")
+        s.io.send(txt: "echo after-$((2+3))\r")
+        XCTAssertTrue(wait(5) { self.screen(s).contains("after-5") }, screen(s))
+        XCTAssertTrue(screen(s).contains("before-crash"), "the old screen stays above")
+        XCTAssertEqual(s.io.agent?.runsLocally, false, "back in the agent")
+        s.terminate()
+        window.close()
+    }
 }

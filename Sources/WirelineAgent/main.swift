@@ -55,6 +55,8 @@ case "probe":
     // its client check: this binary sits beside the agent, signed alike).
     let socketPath = option("--socket") ?? AgentProtocol.socketPath
     guard let fd = try? AgentConnection.connect(path: socketPath) else { fail("no agent at \(socketPath)") }
+    // The app's check of the agent (AgentClient.open).
+    if case .refused(let why) = PeerIdentity.check(fd: fd) { print("agent refused: \(why)"); exit(3) }
     let conn = AgentConnection(fd: fd, queue: .main)
     conn.onFrame = { frame in
         if case .control(.welcome(let proto, let version, _)) = frame {

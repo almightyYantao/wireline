@@ -1,6 +1,6 @@
 # wireline-agent：会话常驻进程设计
 
-> 状态：P1–P3 已完成，P4 未开始（2026-10-24）。分支 `wireline-agent`。
+> 状态：P1–P4 已完成，等真实 App 手测和 fork 发布（2026-10-24）。分支 `wireline-agent`。
 > 相关代码：[`TerminalIO.swift`](../../Sources/Wireline/TerminalIO.swift)、[`PTYProcess.swift`](../../Sources/WirelineCore/PTYProcess.swift)、[`GhosttyIO.swift`](../../Sources/Wireline/Ghostty/GhosttyIO.swift)、[`SessionStore.swift`](../../Sources/Wireline/SessionStore.swift)。
 > Ghostty fork：`~/Desktop/Private/ghostty-wireline`，分支 `wireline`。
 
@@ -188,5 +188,34 @@ fork 分支 `wireline-agent`：`ca918cbaa`、`9b88d5b08`、构建脚本一次。
 - App 端：agent 连不上时（3 秒内拉不起来），还没启动的会话改在 App 里运行（`AgentPTY.runsLocally`），所以打开终端永远不依赖 agent。
 - 输出帧带偏移量；客户端发现偏移对不上，就重新 attach、拿一份新快照。
 - 快捷终端不交给 agent（`allowsAgent: false`），因为它不存档，退出后接不回来。启动恢复时，agent 里没有标签对应的孤儿会话会被关掉。
-- §3.8 已完成（`PeerIdentity`，两端都校验）：有 Team ID 时要求一致，ad-hoc 时要求同目录且签名有效。Debug 构建可以用 `WIRELINE_AGENT_TRUST_ANY=1` 放行（测试用），release 构建没有这个开关。已验证：xctest 被拒；同目录的 `wireline-agent probe` 被接受；正式包（Developer ID）里同一 Team 被接受、未签名的开发构建被拒。
-- 待 P4：agent 升级时新旧版本并存的实测、首次 ⌘Q 的提示、真实 App 手测清单；fork 推送和含 GhosttyVt 的 Release（需确认）。
+- §3.8 已完成（`PeerIdentity`，两端都校验）：有 Team ID 时要求一致，ad-hoc 时要求同目录且签名有效。身份取自内核（`csops_audittoken`：`CS_VALID` 和 Team ID），不读磁盘文件。原因是升级会替换正在运行的 agent 的文件，读磁盘的 `SecCodeCheckValidity` 会返回 -67034，导致新 App 拒绝旧 agent、会话全部接不回来（P4 实测发现）。Debug 构建可以用 `WIRELINE_AGENT_TRUST_ANY=1` 放行（测试用），release 构建没有这个开关。已验证：xctest 被拒；同目录的 `wireline-agent probe` 被接受；正式包（Developer ID）里同一 Team 被接受、未签名的开发构建被拒。
+
+## 10. P4 收尾（2026-10-24）
+
+- **升级**：替换了文件的旧 agent，仍被新的同 Team 客户端接受，会话照常接回；未签名构建在两个方向上都被拒绝（`/tmp/wl-upg` 实测）。协议版本相同时，新 App 直接用旧 agent。
+- **协议升版的规则**：升 `AgentProtocol.version` 时，`hello`、`list`、`close` 三条消息的 JSON 形状保持不变，让新 App 能连上旧版本的 socket，关掉没有标签对应的旧会话。在此之前，旧 agent 会一直服务自己的会话，直到它们结束或超过保留时长。
+- **agent 崩溃**：会话显示断开；点「重新连接」后 App 重新拉起 agent，在里面开新会话，旧画面保留在上方（`testAgentCrashThenReconnect`）。下次启动时找不到的会话，退回到回放滚动缓冲存档再重连。
+- **第一次 ⌘Q**：「退出 Wireline」由 App 自己提供（`SessionStore.requestQuit`）。有会话在 agent 里、并且没提示过时，弹 `QuitNoticeSheet`：退出并保留会话（默认）、结束会话并退出、取消。之后不再弹。Dock 菜单里的「退出」和注销系统不经过它。
+- 剩下的对外操作：fork 推送、发含 GhosttyVt 的 Release、改 `fetch-ghosttykit.sh` 的固定版本，然后合回 main。
+
+## 11. 手测清单（真实 App，`scripts/bundle.sh` 打的包）
+
+先退出其他版本的 Wireline（它们共用设置和会话存档）。设置 → 终端 → 打开「会话常驻」。
+
+| # | 操作 | 应该看到 |
+|---|---|---|
+| 1 | 开本地标签跑 `top`，⌘Q | 第一次弹「会话会留在后台」；选「退出，会话留着」 |
+| 2 | `pgrep -fl wireline-agent` | agent 还在，`top` 也在 |
+| 3 | 再打开 Wireline | 标签原位、`top` 还在刷新，没有「已恢复上次会话」分隔线 |
+| 4 | 再 ⌘Q | 不再弹提示，直接退出 |
+| 5 | SSH 标签里开 vim 编辑一半，⌘Q 后再打开 | vim 原样在，未保存的内容还在；状态栏 CPU/内存照常（ControlMaster 复用） |
+| 6 | 分屏两个 pane，⌘Q 后再打开 | 分屏布局、比例、各自的进程都在 |
+| 7 | 在接回的标签里改主题，然后 `printf '\e]11;?\a'` | 回的是新主题的背景色 |
+| 8 | 关一个标签，`pgrep -fl wireline-agent` 看日志 | 对应会话结束；全部关完后约 60 秒 agent 自己退出 |
+| 9 | ⌥⌘Q | 立即退出；再打开时没有标签，agent 不在了 |
+| 10 | 会话运行中 `pkill -9 wireline-agent` | 标签显示断开；点重新连接后恢复工作 |
+| 11 | 设置里把保留时长设成 1 小时，⌘Q，1 小时后再看 | 会话被结束；再打开 Wireline 时是重新连接，不是接回 |
+| 12 | 关掉「会话常驻」，新开标签 | 行为和以前一样；之前留在 agent 里的会话下次启动仍然接回 |
+| 13 | 快捷终端（⌃`） | 从不进 agent（退出后不会留下） |
+| 14 | `~/Library/Logs/Wireline/agent.log` | 没有 `refused a client` |
+

@@ -30,6 +30,8 @@ extension Notification.Name {
     static let summonQuickConnect = Notification.Name("wireline.summonQuickConnect")
     /// Posted whenever a key binding changes, so global hotkeys can re-register.
     static let keyBindingsChanged = Notification.Name("wireline.keyBindingsChanged")
+    /// ⌘Q would leave sessions running in the agent for the first time: explain.
+    static let confirmQuit = Notification.Name("wireline.confirmQuit")
 }
 
 /// Right-panel mode. `nil` = SSH (terminal sessions).
@@ -115,6 +117,7 @@ struct ContentView: View {
             }
         }
         .modifier(SettingsModal())
+        .modifier(QuitNoticeModal())
         .modifier(ContentModals(editing: $editing, showBackup: $showBackup, showNewGroup: $showNewGroup,
                                 showQuickConnect: $showQuickConnect, showCommandPalette: $showCommandPalette))
         .onReceive(NotificationCenter.default.publisher(for: .showQuickConnect)) { _ in
@@ -279,6 +282,44 @@ struct SettingsModal: ViewModifier {
         content
             .onReceive(NotificationCenter.default.publisher(for: .showSettings)) { _ in show = true }
             .wlModal(isPresented: $show) { SettingsView(embedded: true) }
+    }
+}
+
+/// The first ⌘Q with sessions in the session agent: they keep running.
+private struct QuitNoticeModal: ViewModifier {
+    @State private var show = false
+    func body(content: Content) -> some View {
+        content
+            .onReceive(NotificationCenter.default.publisher(for: .confirmQuit)) { _ in
+                wlAnimate(Motion.flipIn) { show = true }
+            }
+            .wlModal(isPresented: $show) { QuitNoticeSheet() }
+    }
+}
+
+private struct QuitNoticeSheet: View {
+    @Environment(SessionStore.self) private var sessions
+    @Environment(Localizer.self) private var loc
+    @Environment(\.wlDismiss) private var dismiss
+
+    var body: some View {
+        let n = sessions.keptByAgent
+        WLSheet(loc("会话会留在后台", "Sessions keep running"),
+                subtitle: loc("\(n) 个会话由 wireline-agent 托管", "\(n) sessions are held by wireline-agent"),
+                symbol: "moon.zzz", width: 440, scrolls: false, onClose: { dismiss() }) {
+            Text(loc("退出后它们照常运行（命令、vim、Claude Code 都不会断），下次打开 Wireline 原样接上。想连同会话一起结束，用 ⌥⌘Q「退出并结束所有会话」。这个提示只出现一次，可以在设置 → 终端里关掉「会话常驻」。",
+                     "They keep running after you quit — commands, vim, Claude Code — and come back as they were next time. To end them too, use ⌥⌘Q Quit and End All Sessions. This note appears once; Settings → Terminal turns the feature off."))
+                .font(WL.body).foregroundStyle(WL.textDim)
+                .fixedSize(horizontal: false, vertical: true)
+        } footer: {
+            Button(loc("取消", "Cancel")) { dismiss() }
+                .buttonStyle(.wlSecondary).keyboardShortcut(.cancelAction)
+            Spacer()
+            Button(loc("结束会话并退出", "End Sessions and Quit")) { sessions.quit(endingSessions: true) }
+                .buttonStyle(.wlDestructive)
+            Button(loc("退出，会话留着", "Quit, Keep Sessions")) { sessions.quit(endingSessions: false) }
+                .buttonStyle(.wlPrimary).keyboardShortcut(.defaultAction)
+        }
     }
 }
 
