@@ -138,6 +138,10 @@ struct SnippetPicker: View {
     @State private var batchRun: [Snippet]?
     @State private var notice: String?
     @FocusState private var searchFocused: Bool
+    /// Naming a folder inline: nil = new, else the folder being renamed.
+    @State private var folderEdit: String??
+    @State private var folderName = ""
+    @FocusState private var folderNameFocused: Bool
 
     private var platform: PanePlatform { store.platform(for: session) }
     private var hostGroup: String? { hosts.hosts.first { $0.alias == session.alias }?.group }
@@ -170,7 +174,7 @@ struct SnippetPicker: View {
                                 onBack: { self.step = nil; focusSearch() },
                                 onDone: { SnippetPanel.shared.close() })
             } else {
-                searchBar
+                if folderEdit != nil { folderNameBar } else { searchBar }
                 WLFormDivider()
                 list
                 WLFormDivider()
@@ -189,6 +193,7 @@ struct SnippetPicker: View {
         .onDisappear { if sessions.activeID == session.id { sessions.focusActiveTerminal() } }
         .onExitCommand {
             if editing != nil { closeEditor() }
+            else if folderEdit != nil { folderEdit = nil; focusSearch() }
             else if batchRun != nil { batchRun = nil; focusSearch() }
             else if step != nil { step = nil; focusSearch() }
             else if selecting { endSelecting() }
@@ -358,6 +363,11 @@ struct SnippetPicker: View {
                     folder = f
                 }
             }
+            Divider()
+            Button(loc("新建文件夹…", "New Folder…")) { beginFolderEdit(nil) }
+            if let folder {
+                Button(loc("重命名“\(folder)”…", "Rename “\(folder)”…")) { beginFolderEdit(folder) }
+            }
         } label: {
             HStack(spacing: 3) {
                 Image(systemName: "folder").font(.system(size: 10))
@@ -368,6 +378,44 @@ struct SnippetPicker: View {
         .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
         .help(loc("按文件夹筛选", "Filter by folder"))
         .onChange(of: folder) { highlighted = 0 }
+    }
+
+    private var folderNameBar: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "folder.badge.plus").font(.system(size: 12)).foregroundStyle(WL.textDim)
+            TextField(folderEdit == .some(nil) ? loc("新文件夹（可写 父/子）", "New folder (parent/child)")
+                                               : loc("新名称（留空 = 移到顶层）", "New name (empty = top level)"),
+                      text: $folderName)
+                .textFieldStyle(.plain).font(WL.body).foregroundStyle(WL.textPrimary)
+                .focused($folderNameFocused)
+                .onSubmit(commitFolderEdit)
+            Button(loc("取消", "Cancel")) { folderEdit = nil; focusSearch() }.buttonStyle(.wlSecondary)
+            Button(loc("确定", "OK"), action: commitFolderEdit).buttonStyle(.wlPrimary)
+                .disabled(folderEdit == .some(nil) && SnippetFolders.normalize(folderName) == nil)
+        }
+        .padding(.horizontal, 12).padding(.vertical, 7)
+        .wlSearchCapsule(focused: folderNameFocused)
+        .padding(8)
+    }
+
+    private func beginFolderEdit(_ old: String?) {
+        folderName = old ?? folder.map { $0 + "/" } ?? ""
+        folderEdit = .some(old)
+        DispatchQueue.main.async { folderNameFocused = true }
+    }
+
+    private func commitFolderEdit() {
+        guard let edit = folderEdit else { return }
+        let name = SnippetFolders.normalize(folderName)
+        if let old = edit {
+            if name != old { store.renameFolder(old, to: name) }
+            folder = name
+        } else if let name {
+            store.addFolder(name)
+            folder = name
+        } else { return }
+        folderEdit = nil
+        focusSearch()
     }
 
     private func toggle(_ id: UUID) {
@@ -666,10 +714,10 @@ struct SnippetFillForm: View {
     var onConfirm: ([String: String], SnippetSendMode) -> Void
     @State private var values: [String: String]
 
-    init(snippet: Snippet, mode: SnippetSendMode, onBack: @escaping () -> Void,
+    init(snippet: Snippet, mode: SnippetSendMode, initial: [String: String]? = nil, onBack: @escaping () -> Void,
          onConfirm: @escaping ([String: String], SnippetSendMode) -> Void) {
         self.snippet = snippet; self.mode = mode; self.onBack = onBack; self.onConfirm = onConfirm
-        _values = State(initialValue: snippet.initialValues())
+        _values = State(initialValue: initial ?? snippet.initialValues())
     }
 
     var body: some View {
@@ -989,7 +1037,8 @@ struct SnippetEditorCard: View {
 // MARK: - Batch run
 
 /// Run several snippets, in order, in several open terminal panes. Parameters
-/// take last time's value or their default; dangerous ones are listed first.
+/// are asked for before running (starting from last time's values); a
+/// dangerous batch still needs a second click.
 struct SnippetBatchRunView: View {
     @Environment(SnippetStore.self) private var store
     @Environment(SessionStore.self) private var sessions
@@ -1002,7 +1051,14 @@ struct SnippetBatchRunView: View {
     @State private var targets: Set<UUID> = [] { didSet { armed = false } }
     /// A dangerous batch takes a second click.
     @State private var armed = false
+    /// Parameters filled in for this batch, per snippet.
+    @State private var values: [UUID: [String: String]] = [:] { didSet { armed = false } }
+    /// The snippet whose parameter form is showing.
+    @State private var filling: Snippet?
+    /// Filling was started by the run button: carry on to run when done.
+    @State private var fillingToRun = false
     private var hasDanger: Bool { snippets.contains { SnippetSafety.isDangerous(text($0)) } }
+    private var unfilled: [Snippet] { snippets.filter { !$0.parameters.isEmpty && values[$0.id] == nil } }
 
     private var panes: [TerminalSession] {
         sessions.sessions.filter { s in
@@ -1011,9 +1067,25 @@ struct SnippetBatchRunView: View {
         }
     }
 
-    private func text(_ s: Snippet) -> String { s.filled(with: s.initialValues()) }
+    private func text(_ s: Snippet) -> String { s.filled(with: values[s.id] ?? s.initialValues()) }
 
+    @ViewBuilder
     var body: some View {
+        if let filling {
+            SnippetFillForm(snippet: filling, mode: .run, initial: values[filling.id],
+                            onBack: { self.filling = nil; fillingToRun = false },
+                            onConfirm: { v, _ in
+                                values[filling.id] = v
+                                self.filling = fillingToRun ? unfilled.first : nil
+                                if self.filling == nil, fillingToRun { fillingToRun = false; proceed() }
+                            })
+            .id(filling.id)
+        } else {
+            list
+        }
+    }
+
+    private var list: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
                 Button(action: onBack) { Image(systemName: "chevron.left").font(.system(size: 11, weight: .semibold)) }
@@ -1029,7 +1101,16 @@ struct SnippetBatchRunView: View {
                     ForEach(snippets) { s in
                         let reasons = SnippetSafety.dangerReasons(text(s))
                         VStack(alignment: .leading, spacing: 1) {
-                            Text(s.title(chinese: loc.isChinese)).font(WL.caption).foregroundStyle(WL.textPrimary)
+                            HStack(spacing: 6) {
+                                Text(s.title(chinese: loc.isChinese)).font(WL.caption).foregroundStyle(WL.textPrimary)
+                                if !s.parameters.isEmpty {
+                                    Button(values[s.id] == nil ? loc("填写参数…", "Fill in…") : loc("改参数…", "Edit values…")) {
+                                        fillingToRun = false; filling = s
+                                    }
+                                    .buttonStyle(.wlPlain).font(WL.caption)
+                                    .foregroundStyle(values[s.id] == nil ? WL.green : WL.textDim)
+                                }
+                            }
                             Text(text(s)).font(WL.mono(11)).foregroundStyle(WL.textDim).lineLimit(2)
                             if !reasons.isEmpty {
                                 Text("⚠︎ " + reasons.joined(separator: ", ")).font(WL.caption).foregroundStyle(WL.red)
@@ -1069,21 +1150,28 @@ struct SnippetBatchRunView: View {
                         .buttonStyle(.wlPrimary).tint(WL.red).disabled(targets.isEmpty)
                 } else {
                     Button(loc("执行到 \(targets.count) 个会话", "Run in \(targets.count)")) {
-                        if hasDanger { armed = true } else { run() }
+                        if let first = unfilled.first { fillingToRun = true; filling = first } else { proceed() }
                     }
                     .buttonStyle(.wlPrimary).disabled(targets.isEmpty)
                 }
             }
             .padding(.horizontal, 12).padding(.vertical, 9)
         }
-        .onAppear { targets = [current.id] }
+        .onAppear { if !didAppear { didAppear = true; targets = [current.id] } }
+    }
+
+    @State private var didAppear = false
+
+    /// After the parameters: a dangerous batch still takes the second click.
+    private func proceed() {
+        if hasDanger { armed = true } else { run() }
     }
 
     private func run() {
         for p in panes where targets.contains(p.id) {
             for s in snippets { p.runInTerminal(text(s).trimmingCharacters(in: .newlines)) }
         }
-        for s in snippets { store.recordUse(s.id) }
+        for s in snippets { store.recordUse(s.id, values: values[s.id] ?? [:]) }
         onDone()
     }
 }

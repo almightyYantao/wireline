@@ -12,6 +12,8 @@ import WirelineCore
 final class SnippetStore {
     private(set) var snippets: [Snippet] = []
     private let fileURL: URL
+    private let metaURL: URL
+    private var meta = SnippetLibraryMeta()
 
     /// `uname -s` per SSH alias, cached across launches.
     private(set) var hostPlatforms: [String: PanePlatform] = [:]
@@ -23,6 +25,9 @@ final class SnippetStore {
             .appendingPathComponent("Wireline", isDirectory: true)
         try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
         self.fileURL = base.appendingPathComponent("snippets.json")
+        self.metaURL = base.appendingPathComponent("snippets-meta.json")
+        if let data = try? Data(contentsOf: metaURL),
+           let m = try? JSONDecoder().decode(SnippetLibraryMeta.self, from: data) { meta = m }
         if let raw = UserDefaults.standard.dictionary(forKey: Self.platformsKey) as? [String: String] {
             hostPlatforms = raw.compactMapValues(PanePlatform.init(rawValue:))
         }
@@ -33,6 +38,7 @@ final class SnippetStore {
         guard let data = try? Data(contentsOf: fileURL) else {
             snippets = Snippet.defaults
             save()
+            addUnseenDefaults()
             return
         }
         do {
@@ -44,11 +50,25 @@ final class SnippetStore {
                 if !FileManager.default.fileExists(atPath: backup.path) { try? data.write(to: backup) }
                 save()
             }
+            addUnseenDefaults()
         } catch {
             // Unreadable: show the defaults, but never overwrite the user's file
             // with them — `canSave` stays false until they change something.
             snippets = Snippet.defaults
             canSave = false
+        }
+    }
+
+    /// Templates shipped by a newer version show up once; deleted ones don't
+    /// come back (only "restore built-ins" brings those).
+    private func addUnseenDefaults() {
+        let seen = meta.seenBuiltins.map(Set.init)
+            ?? Snippet.builtinIDsBeforeTracking.union(snippets.compactMap(\.builtinID))
+        let (all, newSeen, added) = Snippet.addingUnseenDefaults(snippets, seen: seen)
+        if added > 0 { snippets = all; save() }
+        if meta.seenBuiltins.map(Set.init) != newSeen {
+            meta.seenBuiltins = newSeen.sorted()
+            saveMeta()
         }
     }
 
@@ -83,10 +103,31 @@ final class SnippetStore {
         save()
     }
 
-    var folders: [String] { SnippetFolders.all(in: snippets) }
+    var folders: [String] { SnippetFolders.all(in: snippets, extra: meta.emptyFolders) }
 
     func renameFolder(_ old: String, to new: String?) {
         canSave = true; SnippetFolders.rename(old, to: new, in: &snippets); save()
+        setEmptyFolders(SnippetFolders.rename(old, to: new, in: meta.emptyFolders))
+    }
+
+    /// A folder with no snippets yet; it stays until something lands in it.
+    func addFolder(_ path: String) {
+        guard let f = SnippetFolders.normalize(path) else { return }
+        setEmptyFolders(meta.emptyFolders + [f])
+    }
+
+    private func setEmptyFolders(_ paths: [String]) {
+        let used = Set(SnippetFolders.all(in: snippets))
+        var kept: [String] = []
+        for p in paths where !used.contains(p) && !kept.contains(p) { kept.append(p) }
+        meta.emptyFolders = kept
+        saveMeta()
+    }
+
+    private func saveMeta() {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        if let data = try? encoder.encode(meta) { try? AtomicFile.write(data, to: metaURL) }
     }
 
     /// Re-add the shipped templates that are missing; returns how many.

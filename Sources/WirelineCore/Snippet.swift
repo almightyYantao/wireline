@@ -378,6 +378,24 @@ public struct Snippet: Identifiable, Codable, Sendable, Equatable {
         return (current + missing, missing.count)
     }
 
+    /// Built-ins that shipped before Wireline started remembering which ones
+    /// it had offered. A library without that record has seen all of these,
+    /// so ones the user deleted earlier don't come back.
+    public static let builtinIDsBeforeTracking: Set<String> = [
+        "sysinfo", "sysinfo-mac", "disk", "du-top", "mem", "mem-mac", "load", "top", "top-mac",
+        "findproc", "ports", "ports-mac", "port-who", "docker-ps", "docker-logs", "docker-stats",
+        "tail", "journal",
+    ]
+
+    /// Append the built-ins never offered before (not in `seen`); the new
+    /// `seen` covers every built-in, so a deleted one stays deleted.
+    public static func addingUnseenDefaults(_ current: [Snippet], seen: Set<String>)
+        -> (snippets: [Snippet], seen: Set<String>, added: Int) {
+        let have = Set(current.compactMap(\.builtinID))
+        let new = defaults.filter { !seen.contains($0.builtinID ?? "") && !have.contains($0.builtinID ?? "") }
+        return (current + new, seen.union(defaults.compactMap(\.builtinID)), new.count)
+    }
+
     /// The commands of the built-ins as they shipped before the redesign, keyed
     /// by command: an untouched old default gets the new platform on migration.
     public static let legacyDefaultPlatforms: [String: SnippetPlatform] = [
@@ -480,6 +498,27 @@ public enum SnippetFolders {
         return folder == selected || folder.hasPrefix(selected + "/")
     }
 
+    /// The folder list including folders kept without snippets in them.
+    public static func all(in snippets: [Snippet], extra: [String]) -> [String] {
+        var set = Set(all(in: snippets))
+        for f in extra.compactMap(normalize) {
+            set.insert(f)
+            if let parent = parent(of: f) { set.insert(parent) }
+        }
+        return set.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+    }
+
+    /// `rename` for a plain list of folder paths.
+    public static func rename(_ old: String, to newPath: String?, in paths: [String]) -> [String] {
+        let target = normalize(newPath)
+        var out: [String] = []
+        for p in paths {
+            let renamed = contains(old, p) ? normalize((target ?? "") + p.dropFirst(old.count)) : p
+            if let renamed, !out.contains(renamed) { out.append(renamed) }
+        }
+        return out
+    }
+
     /// Rename a folder (and its subfolders) to `newPath`.
     public static func rename(_ old: String, to newPath: String?, in snippets: inout [Snippet]) {
         let target = normalize(newPath)
@@ -487,6 +526,24 @@ public enum SnippetFolders {
             let rest = snippets[i].folder!.dropFirst(old.count)
             snippets[i].folder = normalize((target ?? "") + rest)
         }
+    }
+}
+
+/// What `snippets-meta.json` keeps beside the snippet list (which stays a
+/// plain array for older versions): folders with nothing in them yet and the
+/// built-ins already offered. A missing key means a library from before it.
+public struct SnippetLibraryMeta: Codable, Equatable, Sendable {
+    public var emptyFolders: [String]
+    public var seenBuiltins: [String]?
+
+    public init(emptyFolders: [String] = [], seenBuiltins: [String]? = nil) {
+        self.emptyFolders = emptyFolders; self.seenBuiltins = seenBuiltins
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        emptyFolders = (try? c.decodeIfPresent([String].self, forKey: .emptyFolders)) ?? []
+        seenBuiltins = try? c.decodeIfPresent([String].self, forKey: .seenBuiltins)
     }
 }
 

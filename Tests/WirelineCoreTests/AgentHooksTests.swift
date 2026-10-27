@@ -78,6 +78,39 @@ final class AgentHooksTests: XCTestCase {
         XCTAssertFalse(AgentHooks.isInstalled(settingsJSON: Data(user.utf8)))
     }
 
+    func testRemoveKeepsUserHooks() throws {
+        let user = """
+        {"model":"opus","hooks":{"Stop":[{"hooks":[{"type":"command","command":"say done"}]}],
+         "PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"lint"}]}]}}
+        """
+        var installed = json(try XCTUnwrap(try AgentHooks.merged(settingsJSON: Data(user.utf8))))
+        // A user hook sharing a group with ours survives.
+        var hooks = installed["hooks"] as! [String: Any]
+        var stop = hooks["Stop"] as! [[String: Any]]
+        stop[1]["hooks"] = (stop[1]["hooks"] as! [Any]) + [["type": "command", "command": "afplay x"]]
+        hooks["Stop"] = stop
+        installed["hooks"] = hooks
+        let data = try JSONSerialization.data(withJSONObject: installed)
+        XCTAssertTrue(AgentHooks.hasAny(settingsJSON: data))
+
+        let out = json(try XCTUnwrap(try AgentHooks.removed(settingsJSON: data)))
+        XCTAssertEqual(out["model"] as? String, "opus")
+        let left = try XCTUnwrap(out["hooks"] as? [String: Any])
+        XCTAssertEqual(Set(left.keys), ["Stop", "PreToolUse"])
+        let commands = (left["Stop"] as! [[String: Any]]).flatMap { ($0["hooks"] as! [[String: Any]]).map { $0["command"] as! String } }
+        XCTAssertEqual(commands, ["say done", "afplay x"])
+        XCTAssertFalse(AgentHooks.hasAny(settingsJSON: try JSONSerialization.data(withJSONObject: out)))
+    }
+
+    func testRemoveOnlyOursDropsHooksKey() throws {
+        let installed = try XCTUnwrap(try AgentHooks.merged(settingsJSON: Data(#"{"model":"x"}"#.utf8)))
+        let out = json(try XCTUnwrap(try AgentHooks.removed(settingsJSON: installed)))
+        XCTAssertNil(out["hooks"])
+        XCTAssertEqual(out["model"] as? String, "x")
+        XCTAssertNil(try AgentHooks.removed(settingsJSON: Data(#"{"model":"x"}"#.utf8)))
+        XCTAssertNil(try AgentHooks.removed(settingsJSON: nil))
+    }
+
     func testMergeRejectsNonObject() {
         XCTAssertThrowsError(try AgentHooks.merged(settingsJSON: Data("[1]".utf8)))
     }

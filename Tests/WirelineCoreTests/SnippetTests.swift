@@ -191,6 +191,18 @@ final class SnippetTests: XCTestCase {
         XCTAssertEqual(s[0].folder, "Docker")
     }
 
+    func testEmptyFoldersListAndRename() throws {
+        let s = [Snippet(titleZh: "a", titleEn: "", command: "1", folder: "Ops")]
+        XCTAssertEqual(SnippetFolders.all(in: s, extra: ["Web/Nginx", "Ops", " / "]), ["Ops", "Web", "Web/Nginx"])
+        XCTAssertEqual(SnippetFolders.rename("Web", to: "Infra", in: ["Web/Nginx", "Web", "Ops"]),
+                       ["Infra/Nginx", "Infra", "Ops"])
+        XCTAssertEqual(SnippetFolders.rename("Web", to: "Ops", in: ["Web", "Ops"]), ["Ops"])
+        // An old or partial meta file still decodes.
+        XCTAssertEqual(try JSONDecoder().decode(SnippetLibraryMeta.self, from: Data("{}".utf8)), SnippetLibraryMeta())
+        let m = SnippetLibraryMeta(emptyFolders: ["X"], seenBuiltins: ["disk"])
+        XCTAssertEqual(try JSONDecoder().decode(SnippetLibraryMeta.self, from: JSONEncoder().encode(m)), m)
+    }
+
     func testPreFolderFileGetsBuiltinIDsOnce() throws {
         let file = """
         [{"id":"\(UUID().uuidString)","titleZh":"磁盘占用","titleEn":"Disk usage","command":"df -h","platform":"any"},
@@ -216,6 +228,23 @@ final class SnippetTests: XCTestCase {
         XCTAssertEqual(out.count, Snippet.defaults.count)
         XCTAssertEqual(out[0].command, "df -hT")
         XCTAssertEqual(Snippet.restoringDefaults(out).added, 0)
+    }
+
+    func testUnseenDefaultsAddedOnceAndDeletedStayDeleted() {
+        XCTAssertTrue(Snippet.builtinIDsBeforeTracking.isSubset(of: Set(Snippet.defaults.compactMap(\.builtinID))))
+        // A library that has seen everything but "disk" and "mem" (one deleted, one new).
+        var seen = Set(Snippet.defaults.compactMap(\.builtinID))
+        seen.subtract(["disk", "mem"])
+        let mine = Snippet.defaults.filter { $0.builtinID != "disk" && $0.builtinID != "mem" && $0.builtinID != "load" }
+        let (out, newSeen, added) = Snippet.addingUnseenDefaults(mine, seen: seen)
+        XCTAssertEqual(added, 2)
+        XCTAssertEqual(Set(out.compactMap(\.builtinID)), Set(Snippet.defaults.compactMap(\.builtinID)).subtracting(["load"]),
+                       "\"load\" was seen and deleted")
+        XCTAssertEqual(newSeen, Set(Snippet.defaults.compactMap(\.builtinID)))
+        // Next launch: nothing more, even after deleting one.
+        XCTAssertEqual(Snippet.addingUnseenDefaults(Array(out.dropFirst()), seen: newSeen).added, 0)
+        // Present but unseen (e.g. restored by hand) isn't duplicated.
+        XCTAssertEqual(Snippet.addingUnseenDefaults(Snippet.defaults, seen: []).added, 0)
     }
 
     func testAtomicWriteReplaces() throws {
