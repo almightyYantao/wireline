@@ -1,0 +1,79 @@
+// Phone side of the relay protocol (docs/design/phone-relay.md); mirrors
+// Sources/WirelineCore/RelayProtocol.swift. Works in browsers and Node (WebCrypto).
+(function (root) {
+  const subtle = root.crypto.subtle;
+  const enc = new TextEncoder(), dec = new TextDecoder();
+  const LABEL = enc.encode('wireline-relay v1');
+
+  const b64 = (u8) => { let s = ''; for (const b of u8) s += String.fromCharCode(b); return btoa(s); };
+  const unb64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+  const b64url = (u8) => b64(u8).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  const unb64url = (s) => unb64(s.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((s.length + 3) % 4));
+  const concat = (...parts) => {
+    const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+    let o = 0; for (const p of parts) { out.set(p, o); o += p.length; }
+    return out;
+  };
+
+  async function generateKeys() {
+    const kp = await subtle.generateKey({ name: 'X25519' }, true, ['deriveBits']);
+    return { privateJwk: await subtle.exportKey('jwk', kp.privateKey),
+             publicRaw: new Uint8Array(await subtle.exportKey('raw', kp.publicKey)) };
+  }
+
+  async function roomID(macPub) {
+    return b64url(new Uint8Array(await subtle.digest('SHA-256', macPub))).slice(0, 22);
+  }
+
+  async function sessionKey(privateJwk, macPub, phonePub, phoneNonce, macNonce) {
+    const priv = await subtle.importKey('jwk', privateJwk, { name: 'X25519' }, false, ['deriveBits']);
+    const peer = await subtle.importKey('raw', macPub, { name: 'X25519' }, false, []);
+    const shared = await subtle.deriveBits({ name: 'X25519', public: peer }, priv, 256);
+    const ikm = await subtle.importKey('raw', shared, 'HKDF', false, ['deriveKey']);
+    return subtle.deriveKey({ name: 'HKDF', hash: 'SHA-256', salt: concat(phoneNonce, macNonce), info: concat(LABEL, macPub, phonePub) },
+                            ikm, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+  }
+
+  function iv(dir, counter) {
+    const v = new Uint8Array(12); v[0] = dir;
+    new DataView(v.buffer).setBigUint64(4, counter);
+    return v;
+  }
+
+  // side: 'phone' sends dir 2 and receives dir 1; 'mac' the reverse.
+  function channel(key, side) {
+    const [sendDir, recvDir] = side === 'mac' ? [1, 2] : [2, 1];
+    let sent = 0n, received = 0n;
+    return {
+      async seal(plain) {
+        sent += 1n;
+        const ct = new Uint8Array(await subtle.encrypt({ name: 'AES-GCM', iv: iv(sendDir, sent), additionalData: LABEL }, key, plain));
+        const head = new Uint8Array(8); new DataView(head.buffer).setBigUint64(0, sent);
+        return concat(head, ct);
+      },
+      async open(frame) {
+        if (frame.length < 24) throw new Error('malformed');
+        const counter = new DataView(frame.buffer, frame.byteOffset, 8).getBigUint64(0);
+        if (counter <= received) throw new Error('replay');
+        const pt = new Uint8Array(await subtle.decrypt({ name: 'AES-GCM', iv: iv(recvDir, counter), additionalData: LABEL }, key, frame.subarray(8)));
+        received = counter;
+        return pt;
+      },
+    };
+  }
+
+  // Envelope payload `d`: tag 0 = handshake JSON, tag 1 = sealed frame.
+  const payload = {
+    handshake: (obj) => b64(concat(new Uint8Array([0]), enc.encode(JSON.stringify(obj)))),
+    sealed: (frame) => b64(concat(new Uint8Array([1]), frame)),
+    parse(d) {
+      const u = unb64(d);
+      if (u[0] === 0) return { handshake: JSON.parse(dec.decode(u.subarray(1))) };
+      if (u[0] === 1) return { sealed: u.subarray(1) };
+      throw new Error('malformed');
+    },
+  };
+
+  root.WLRelay = { b64, unb64, b64url, unb64url, enc, dec, generateKeys, roomID, sessionKey, channel, payload,
+                   nonce: () => root.crypto.getRandomValues(new Uint8Array(16)) };
+})(typeof window !== 'undefined' ? window : globalThis);
