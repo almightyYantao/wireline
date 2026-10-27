@@ -128,6 +128,9 @@ final class RelayProtocolTests: XCTestCase {
         XCTAssertEqual(PairingLink(url: url), PairingLink(relay: URL(string: "https://relay.example.com/")!,
                                                           macPublicKey: link.macPublicKey, code: "AB12CD34", name: "Tao's Mac + 1"))
         XCTAssertNil(PairingLink(url: URL(string: "https://relay.example.com/#v=1&k=abc&c=X")!))
+        let withToken = PairingLink(relay: URL(string: "https://relay.example.com/")!, macPublicKey: link.macPublicKey,
+                                    code: "AB12CD34", name: "m", token: "s3cr+t/=")
+        XCTAssertEqual(PairingLink(url: withToken.url)?.token, "s3cr+t/=")
     }
 
     func testSocketURLAndRoom() {

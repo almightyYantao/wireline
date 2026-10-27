@@ -1,6 +1,6 @@
 // End-to-end check against a running relay: a simulated Mac and phone pair,
 // list, watch, type, then the Mac revokes the phone.
-// go run ./relay -addr 127.0.0.1:8099 -web relay/web &  node relay/test/e2e.mjs ws://127.0.0.1:8099
+// RELAY_TOKEN=tok go run ./relay -addr 127.0.0.1:8099 -web relay/web &  node relay/test/e2e.mjs ws://127.0.0.1:8099 tok
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 (0, eval)(readFileSync(fileURLToPath(new URL('../web/relay-crypto.js', import.meta.url)), 'utf8'));
 const R = globalThis.WLRelay;
 const base = process.argv[2] || 'ws://127.0.0.1:8099';
+const tok = process.argv[3] || 'tok';
 const json = (o) => JSON.stringify(o);
 
 function socket(url) {
@@ -25,16 +26,21 @@ function socket(url) {
 
 const macKeys = await R.generateKeys(), phoneKeys = await R.generateKeys();
 const room = await R.roomID(macKeys.publicRaw);
+
+// Without the relay token nobody gets in, phone or Mac.
+for (const url of [`${base}/ws?room=${room}&role=phone`, `${base}/ws?room=${room}&role=mac&token=wrong`]) {
+  await assert.rejects(socket(url));
+}
 const sniffed = [];
 
 // --- Mac ---
-const mac = await socket(`${base}/ws?room=${room}&role=mac`);
+const mac = await socket(`${base}/ws?room=${room}&role=mac&token=${tok}`);
 const code = 'AB12CD34';
 let macCh = null, paired = new Set();
 const macSend = async (peer, msg) => mac.send(json({ to: peer, d: R.payload.sealed(await macCh.seal(R.enc.encode(json(msg)))) }));
 
 // --- Phone ---
-const phone = await socket(`${base}/ws?room=${room}&role=phone`);
+const phone = await socket(`${base}/ws?room=${room}&role=phone&token=${tok}`);
 assert.deepEqual(await phone.next(), { t: 'mac', up: true });
 const join = await mac.next();
 assert.equal(join.t, 'join');

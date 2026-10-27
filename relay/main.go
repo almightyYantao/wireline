@@ -5,6 +5,7 @@ package main
 import (
 	"bufio"
 	"crypto/sha1"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
@@ -33,7 +34,7 @@ const (
 var (
 	maxPhones = envInt("RELAY_MAX_PHONES", 4)
 	maxRooms  = envInt("RELAY_MAX_ROOMS", 1000)
-	macToken  = os.Getenv("RELAY_TOKEN")
+	token     = os.Getenv("RELAY_TOKEN")
 	roomRe    = regexp.MustCompile(`^[A-Za-z0-9_-]{16,64}$`)
 )
 
@@ -232,7 +233,7 @@ func (h *hub) serveWS(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad room or role", http.StatusBadRequest)
 		return
 	}
-	if role == "mac" && macToken != "" && q.Get("token") != macToken {
+	if token != "" && subtle.ConstantTimeCompare([]byte(q.Get("token")), []byte(token)) != 1 {
 		http.Error(w, "bad token", http.StatusForbidden)
 		return
 	}
@@ -356,7 +357,11 @@ func (h *hub) servePhone(id string, ws *wsConn) {
 func main() {
 	addr := flag.String("addr", envOr("RELAY_ADDR", ":8080"), "listen address")
 	web := flag.String("web", envOr("RELAY_WEB", "web"), "directory with the phone web client")
+	insecure := flag.Bool("insecure-no-token", false, "allow running without RELAY_TOKEN (local testing only)")
 	flag.Parse()
+	if token == "" && !*insecure {
+		log.Fatal("RELAY_TOKEN is required (Macs and phones must present it); -insecure-no-token for local tests")
+	}
 	h := &hub{rooms: map[string]*room{}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", h.serveWS)

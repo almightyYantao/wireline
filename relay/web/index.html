@@ -53,7 +53,7 @@
   const STORE = 'wireline.relay';
   const status = (s) => { $('status').textContent = s; };
 
-  // Pairing link: #v=1&k=<mac pub>&c=<code>&n=<name>. Never sent to the server.
+  // Pairing link: #v=1&k=<mac pub>&c=<code>&n=<name>&t=<relay token>. The fragment never reaches the server.
   // localStorage holds only public values; the private key lives in IndexedDB.
   let saved = JSON.parse(localStorage.getItem(STORE) || 'null');
   let stored = await R.keystore.get();
@@ -71,7 +71,7 @@
       stored = { privateKey: k.privateKey, pub: R.b64(k.publicRaw) };
       await R.keystore.put(stored);
     }
-    saved = { pub: stored.pub, mac: frag.get('k'), name: frag.get('n') || 'Mac', paired: false };
+    saved = { pub: stored.pub, mac: frag.get('k'), name: frag.get('n') || 'Mac', token: frag.get('t') || '', paired: false };
     pairCode = frag.get('c');
     localStorage.setItem(STORE, JSON.stringify(saved));
     history.replaceState(null, '', location.pathname);
@@ -147,7 +147,8 @@
   let retry = 1000;
   function connect() {
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    ws = new WebSocket(`${proto}//${location.host}${location.pathname.replace(/[^/]*$/, '')}ws?room=${room}&role=phone`);
+    ws = new WebSocket(`${proto}//${location.host}${location.pathname.replace(/[^/]*$/, '')}ws?room=${room}&role=phone` +
+      (saved.token ? `&token=${encodeURIComponent(saved.token)}` : ''));
     ch = null;
     status('连接中…');
     ws.onmessage = (ev) => { inQ = inQ.then(() => handle(ev)).catch(() => {}); };

@@ -189,7 +189,8 @@ final class PhoneRelay {
         guard let base = URL(string: relayURL.trimmingCharacters(in: .whitespaces)), base.host != nil else { return nil }
         let code = PairingCode()
         pairing = code
-        return PairingLink(relay: base, macPublicKey: macPublicKey, code: code.code, name: Foundation.Host.current().localizedName ?? "Mac").url
+        return PairingLink(relay: base, macPublicKey: macPublicKey, code: code.code, name: Foundation.Host.current().localizedName ?? "Mac",
+                           token: token).url
     }
 
     func stopPairing() { pairing = nil }

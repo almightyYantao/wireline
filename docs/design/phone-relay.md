@@ -17,7 +17,7 @@
 
 ## 外层协议（中继看得到的部分）
 
-连接：`GET /ws?room=<room>&role=mac|phone`，`role=mac` 时若中继设置了 `RELAY_TOKEN`，需带 `&token=`。
+连接：`GET /ws?room=<room>&role=mac|phone&token=<RELAY_TOKEN>`。中继默认强制 `RELAY_TOKEN`（未设置拒绝启动，仅本地测试可加 `-insecure-no-token`），Mac 和手机都必须带，常量时间比较。手机的 token 来自二维码。token 只挡滥用（占名额、DoS），机密性和认证靠端到端加密。
 
 文本帧 JSON：
 
@@ -32,7 +32,7 @@
 ## 配对
 
 1. 设置页「手机中继」点「配对新设备」：生成一次性配对码（8 位，Crockford base32，5 分钟有效，单次使用，错 5 次作废），显示二维码：
-   `https://<relay>/#v=1&k=<Mac 公钥 b64url>&c=<配对码>&n=<Mac 名称>`
+   `https://<relay>/#v=1&k=<Mac 公钥 b64url>&c=<配对码>&n=<Mac 名称>&t=<中继 token>`
    参数都在 `#` 片段里，浏览器不会把它发给中继。
 2. 手机扫码打开页面：生成 X25519 密钥对（WebCrypto），连中继，发握手 `hello`（明文，见下），再发加密的 `pair{code,name}`。
 3. Mac 校验配对码 → 记录手机公钥 + 名称（UserDefaults，公钥不敏感），回 `paired`。手机私钥是 `extractable=false` 的 CryptoKey，存 IndexedDB（同源脚本能用它握手，但拿不到字节）；localStorage 只存公开值（自己的公钥、Mac 公钥、名称）。旧版存在 localStorage 的 JWK 在下次打开时重新导入为不可导出密钥后删除。
@@ -97,7 +97,7 @@ Mac→手机：
 
 ## 限流
 
-- 中继：每连接 200 帧/秒、1 MB/秒（令牌桶，超出断开）；单帧 ≤ 1 MB；每 room ≤ 4 台手机；总 room 数上限（默认 1000）；`role=mac` 可要求 `RELAY_TOKEN`。
+- 中继：每连接 200 帧/秒、1 MB/秒（令牌桶，超出断开）；单帧 ≤ 1 MB；每 room ≤ 4 台手机；总 room 数上限（默认 1000）；两种角色都要 `RELAY_TOKEN`。
 - Mac：每台手机 `input` 30 条/秒；配对码错 5 次作废；握手 10 秒内未完成即 kick；输出推送按 50 ms 合批。
 
 ## 撤销

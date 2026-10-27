@@ -245,15 +245,17 @@ public struct PairingCode: Sendable {
     }
 }
 
-/// What the QR code carries: `https://relay/#v=1&k=<pub>&c=<code>&n=<name>`.
+/// What the QR code carries: `https://relay/#v=1&k=<pub>&c=<code>&n=<name>&t=<relay token>`.
 public struct PairingLink: Equatable, Sendable {
     public var relay: URL
     public var macPublicKey: Data
     public var code: String
     public var name: String
+    /// The relay's RELAY_TOKEN: phones must present it too.
+    public var token: String
 
-    public init(relay: URL, macPublicKey: Data, code: String, name: String) {
-        self.relay = relay; self.macPublicKey = macPublicKey; self.code = code; self.name = name
+    public init(relay: URL, macPublicKey: Data, code: String, name: String, token: String = "") {
+        self.relay = relay; self.macPublicKey = macPublicKey; self.code = code; self.name = name; self.token = token
     }
 
     public var url: URL {
@@ -262,6 +264,7 @@ public struct PairingLink: Equatable, Sendable {
         var f = URLComponents()
         f.queryItems = [URLQueryItem(name: "v", value: "1"), URLQueryItem(name: "k", value: macPublicKey.base64URL),
                         URLQueryItem(name: "c", value: code), URLQueryItem(name: "n", value: name)]
+            + (token.isEmpty ? [] : [URLQueryItem(name: "t", value: token)])
         c.percentEncodedFragment = f.percentEncodedQuery?.replacingOccurrences(of: "+", with: "%2B")
         return c.url!
     }
@@ -275,7 +278,7 @@ public struct PairingLink: Equatable, Sendable {
               let code = items["c"], !code.isEmpty else { return nil }
         c.fragment = nil
         guard let relay = c.url else { return nil }
-        self.init(relay: relay, macPublicKey: k, code: code, name: items["n"] ?? "")
+        self.init(relay: relay, macPublicKey: k, code: code, name: items["n"] ?? "", token: items["t"] ?? "")
     }
 
     /// The relay's WebSocket endpoint for a role (`ws`/`wss` from `http`/`https`).
