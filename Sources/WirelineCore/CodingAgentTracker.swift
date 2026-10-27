@@ -104,10 +104,11 @@ public struct CodingAgentTracker: Sendable, Equatable {
     public init(now: Date) { stateSince = now }
 
     /// An exact state report from the agent's hooks. From then on it wins
-    /// over every heuristic.
+    /// over every heuristic, unless the agent's hooks don't cover a whole
+    /// turn (`exclusive` false).
     @discardableResult
-    public mutating func hook(_ event: AgentHooks.Event, at t: Date) -> Change? {
-        hookDriven = true
+    public mutating func hook(_ event: AgentHooks.Event, at t: Date, exclusive: Bool = true) -> Change? {
+        if exclusive { hookDriven = true }
         if case .notification(let m) = event, case .needsYou(let old) = state, old == m { return nil }
         return set(event.state, at: t)
     }

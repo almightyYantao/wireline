@@ -51,7 +51,8 @@ final class AgentHookServer {
                         return
                     }
                     if let msg = AgentHooks.parse(String(decoding: buffer[..<nl], as: UTF8.self)) {
-                        IslandCenter.shared.agentHook(msg.sessionID, msg.event)
+                        IslandCenter.shared.agentHook(msg.sessionID, msg.event, agent: msg.agent,
+                                                       agentSessionID: msg.agentSessionID)
                         if let r = msg.resume, let s = IslandCenter.shared.sessions?.session(msg.sessionID),
                            s.aiResume != r {
                             s.aiResume = r

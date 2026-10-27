@@ -84,6 +84,8 @@ final class IslandCenter {
         var tracker: CodingAgentTracker
         /// Recognised from its title over SSH (no foreground process to poll).
         var remote: Bool
+        /// The agent's own session id from its hooks (Codex thread id, …).
+        var agentSessionID: String? = nil
     }
 
     private init() {}
@@ -304,11 +306,14 @@ final class IslandCenter {
     }
 
     /// An exact state from the agent's own hooks (`AgentHookServer`). Hooks
-    /// only come from Claude Code, so a pane we hadn't recognised yet is one.
-    func agentHook(_ sid: UUID, _ event: AgentHooks.Event, remote: Bool = false) {
+    /// name their agent, so a pane we hadn't recognised yet is that one.
+    func agentHook(_ sid: UUID, _ event: AgentHooks.Event, agent: CodingAgent = .claude,
+                   agentSessionID: String? = nil, remote: Bool = false) {
         guard sessions?.session(sid) != nil else { return }
-        var w = agents[sid] ?? AgentWatch(agent: .claude, tracker: CodingAgentTracker(now: Date()), remote: remote)
-        let change = w.tracker.hook(event, at: Date())
+        var w = agents[sid] ?? AgentWatch(agent: agent, tracker: CodingAgentTracker(now: Date()), remote: remote)
+        if let agentSessionID { w.agentSessionID = agentSessionID }
+        let exclusive = AgentHookTarget.target(for: agent)?.complete ?? true
+        let change = w.tracker.hook(event, at: Date(), exclusive: exclusive)
         agents[sid] = w
         publishAgent(sid, change: change)
         reschedule()

@@ -231,7 +231,7 @@ struct SettingsView: View {
                             .wlConfigLocked("notify-on-command-finish-after")
                     }
                     WLFormDivider()
-                    ClaudeHooksRow()
+                    AgentHooksList()
                     WLFormDivider()
                     Toggle(isOn: $resumeCodingAgents) {
                         WLFormRow(loc("恢复 AI 会话", "Resume coding-agent sessions"),
