@@ -601,6 +601,8 @@ struct SettingsView: View {
 
                 MCPServerSection()
 
+                PhoneRelaySection()
+
                 section(loc("隐私", "Privacy"),
                         footer: loc("发给模型前，把密码、token、私钥（以及可选的 IP 和真实主机名）换成占位符；模型回传的命令和文件内容在本地还原后再执行，真实值不离开本机。主机别名不会被替换。",
                                     "Before anything reaches the model, passwords, tokens and keys (and optionally IPs and real hostnames) become placeholders; commands and file edits coming back are restored locally before they run, so the real values never leave this Mac. Host aliases are kept.")) {
