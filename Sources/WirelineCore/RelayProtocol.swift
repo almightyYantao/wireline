@@ -184,11 +184,13 @@ public struct RelayMessage: Codable, Equatable, Sendable {
     public var message: String?
     public var mac: String?
     public var list: [RelaySessionInfo]?
+    /// `policy`: whether this phone may type freely.
+    public var full: Bool?
 
     public init(t: String, code: String? = nil, name: String? = nil, sid: String? = nil, data: String? = nil,
-                message: String? = nil, mac: String? = nil, list: [RelaySessionInfo]? = nil) {
+                message: String? = nil, mac: String? = nil, list: [RelaySessionInfo]? = nil, full: Bool? = nil) {
         self.t = t; self.code = code; self.name = name; self.sid = sid; self.data = data
-        self.message = message; self.mac = mac; self.list = list
+        self.message = message; self.mac = mac; self.list = list; self.full = full
     }
 
     public static let maxInput = 4096
@@ -200,6 +202,16 @@ public struct RelayMessage: Codable, Equatable, Sendable {
 
     public func encoded() throws -> Data { try JSONEncoder().encode(self) }
     public static func decode(_ data: Data) throws -> Self { try JSONDecoder().decode(Self.self, from: data) }
+}
+
+/// What a phone may type. Without full input only the quick keys pass.
+public enum RelayInputPolicy {
+    public static let quickKeys: Set<String> = ["y\r", "n\r", "\r", "\u{1b}", "\u{03}", "\u{1b}[A", "\u{1b}[B"]
+
+    public static func allows(_ text: String, fullInput: Bool) -> Bool {
+        guard text.utf8.count <= RelayMessage.maxInput, !text.isEmpty else { return false }
+        return fullInput || quickKeys.contains(text)
+    }
 }
 
 /// One-time pairing code: 8 Crockford base32 characters, expires, single use,

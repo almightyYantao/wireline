@@ -10,6 +10,8 @@ struct PairedPhone: Codable, Identifiable, Equatable {
     var name: String
     var pairedAt: Date
     var lastSeen: Date?
+    /// May type anything, not just the quick keys.
+    var fullInput: Bool?
     var id: String { publicKey }
 }
 
@@ -34,6 +36,13 @@ final class PhoneRelay {
     }
     var token: String {
         didSet { try? keychain.setPassword(token, for: "token") }
+    }
+    /// Every paired phone may type freely (each can also be allowed alone).
+    var fullInputForAll: Bool {
+        didSet {
+            UserDefaults.standard.set(fullInputForAll, forKey: "relay.fullInput")
+            pushPolicy()
+        }
     }
     private(set) var status: Status = .off
     private(set) var devices: [PairedPhone] = [] {
@@ -69,6 +78,7 @@ final class PhoneRelay {
     private init() {
         enabled = UserDefaults.standard.bool(forKey: "relay.enabled")
         relayURL = UserDefaults.standard.string(forKey: "relay.url") ?? ""
+        fullInputForAll = UserDefaults.standard.bool(forKey: "relay.fullInput")
         token = (try? KeychainService(service: "com.wireline.relay").password(for: "token")) ?? ""
         if let d = UserDefaults.standard.data(forKey: "relay.devices"),
            let list = try? JSONDecoder().decode([PairedPhone].self, from: d) { devices = list }
@@ -191,6 +201,21 @@ final class PhoneRelay {
 
     private func isPaired(_ key: Data) -> Bool { devices.contains { $0.publicKey == key.base64EncodedString() } }
 
+    func setFullInput(_ on: Bool, for device: PairedPhone) {
+        guard let i = devices.firstIndex(where: { $0.publicKey == device.publicKey }) else { return }
+        devices[i].fullInput = on
+        pushPolicy()
+    }
+
+    private func fullInput(_ key: Data?) -> Bool {
+        guard let key else { return false }
+        return fullInputForAll || devices.first { $0.publicKey == key.base64EncodedString() }?.fullInput == true
+    }
+
+    private func pushPolicy() {
+        for (id, p) in peers where p.authed { send(id, RelayMessage(t: "policy", full: fullInput(p.phonePublicKey))) }
+    }
+
     // MARK: Incoming
 
     private func handleEnvelope(_ raw: Data) {
@@ -256,10 +281,12 @@ final class PhoneRelay {
             devices.append(PairedPhone(publicKey: pub.base64EncodedString(), name: name, pairedAt: Date(), lastSeen: Date()))
             peers[peer]?.authed = true
             send(peer, RelayMessage(t: "paired", mac: Foundation.Host.current().localizedName ?? "Mac"))
+            send(peer, RelayMessage(t: "policy", full: fullInput(pub)))
             return
         }
         switch msg.t {
         case "list":
+            send(peer, RelayMessage(t: "policy", full: fullInput(p.phonePublicKey)))
             send(peer, RelayMessage(t: "sessions", list: sessionList()))
         case "watch":
             guard let sid = msg.sid.flatMap(UUID.init(uuidString:)), sessions?.session(sid) != nil else {
@@ -270,7 +297,10 @@ final class PhoneRelay {
         case "input":
             guard peers[peer]?.limiter.allow() == true else { return }
             guard let sid = msg.sid.flatMap(UUID.init(uuidString:)), let s = sessions?.session(sid),
-                  let text = msg.data, text.utf8.count <= RelayMessage.maxInput else { return }
+                  let text = msg.data else { return }
+            guard RelayInputPolicy.allows(text, fullInput: fullInput(p.phonePublicKey)) else {
+                send(peer, .error(Localizer.shared.t("只允许快捷键输入", "Only quick keys are allowed"))); return
+            }
             s.io.send(txt: text)
         default:
             send(peer, .error("unknown message"))
@@ -390,10 +420,21 @@ struct PhoneRelaySection: View {
                 }
                 .padding(.vertical, 8)
             }
+            WLFormDivider()
+            WLFormRow(loc("允许完整输入", "Allow full input"),
+                      detail: loc("关闭时手机只能发 y / n / 回车 / Esc / Ctrl-C / ↑↓", "When off, phones can only send y / n / Return / Esc / Ctrl-C / ↑↓")) {
+                Toggle("", isOn: $relay.fullInputForAll).toggleStyle(.wlSwitch).labelsHidden()
+            }
             ForEach(relay.devices) { d in
                 WLFormDivider()
                 WLFormRow(d.name, detail: deviceDetail(d)) {
-                    Button(loc("撤销", "Revoke")) { relay.revoke(d) }.buttonStyle(.wlSecondary)
+                    HStack(spacing: 8) {
+                        Toggle(loc("完整输入", "Full input"), isOn: Binding(
+                            get: { relay.fullInputForAll || d.fullInput == true },
+                            set: { relay.setFullInput($0, for: d) }))
+                            .toggleStyle(.wlSwitch).disabled(relay.fullInputForAll)
+                        Button(loc("撤销", "Revoke")) { relay.revoke(d) }.buttonStyle(.wlSecondary)
+                    }
                 }
             }
             if !relay.devices.isEmpty {

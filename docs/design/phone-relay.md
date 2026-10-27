@@ -87,6 +87,9 @@ Mac→手机：
 | `sessions` | `list[{id,title,agent?,state?,note?,busy}]` | 会话列表；agent 状态变化时主动推 |
 | `snapshot` | `sid`, `data`（b64 原始字节） | 当前屏幕 + 近期回滚，xterm.js 直接 write |
 | `out` | `sid`, `data`（b64） | 实时输出 |
+| `policy` | `full` | 是否允许完整输入；配对、`list` 和开关变化时发 |
+
+输入白名单（`RelayInputPolicy`，Mac 强制校验）：默认只放行 `y⏎`、`n⏎`、`⏎`、Esc、Ctrl-C、↑、↓，其余回 `error` 并丢弃。设置里「允许完整输入」可全局打开，也可按设备打开；默认都关。手机端没有完整输入时隐藏输入框，也不转发终端键盘。
 
 `state` 取 `idle|working|needsYou|done`（来自 `CodingAgentTracker.State`，即灵动岛同一份），`note` 是 needsYou 的提示文字。
 

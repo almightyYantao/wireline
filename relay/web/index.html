@@ -41,7 +41,7 @@
     <button data-k="y&#13;">y</button><button data-k="n&#13;">n</button><button data-k="&#13;">⏎</button>
     <button data-k="&#27;">Esc</button><button data-k="&#3;">Ctrl-C</button>
     <button data-k="&#27;[A">↑</button><button data-k="&#27;[B">↓</button>
-    <input id="line" placeholder="输入后回车发送" enterkeyhint="send" autocomplete="off" autocapitalize="off">
+    <input id="line" class="hidden" placeholder="输入后回车发送" enterkeyhint="send" autocomplete="off" autocapitalize="off">
   </div>
 </div>
 <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.js"></script>
@@ -97,7 +97,9 @@
     if (c === ch) ws.send(JSON.stringify({ d: R.payload.sealed(frame) }));
   }).catch(() => {}); };
   const input = (data) => current && send({ t: 'input', sid: current, data });
-  term.onData(input);
+  // Quick keys only until the Mac allows full input (it enforces this too).
+  let fullInput = false;
+  term.onData((d) => fullInput && input(d));
 
   function render() {
     const box = $('sessions'); box.innerHTML = '';
@@ -137,6 +139,7 @@
         render(); break;
       case 'snapshot': if (m.sid === current) { term.reset(); term.write(R.unb64(m.data)); } break;
       case 'out': if (m.sid === current) term.write(R.unb64(m.data)); break;
+      case 'policy': fullInput = !!m.full; $('line').classList.toggle('hidden', !fullInput); break;
       case 'error': status(m.message); break;
     }
   }

@@ -138,6 +138,17 @@ final class RelayProtocolTests: XCTestCase {
         XCTAssertEqual(RelayCrypto.roomID(macPublicKey: Data(repeating: 0, count: 32)).count, 22)
     }
 
+    func testInputPolicy() {
+        for k in ["y\r", "n\r", "\r", "\u{1b}", "\u{03}", "\u{1b}[A", "\u{1b}[B"] {
+            XCTAssertTrue(RelayInputPolicy.allows(k, fullInput: false), k.debugDescription)
+        }
+        for k in ["rm -rf ~\r", "y", "yes\r", "\u{1b}[C", "\u{04}", ""] {
+            XCTAssertFalse(RelayInputPolicy.allows(k, fullInput: false), k.debugDescription)
+        }
+        XCTAssertTrue(RelayInputPolicy.allows("ls\r", fullInput: true))
+        XCTAssertFalse(RelayInputPolicy.allows(String(repeating: "a", count: 5000), fullInput: true))
+    }
+
     func testRateLimiter() {
         let t0 = Date(timeIntervalSince1970: 0)
         var r = RelayRateLimiter(rate: 3, now: t0)
