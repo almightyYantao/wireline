@@ -50,3 +50,19 @@ copied to `settings.json.wireline-backup` first.
   socket (`ssh -R`) or OSC in-band messages.
 - Other agents (Codex …) still run on the heuristics.
 - Uninstall button.
+
+## Other agents
+
+`AgentHookTarget.all` (Sources/WirelineCore/AgentHookTargets.swift) lists each agent with a hook mechanism: its config file, format, and event → working / needsYou / done. Non-Claude hooks send `<uuid> <agent>:<event> [json]`; `session_id` / `thread-id` / `conversation_id` in the JSON is passed on as `agentSessionID` for resuming.
+
+| Agent | File | Mechanism | Events |
+|---|---|---|---|
+| Codex | ~/.codex/hooks.json | hooks (trust once with `/hooks`) | UserPromptSubmit, PermissionRequest, Stop |
+| Gemini CLI | ~/.gemini/settings.json | hooks | BeforeAgent, Notification, AfterAgent |
+| Qwen Code | ~/.qwen/settings.json | hooks | UserPromptSubmit, Notification, Stop |
+| Cursor Agent | ~/.cursor/hooks.json | hooks v1 (flat) | beforeSubmitPrompt, stop (no waiting event) |
+| opencode | ~/.config/opencode/plugins/wireline-hooks.js | plugin | session.status busy/idle, permission.asked/replied |
+| Amp | ~/.config/amp/plugins/wireline-hooks.ts | plugin | agent.start, agent.end |
+| Aider | ~/.aider.conf.yml | notifications-command (marker block) | waiting for input → done |
+
+Goose and Crush have no hook mechanism: still guessed. Agents whose hooks don't cover a whole turn (Cursor, Amp, Aider) don't switch the tracker to hook-only mode. Install keeps the user's config, is idempotent, backs up to `.wireline-backup`, and uninstall removes only entries carrying the marker; plugin files without the marker are never overwritten or deleted.
