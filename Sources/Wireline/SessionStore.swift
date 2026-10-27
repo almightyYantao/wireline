@@ -63,6 +63,8 @@ final class TerminalSession: Identifiable {
     /// prompt has gone away). Drives the "running…" badge shown on a backgrounded
     /// tab. Updated from the terminal view's prompt heuristic.
     var isBusy = false
+    /// The last OSC 133;D exit code, for the island's ✓ / ✕ when busy ends.
+    private var lastExitCode: Int?
     /// Name of the program in the foreground of a local shell (`vim`, `node`,
     /// `claude`), nil at the prompt. Picks the pane / tab icon.
     var foregroundName: String?
@@ -327,6 +329,7 @@ final class TerminalSession: Identifiable {
                 }
             case let .finished(exitCode, duration):
                 let wasBusy = self.commandMarks.finished()
+                self.lastExitCode = exitCode
                 self.completion.promptReady()
                 if !local, wasBusy || self.isBusy { self.applyBusy(false, elapsed: duration) }
                 self.notifyCommandFinished(elapsed: duration, exitCode: exitCode)
@@ -595,6 +598,19 @@ final class TerminalSession: Identifiable {
     private func applyBusy(_ busy: Bool, elapsed: TimeInterval) {
         guard busy != isBusy else { return }
         isBusy = busy
+        if busy {
+            lastExitCode = nil
+            IslandCenter.shared.busyChanged(self, busy: true, elapsed: 0, exitCode: nil)
+        } else {
+            // Polling can see a local job end just before the shell's 133;D
+            // brings its exit code: give that a moment.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                MainActor.assumeIsolated {
+                    guard let self, !self.isBusy else { return }
+                    IslandCenter.shared.busyChanged(self, busy: false, elapsed: elapsed, exitCode: self.lastExitCode)
+                }
+            }
+        }
         guard !busy, elapsed >= 5, NSApp.isActive else { return }
         let inActiveTab = store?.activeTab?.leafID(for: id) != nil
         guard !inActiveTab else { return }

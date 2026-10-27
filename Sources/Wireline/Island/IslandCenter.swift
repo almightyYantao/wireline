@@ -373,34 +373,46 @@ final class IslandCenter {
         publishAgent(s.id, change: hint == .working ? .startedWorking : nil)
     }
 
-    /// A shell command finished (OSC 133;D, or the prompt heuristic).
+    /// A shell command finished (OSC 133;D, or the prompt heuristic): over
+    /// SSH, the prompt being back means the agent we saw there exited. The
+    /// command's own row follows the session's busy state (`busyChanged`).
     func commandFinished(_ s: TerminalSession, exitCode: Int?, duration: TimeInterval) {
         if agents[s.id]?.remote == true {
-            agents[s.id] = nil                          // the prompt is back: the agent exited
+            agents[s.id] = nil
             remove("agent:\(s.id)")
         }
-        guard agents[s.id] == nil, !isViewing(s.id) else { return }
-        let threshold = UserDefaults.standard.object(forKey: "notifyCommandAfter") as? Double ?? 10
-        guard duration >= threshold else { return }
+    }
+
+    /// The session's `isBusy` — what the tab's running badge shows — changed.
+    /// A running row while it's busy, a ✓ / ✕ pulse when a long one ends, so
+    /// the island and the tab never disagree. Agent panes have their own row.
+    func busyChanged(_ s: TerminalSession, busy: Bool, elapsed: TimeInterval, exitCode: Int?) {
         let id = "cmd:\(s.id)"
+        guard agents[s.id] == nil else { remove(id); return }
+        if busy {
+            upsert(IslandItem(id: id, source: .command, title: s.title, detail: loc.t("运行中…", "Running…"),
+                              tone: .working, sessionID: s.id, at: Date()))
+            return
+        }
+        let threshold = UserDefaults.standard.object(forKey: "notifyCommandAfter") as? Double ?? 10
+        guard elapsed >= threshold, !isViewing(s.id) else { remove(id); return }
         let failed = (exitCode ?? 0) != 0
-        let detail = failed ? loc.t("退出码 \(exitCode ?? 0) · ", "exit \(exitCode ?? 0) · ") + islandDuration(duration)
-                            : loc.t("完成 · ", "done · ") + islandDuration(duration)
-        upsert(IslandItem(id: id, source: .command, title: s.title, detail: detail, tone: .working,
-                          sessionID: s.id, at: Date()))
+        let detail = failed ? loc.t("退出码 \(exitCode ?? 0) · ", "exit \(exitCode ?? 0) · ") + islandDuration(elapsed)
+                            : loc.t("完成 · ", "done · ") + islandDuration(elapsed)
         finish(id, success: !failed, detail: detail,
-               pulse: (failed ? "✕ " : "✓ ") + s.title + " · " + islandDuration(duration))
+               pulse: (failed ? "✕ " : "✓ ") + s.title + " · " + islandDuration(elapsed))
     }
 
     /// The pane closed or its process went away.
     func sessionGone(_ id: UUID) {
         agents[id] = nil
-        for prefix in ["agent:", "inline:", "note:"] { remove(prefix + id.uuidString) }
+        for prefix in ["agent:", "inline:", "note:", "cmd:"] { remove(prefix + id.uuidString) }
     }
 
     private func publishAgent(_ sid: UUID, change: CodingAgentTracker.Change?) {
         guard let w = agents[sid], let s = sessions?.session(sid) else { return }
         let id = "agent:\(sid)"
+        remove("cmd:\(sid)")
         let title = "\(w.agent.displayName) · \(Self.place(of: s))"
         let source = IslandSource.codingAgent(w.agent.rawValue)
         let tone: IslandTone, detail: String
