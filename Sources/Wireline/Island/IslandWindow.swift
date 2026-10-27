@@ -21,6 +21,8 @@ struct IslandLayout: Equatable {
     static let maxListHeight: CGFloat = 400
     /// The strip below the notch a pulse uses.
     static let pulseStrip: CGFloat = 30
+    /// The strip below a notch that carries the collapsed island's text.
+    static let captionStrip: CGFloat = 24
     static let panelSize = CGSize(width: 460, height: 520)
 
     static let fallback = IslandLayout(
@@ -28,11 +30,14 @@ struct IslandLayout: Equatable {
         hasNotch: false, centerX: panelSize.width / 2, panel: panelSize)
 
     /// The black shape's size.
-    func size(_ mode: IslandMode, list: CGFloat) -> CGSize {
+    @MainActor func size(_ mode: IslandMode, list: CGFloat) -> CGSize {
         let collapsed = CGSize(width: core.width + 2 * Self.ear, height: core.height)
         switch mode {
         case .hidden, .dormant: return core
-        case .collapsed: return collapsed
+        case .collapsed:
+            // Under a real notch the status text goes in a strip below it.
+            guard hasNotch, IslandCenter.shared.collapsedCaption != nil else { return collapsed }
+            return CGSize(width: max(collapsed.width, 260), height: core.height + Self.captionStrip)
         case .pulse: return CGSize(width: max(collapsed.width, 300), height: core.height + Self.pulseStrip)
         case .expanded:
             return CGSize(width: max(collapsed.width, Self.cardWidth),
@@ -41,8 +46,9 @@ struct IslandLayout: Equatable {
     }
 
     /// Top flare (the notch's concave shoulders), top and bottom corner radii.
-    func radii(_ mode: IslandMode) -> (flare: CGFloat, top: CGFloat, bottom: CGFloat) {
+    @MainActor func radii(_ mode: IslandMode) -> (flare: CGFloat, top: CGFloat, bottom: CGFloat) {
         let bottom: CGFloat = switch mode {
+        case .collapsed where hasNotch && IslandCenter.shared.collapsedCaption != nil: 14
         case .hidden, .dormant, .collapsed: hasNotch ? 10 : core.height / 2
         case .pulse: 16
         case .expanded: 24

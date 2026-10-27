@@ -97,6 +97,13 @@ final class IslandCenter {
 
     // MARK: - Board edits
 
+    /// The collapsed island's text: the lead activity's status.
+    var collapsedCaption: String? {
+        board.ordered.first { $0.tone != .idle }.map { item in
+            item.title.isEmpty ? item.detail : "\(item.title) · \(item.detail)"
+        }
+    }
+
     func upsert(_ item: IslandItem) {
         now = Date()
         board.upsert(item, at: now)

@@ -174,6 +174,15 @@ private struct IslandContent: View {
             .contentShape(Rectangle())
             .onTapGesture { if mode == .expanded { center.toggleOpen() } }
 
+            if mode == .collapsed, layout.hasNotch, let text = center.collapsedCaption {
+                Text(text)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(IslandInk.secondary)
+                    .lineLimit(1).truncationMode(.middle)
+                    .padding(.horizontal, 14)
+                    .frame(height: IslandLayout.captionStrip - 4)
+                    .transition(.opacity.animation(Motion.resolved(Motion.popIn)))
+            }
             if case .pulse(let p) = mode {
                 IslandPulseLine(pulse: p)
                     .frame(height: IslandLayout.pulseStrip - 4)
@@ -200,7 +209,7 @@ private struct IslandContent: View {
     /// shows a word there instead.
     @ViewBuilder private var centerStrip: some View {
         if !layout.hasNotch {
-            Text(mode == .expanded ? "Wireline" : (center.board.ordered.first { $0.tone != .idle }?.detail ?? "Wireline"))
+            Text(mode == .expanded ? "Wireline" : (center.collapsedCaption ?? "Wireline"))
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(IslandInk.secondary)
                 .lineLimit(1)

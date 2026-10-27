@@ -247,22 +247,26 @@ private struct CompletionListView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(items.enumerated()), id: \.offset) { i, item in
+                let on = i == selected
                 HStack(spacing: 8) {
-                    Image(systemName: icon(item.kind)).frame(width: 14).foregroundStyle(.secondary)
+                    Image(systemName: icon(item.kind)).frame(width: 14)
+                        .foregroundStyle(on ? WL.green : WL.textDim)
                     Text(item.display).lineLimit(1).truncationMode(.middle)
+                        .foregroundStyle(WL.textPrimary)
                     Spacer(minLength: 12)
-                    Text(label(item.kind)).font(.system(size: 10)).foregroundStyle(.secondary)
+                    Text(label(item.kind)).font(WL.caption).foregroundStyle(WL.textDim)
                 }
-                .font(.system(size: 12, design: .monospaced))
-                .padding(.horizontal, 8).padding(.vertical, 3)
-                .background(i == selected ? Color.accentColor.opacity(0.3) : .clear,
-                            in: RoundedRectangle(cornerRadius: 4))
+                .font(.system(size: 12 * Palette.shared.fontScale, design: .monospaced))
+                .padding(.horizontal, WL.pad(8)).padding(.vertical, WL.pad(3))
+                .background(on ? WL.green.opacity(WL.isLight ? 0.16 : 0.22) : .clear,
+                            in: RoundedRectangle(cornerRadius: WL.radius(4)))
             }
         }
-        .padding(4)
+        .padding(WL.pad(4))
         .frame(minWidth: 220, maxWidth: 420, alignment: .leading)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 7))
-        .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(.separator))
+        .background(WL.surface, in: RoundedRectangle(cornerRadius: WL.radius(7)))
+        .overlay(RoundedRectangle(cornerRadius: WL.radius(7)).strokeBorder(WL.border, lineWidth: WL.borderWidth))
+        .environment(\.colorScheme, WL.colorScheme)
         .fixedSize()
     }
 
