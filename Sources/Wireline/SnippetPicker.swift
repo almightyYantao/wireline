@@ -999,7 +999,10 @@ struct SnippetBatchRunView: View {
     var onBack: () -> Void
     var onDone: () -> Void
 
-    @State private var targets: Set<UUID> = []
+    @State private var targets: Set<UUID> = [] { didSet { armed = false } }
+    /// A dangerous batch takes a second click.
+    @State private var armed = false
+    private var hasDanger: Bool { snippets.contains { SnippetSafety.isDangerous(text($0)) } }
 
     private var panes: [TerminalSession] {
         sessions.sessions.filter { s in
@@ -1061,8 +1064,15 @@ struct SnippetBatchRunView: View {
                 Button(loc("全部会话", "All panes")) { targets = Set(panes.map(\.id)) }.buttonStyle(.wlSecondary)
                 Spacer()
                 Button(loc("取消", "Cancel"), action: onBack).buttonStyle(.wlSecondary)
-                Button(loc("执行到 \(targets.count) 个会话", "Run in \(targets.count)")) { run() }
+                if armed {
+                    Button(loc("确认执行危险命令", "Run dangerous commands")) { run() }
+                        .buttonStyle(.wlPrimary).tint(WL.red).disabled(targets.isEmpty)
+                } else {
+                    Button(loc("执行到 \(targets.count) 个会话", "Run in \(targets.count)")) {
+                        if hasDanger { armed = true } else { run() }
+                    }
                     .buttonStyle(.wlPrimary).disabled(targets.isEmpty)
+                }
             }
             .padding(.horizontal, 12).padding(.vertical, 9)
         }
