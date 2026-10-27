@@ -35,7 +35,7 @@
    `https://<relay>/#v=1&k=<Mac 公钥 b64url>&c=<配对码>&n=<Mac 名称>`
    参数都在 `#` 片段里，浏览器不会把它发给中继。
 2. 手机扫码打开页面：生成 X25519 密钥对（WebCrypto），连中继，发握手 `hello`（明文，见下），再发加密的 `pair{code,name}`。
-3. Mac 校验配对码 → 记录手机公钥 + 名称（UserDefaults，公钥不敏感），回 `paired`。手机把自己的私钥（JWK）、Mac 公钥、中继地址存进 localStorage，之后打开页面自动重连。
+3. Mac 校验配对码 → 记录手机公钥 + 名称（UserDefaults，公钥不敏感），回 `paired`。手机私钥是 `extractable=false` 的 CryptoKey，存 IndexedDB（同源脚本能用它握手，但拿不到字节）；localStorage 只存公开值（自己的公钥、Mac 公钥、名称）。旧版存在 localStorage 的 JWK 在下次打开时重新导入为不可导出密钥后删除。
 4. 以后的连接：Mac 只接受已配对公钥的 `hello`；配对窗口打开时也接受未知公钥，但它在发出正确的 `pair` 之前只能收到 `error`。
 
 中继无法冒充 Mac：手机的 Mac 公钥来自二维码（带外）。中继也拿不到配对码：它在 Mac 公钥加密的通道里传。

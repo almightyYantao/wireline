@@ -54,21 +54,32 @@
   const status = (s) => { $('status').textContent = s; };
 
   // Pairing link: #v=1&k=<mac pub>&c=<code>&n=<name>. Never sent to the server.
+  // localStorage holds only public values; the private key lives in IndexedDB.
   let saved = JSON.parse(localStorage.getItem(STORE) || 'null');
+  let stored = await R.keystore.get();
+  if (saved && saved.priv) {
+    // Migrate an old extractable JWK: re-import as non-extractable, then drop it.
+    if (!stored) { stored = { privateKey: await R.importPrivate(saved.priv), pub: saved.pub }; await R.keystore.put(stored); }
+    delete saved.priv;
+    localStorage.setItem(STORE, JSON.stringify(saved));
+  }
   let pairCode = null;
   const frag = new URLSearchParams(location.hash.slice(1));
   if (frag.get('v') === '1' && frag.get('k')) {
-    const keys = saved && saved.mac === frag.get('k') ? saved : await R.generateKeys(true).then(async (k) => ({
-      priv: await crypto.subtle.exportKey('jwk', k.privateKey), pub: R.b64(k.publicRaw) }));
-    saved = { ...keys, mac: frag.get('k'), name: frag.get('n') || 'Mac', paired: false };
+    if (!stored || !saved || saved.mac !== frag.get('k')) {
+      const k = await R.generateKeys();
+      stored = { privateKey: k.privateKey, pub: R.b64(k.publicRaw) };
+      await R.keystore.put(stored);
+    }
+    saved = { pub: stored.pub, mac: frag.get('k'), name: frag.get('n') || 'Mac', paired: false };
     pairCode = frag.get('c');
     localStorage.setItem(STORE, JSON.stringify(saved));
     history.replaceState(null, '', location.pathname);
   }
-  if (!saved) { $('pair').style.display = 'block'; return; }
+  if (!saved || !stored) { $('pair').style.display = 'block'; return; }
   $('macName').textContent = saved.name;
   $('forget').classList.remove('hidden');
-  $('forget').onclick = () => { localStorage.removeItem(STORE); location.reload(); };
+  $('forget').onclick = async () => { localStorage.removeItem(STORE); await R.keystore.clear(); location.reload(); };
 
   const macPub = R.unb64url(saved.mac), phonePub = R.unb64(saved.pub);
   const room = await R.roomID(macPub);
@@ -76,7 +87,7 @@
   const fit = new FitAddon.FitAddon();
   term.loadAddon(fit);
 
-  const staticKey = await R.importPrivate(saved.priv);
+  const staticKey = stored.privateKey;
   let ws, ch, myNonce, myEph, current = null, sessions = [];
   // WebCrypto is async: keep frames in counter order both ways.
   let outQ = Promise.resolve(), inQ = Promise.resolve();

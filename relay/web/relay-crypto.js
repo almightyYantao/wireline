@@ -85,6 +85,29 @@
     },
   };
 
-  root.WLRelay = { VERSION, b64, unb64, b64url, unb64url, enc, dec, generateKeys, importPrivate, roomID, sessionKey, channel, payload,
+  // The phone's static key: a non-extractable CryptoKey kept in IndexedDB
+  // (structured clone keeps it usable without ever exposing the bytes).
+  const keystore = {
+    db() {
+      return new Promise((res, rej) => {
+        const r = root.indexedDB.open('wireline-relay', 1);
+        r.onupgradeneeded = () => r.result.createObjectStore('keys');
+        r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+      });
+    },
+    async op(mode, fn) {
+      const db = await keystore.db();
+      return new Promise((res, rej) => {
+        const tx = db.transaction('keys', mode), r = fn(tx.objectStore('keys'));
+        tx.oncomplete = () => { db.close(); res(r && r.result); };
+        tx.onerror = () => { db.close(); rej(tx.error); };
+      });
+    },
+    get: () => keystore.op('readonly', (s) => s.get('static')),
+    put: (v) => keystore.op('readwrite', (s) => { s.put(v, 'static'); }),
+    clear: () => keystore.op('readwrite', (s) => { s.delete('static'); }),
+  };
+
+  root.WLRelay = { keystore, VERSION, b64, unb64, b64url, unb64url, enc, dec, generateKeys, importPrivate, roomID, sessionKey, channel, payload,
                    nonce: () => root.crypto.getRandomValues(new Uint8Array(16)) };
 })(typeof window !== 'undefined' ? window : globalThis);
