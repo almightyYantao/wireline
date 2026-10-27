@@ -348,6 +348,7 @@ final class TerminalSession: Identifiable {
             if let self { IslandCenter.shared.sessionTitle(self, title) }
         }
         terminalView.onOpenPath = { [weak self] path in self?.openPath(path) }
+        terminalView.onPasteImage = { [weak self] png in self?.pasteImage(png) ?? false }
         terminalView.onClickFocus = { [weak self] in
             guard let self, let store = self.store, store.activeID != self.id else { return }
             store.activeID = self.id
@@ -440,6 +441,35 @@ final class TerminalSession: Identifiable {
             NotificationCenter.default.post(name: .aiOpenFiles, object: alias)
         case .sftp, .rdp:
             break
+        }
+    }
+
+    /// ⌘V with a screenshot: save it as a PNG where this session's programs can
+    /// read it (here, or the SSH host's /tmp) and type its path.
+    private func pasteImage(_ png: Data) -> Bool {
+        let t = Localizer.shared.t
+        switch kind {
+        case .localShell:
+            do {
+                terminalView.send(txt: ImagePaste.typed(try ImagePaste.saveLocal(png)))
+            } catch {
+                Notifier.post(title: t("图片粘贴失败", "Image paste failed"), body: error.localizedDescription)
+            }
+            return true
+        case .ssh:
+            guard let store = HostStore.current, let host = store.hosts.first(where: { $0.alias == alias }) else { return false }
+            let remote = "/tmp/" + ImagePaste.fileName()
+            Task { [weak self] in
+                do {
+                    try await FileBrowserModel.put(png, at: remote, host: host, store: store)
+                    self?.terminalView.send(txt: ImagePaste.typed(remote))
+                } catch {
+                    Notifier.post(title: t("图片上传失败", "Image upload failed"), body: error.localizedDescription)
+                }
+            }
+            return true
+        case .sftp, .rdp:
+            return false
         }
     }
 

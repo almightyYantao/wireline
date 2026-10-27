@@ -544,6 +544,13 @@ final class WirelineTerminalView: TerminalView, TerminalEngine {
     /// Asked to open a file path ⌘-clicked in the terminal (URLs are SwiftTerm's).
     var onOpenPath: ((String) -> Void)?
 
+    var onPasteImage: ((Data) -> Bool)?
+
+    override func paste(_ sender: Any) {
+        if let png = ImagePaste.png(), onPasteImage?(png) == true { return }
+        super.paste(sender)
+    }
+
     /// A click landed in this pane: make it the active split.
     var onClickFocus: (() -> Void)?
 

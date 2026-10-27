@@ -53,6 +53,7 @@ final class GhosttyTerminalView: NSView, TerminalEngine {
     var onDirectoryChange: ((String?) -> Void)?
     var onTitleReport: ((String) -> Void)?
     var onOpenPath: ((String) -> Void)?
+    var onPasteImage: ((Data) -> Bool)?
     var onClickFocus: (() -> Void)?
     var isActivePane: (() -> Bool)?
 
@@ -739,7 +740,10 @@ final class GhosttyTerminalView: NSView, TerminalEngine {
     // MARK: Menu actions
 
     @objc func copy(_ sender: Any?) { binding("copy_to_clipboard") }
-    @objc func paste(_ sender: Any?) { binding("paste_from_clipboard") }
+    @objc func paste(_ sender: Any?) {
+        if let png = ImagePaste.png(), onPasteImage?(png) == true { return }
+        binding("paste_from_clipboard")
+    }
     @objc func pasteAsPlainText(_ sender: Any?) { binding("paste_from_clipboard") }
     override func selectAll(_ sender: Any?) { binding("select_all") }
 
@@ -1101,7 +1105,9 @@ extension GhosttyTerminalView: NSMenuItemValidation {
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         switch item.action {
         case #selector(copy(_:)): surface.map { ghostty_surface_has_selection($0.raw) } ?? false
-        case #selector(paste(_:)), #selector(pasteAsPlainText(_:)): NSPasteboard.general.string(forType: .string) != nil
+        case #selector(paste(_:)): NSPasteboard.general.string(forType: .string) != nil
+            || (onPasteImage != nil && ImagePaste.png() != nil)
+        case #selector(pasteAsPlainText(_:)): NSPasteboard.general.string(forType: .string) != nil
         default: true
         }
     }

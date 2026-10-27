@@ -315,6 +315,20 @@ final class FileBrowserModel {
         return m
     }
 
+    /// Write `data` to `remote` on `host`, connecting first if needed — reusing
+    /// the Files page's connection when it has one, else a short-lived one.
+    static func put(_ data: Data, at remote: String, host: Host, store: HostStore) async throws {
+        let borrowed = live[host.alias] != nil
+        let m = obtain(host: host, store: store)
+        defer { if !borrowed { m.release() } }
+        if !m.connected {
+            m.connect()
+            while m.connecting { try await Task.sleep(for: .milliseconds(100)) }
+            guard m.connected else { throw SFTPConnection.Fail(msg: m.status ?? "未连接") }
+        }
+        try await m.conn.upload(remote, data: data)
+    }
+
     /// The page went away: disconnect now, or once the queue drains.
     func release() {
         if transfers.isActive { closeWhenIdle = true } else { disconnect() }

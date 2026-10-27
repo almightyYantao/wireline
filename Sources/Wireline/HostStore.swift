@@ -8,6 +8,9 @@ import WirelineCore
 @Observable
 @MainActor
 final class HostStore {
+    /// The app's store, for sessions that need a host's credentials (they
+    /// don't hold the store).
+    static weak var current: HostStore?
     private(set) var document: SSHConfig.Document
     /// Mirrored into `PrivacyContext` so the AI masker knows the real addresses.
     private(set) var hosts: [Host] { didSet { PrivacyContext.setHosts(hosts) } }
@@ -236,6 +239,7 @@ final class HostStore {
         self.repository = repository
         self.keychain = keychain
         self.checker = checker
+        defer { Self.current = self }
         let saved = UserDefaults.standard.string(forKey: "terminalApp")
         self.terminalApp = saved.flatMap(TerminalApp.init) ?? .terminal
         self.autoCheckOnLaunch = UserDefaults.standard.object(forKey: "autoCheckOnLaunch") as? Bool ?? true

@@ -42,6 +42,9 @@ protocol TerminalEngine: NSView, TerminalScrollable {
     var onTitleReport: ((String) -> Void)? { get set }
     /// A path was ⌘-clicked.
     var onOpenPath: ((String) -> Void)? { get set }
+    /// ⌘V with only an image on the clipboard (PNG data). True when handled;
+    /// otherwise the paste goes through as usual.
+    var onPasteImage: ((Data) -> Bool)? { get set }
     /// A click landed in this pane.
     var onClickFocus: (() -> Void)? { get set }
     /// Whether this view's session is the active pane.
