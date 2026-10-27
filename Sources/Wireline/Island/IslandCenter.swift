@@ -86,6 +86,9 @@ final class IslandCenter {
 
     private init() {}
 
+    /// The coding agent seen running in a pane, if any.
+    func agent(in sessionID: UUID) -> CodingAgent? { agents[sessionID]?.agent }
+
     private var loc: Localizer { Localizer.shared }
 
     // MARK: - Board edits

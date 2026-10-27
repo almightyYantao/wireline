@@ -54,6 +54,8 @@ final class GhosttyTerminalView: NSView, TerminalEngine {
     var onTitleReport: ((String) -> Void)?
     var onOpenPath: ((String) -> Void)?
     var onPasteImage: ((Data) -> Bool)?
+    var contextMenuItems: (() -> [WLMenuItem])?
+    override func menu(for event: NSEvent) -> NSMenu? { contextMenuItems.map { NSMenu.wl($0()) } }
     var onClickFocus: (() -> Void)?
     var isActivePane: (() -> Bool)?
 

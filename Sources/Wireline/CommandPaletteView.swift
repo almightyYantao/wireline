@@ -301,6 +301,8 @@ struct CommandPaletteView: View {
             },
             PaletteCommand(title: loc("复制上一条命令的输出", "Copy Last Command Output"), keywords: "复制上一条命令的输出" + " " + "Copy Last Command Output", category: actions,
                            systemImage: "doc.on.clipboard", tint: WL.teal) { copyLastOutput(sessions) },
+            PaletteCommand(title: loc("在阅读器中打开最近回答", "Open Latest Answer in Reader"), keywords: "在阅读器中打开最近回答 AI Claude Codex" + " " + "Open Latest Answer in Reader",
+                           category: actions, systemImage: "doc.richtext", tint: WL.purple) { AgentReader.open(sessions.activeSession) },
             PaletteCommand(title: loc("快捷终端", "Quick Terminal"), keywords: "快捷终端" + " " + "Quick Terminal", category: actions,
                            systemImage: "rectangle.topthird.inset.filled", tint: WL.green) {
                 QuickTerminalController.shared.toggle()

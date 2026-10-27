@@ -546,6 +546,10 @@ final class WirelineTerminalView: TerminalView, TerminalEngine {
 
     var onPasteImage: ((Data) -> Bool)?
 
+    var contextMenuItems: (() -> [WLMenuItem])?
+
+    override func menu(for event: NSEvent) -> NSMenu? { contextMenuItems.map { NSMenu.wl($0()) } }
+
     override func paste(_ sender: Any) {
         if let png = ImagePaste.png(), onPasteImage?(png) == true { return }
         let bracketed = getTerminal().bracketedPasteMode

@@ -60,7 +60,6 @@ private struct RightClickCatcher: NSViewRepresentable {
 
     final class CatcherView: NSView {
         var items: [WLMenuItem]
-        private var targets: [MenuActionTarget] = []
 
         init(items: [WLMenuItem]) {
             self.items = items
@@ -79,10 +78,7 @@ private struct RightClickCatcher: NSViewRepresentable {
             }
         }
 
-        override func menu(for event: NSEvent) -> NSMenu? {
-            targets = []
-            return build(items)
-        }
+        override func menu(for event: NSEvent) -> NSMenu? { NSMenu.wl(items) }
 
         override func rightMouseDown(with event: NSEvent) {
             guard let menu = menu(for: event) else { return }
@@ -93,32 +89,36 @@ private struct RightClickCatcher: NSViewRepresentable {
             rightMouseDown(with: event)
         }
 
-        private func build(_ items: [WLMenuItem]) -> NSMenu {
-            let menu = NSMenu()
-            menu.autoenablesItems = false
-            for item in items {
-                if item.isDivider { menu.addItem(.separator()); continue }
-                let mi = NSMenuItem(title: item.title, action: nil, keyEquivalent: "")
-                if let s = item.systemImage {
-                    mi.image = NSImage(systemSymbolName: s, accessibilityDescription: nil)
-                }
-                if item.checked { mi.state = .on }
-                if item.destructive {
-                    mi.attributedTitle = NSAttributedString(string: item.title,
-                                                            attributes: [.foregroundColor: NSColor.systemRed])
-                }
-                if !item.children.isEmpty {
-                    mi.submenu = build(item.children)
-                } else {
-                    let t = MenuActionTarget(item.action)
-                    targets.append(t)
-                    mi.target = t
-                    mi.action = #selector(MenuActionTarget.fire)
-                }
-                menu.addItem(mi)
+    }
+}
+
+extension NSMenu {
+    /// A native menu for `items` (each item keeps its own action target).
+    static func wl(_ items: [WLMenuItem]) -> NSMenu {
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        for item in items {
+            if item.isDivider { menu.addItem(.separator()); continue }
+            let mi = NSMenuItem(title: item.title, action: nil, keyEquivalent: "")
+            if let s = item.systemImage {
+                mi.image = NSImage(systemSymbolName: s, accessibilityDescription: nil)
             }
-            return menu
+            if item.checked { mi.state = .on }
+            if item.destructive {
+                mi.attributedTitle = NSAttributedString(string: item.title,
+                                                        attributes: [.foregroundColor: NSColor.systemRed])
+            }
+            if !item.children.isEmpty {
+                mi.submenu = wl(item.children)
+            } else {
+                let t = MenuActionTarget(item.action)
+                mi.representedObject = t   // NSMenuItem's target is weak
+                mi.target = t
+                mi.action = #selector(MenuActionTarget.fire)
+            }
+            menu.addItem(mi)
         }
+        return menu
     }
 }
 
