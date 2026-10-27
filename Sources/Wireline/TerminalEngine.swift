@@ -45,6 +45,8 @@ protocol TerminalEngine: NSView, TerminalScrollable {
     /// ⌘V with only an image on the clipboard (PNG data). True when handled;
     /// otherwise the paste goes through as usual.
     var onPasteImage: ((Data) -> Bool)? { get set }
+    /// The right-click menu, when no program has the mouse.
+    var contextMenuItems: (() -> [WLMenuItem])? { get set }
     /// A click landed in this pane.
     var onClickFocus: (() -> Void)? { get set }
     /// Whether this view's session is the active pane.

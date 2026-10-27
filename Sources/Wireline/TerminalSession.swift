@@ -546,9 +546,24 @@ final class WirelineTerminalView: TerminalView, TerminalEngine {
 
     var onPasteImage: ((Data) -> Bool)?
 
+    var contextMenuItems: (() -> [WLMenuItem])?
+
+    override func menu(for event: NSEvent) -> NSMenu? { contextMenuItems.map { NSMenu.wl($0()) } }
+
     override func paste(_ sender: Any) {
         if let png = ImagePaste.png(), onPasteImage?(png) == true { return }
-        super.paste(sender)
+        let bracketed = getTerminal().bracketedPasteMode
+        guard let text = NSPasteboard.general.string(forType: .string),
+              PasteConfirmPolicy.current.shouldAsk(text, bracketed: bracketed)
+        else { return super.paste(sender) }
+        PasteConfirmCenter.shared.ask(text, from: self) { [weak self] choice in
+            guard let self, choice != .cancel else { return }
+            // What SwiftTerm's own paste sends: newlines as CR, bracketed when asked.
+            var body = choice == .singleLine ? PasteConfirmCenter.singleLine(text) : text
+            body = body.replacingOccurrences(of: "\r\n", with: "\r").replacingOccurrences(of: "\n", with: "\r")
+            let bracketedNow = self.getTerminal().bracketedPasteMode
+            self.send(txt: bracketedNow ? "\u{1b}[200~" + body + "\u{1b}[201~" : body)
+        }
     }
 
     /// A click landed in this pane: make it the active split.

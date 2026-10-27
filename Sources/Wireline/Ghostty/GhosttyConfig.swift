@@ -56,12 +56,14 @@ enum GhosttyConfig {
             "confirm-close-surface = false",
             "mouse-hide-while-typing = true",
             // SwiftTerm's behaviour: Option is Meta, nothing copies on select,
-            // programs may use the clipboard (OSC 52), pastes aren't vetted.
+            // programs may use the clipboard (OSC 52). Multi-line pastes go
+            // to Wireline's confirm card (confirm_read_clipboard_cb).
             "macos-option-as-alt = true",
             "copy-on-select = false",
             "clipboard-read = allow",
             "clipboard-write = allow",
-            "clipboard-paste-protection = false",
+            "clipboard-paste-protection = \(PasteConfirmPolicy.current != .never)",
+            "clipboard-paste-bracketed-safe = \(PasteConfirmPolicy.current == .unlessBracketed)",
             "desktop-notifications = false",
             // No Ghostty keybindings: ⌘ shortcuts belong to Wireline's menus
             // (they reach the view as menu actions — copy:, paste: …). Only

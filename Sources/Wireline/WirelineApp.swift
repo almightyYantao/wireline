@@ -167,6 +167,8 @@ struct WirelineApp: App {
                     .shortcut(.jumpToNextPrompt, keys)
                 Button("Copy Last Command Output") { copyLastOutput(sessions) }
                     .shortcut(.copyLastOutput, keys)
+                Button("Open Latest Answer in Reader") { AgentReader.open(sessions.activeSession) }
+                    .shortcut(.openAgentReader, keys)
                 Button("Reopen Closed Tab") { sessions.reopenClosed(store: store) }
                     .shortcut(.reopenClosedTab, keys)
                     .disabled(!sessions.canReopenClosed)
@@ -282,6 +284,14 @@ struct WirelineApp: App {
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentSize)
         .defaultPosition(.bottomTrailing)
+
+        // A coding agent's latest answer as Markdown (AgentReader).
+        Window("Wireline Reader", id: "reader") {
+            AgentReaderView()
+                .environment(loc)
+        }
+        .windowStyle(.hiddenTitleBar)
+        .defaultSize(width: 680, height: 720)
 
         // Menu-bar extra: a live count of open items plus quick add / toggle,
         // so the to-do list is one click away without opening a window. Removed

@@ -297,9 +297,9 @@ private func ghosttyReadClipboard(_ userdata: UnsafeMutableRawPointer?, _ locati
     return GHOSTTY_CLIPBOARD_READ_STARTED
 }
 
-/// Only reached for reads the config says to confirm. Wireline allows OSC 52
-/// and turns paste protection off, so this is a fallback: a paste the user
-/// asked for goes through, anything else is denied.
+/// Reached for a paste libghostty calls unsafe under the paste-confirm policy
+/// (multi-line; bracketed paste counts as safe unless the policy is "always"):
+/// Wireline's card asks. Anything else that needs confirming is denied.
 private func ghosttyConfirmReadClipboard(_ userdata: UnsafeMutableRawPointer?,
                                          _ confirm: UnsafePointer<ghostty_clipboard_confirm_s>?,
                                          _ state: UnsafeMutableRawPointer?, _ request: ghostty_clipboard_request_e) {
@@ -322,11 +322,23 @@ private func ghosttyConfirmReadClipboard(_ userdata: UnsafeMutableRawPointer?,
     let availableCopy = available
     onMain {
         guard let s = GhosttyRuntime.shared.view(id)?.surface?.raw else { return }
-        if isPaste {
-            GhosttyRuntime.complete(s, contents: sendable.map { ($0.mime, $0.data) }, available: availableCopy,
-                                    state: stateBits, confirmed: true)
-        } else {
-            ghostty_surface_deny_clipboard_request(s, UnsafeMutableRawPointer(bitPattern: stateBits))
+        guard isPaste, let view = GhosttyRuntime.shared.view(id) else {
+            return ghostty_surface_deny_clipboard_request(s, UnsafeMutableRawPointer(bitPattern: stateBits))
+        }
+        let text = sendable.first { $0.mime.hasPrefix("text/plain") }.map { String(decoding: $0.data, as: UTF8.self) } ?? ""
+        PasteConfirmCenter.shared.ask(text, from: view) { choice in
+            guard let s = GhosttyRuntime.shared.view(id)?.surface?.raw else { return }
+            var items = sendable.map { ($0.mime, $0.data) }
+            switch choice {
+            case .cancel:
+                return ghostty_surface_deny_clipboard_request(s, UnsafeMutableRawPointer(bitPattern: stateBits))
+            case .singleLine:
+                let one = Data(PasteConfirmCenter.singleLine(text).utf8)
+                items = items.map { $0.0.hasPrefix("text/plain") ? ($0.0, one) : $0 }
+            case .paste:
+                break
+            }
+            GhosttyRuntime.complete(s, contents: items, available: availableCopy, state: stateBits, confirmed: true)
         }
     }
 }

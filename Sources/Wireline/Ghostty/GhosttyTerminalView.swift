@@ -54,6 +54,8 @@ final class GhosttyTerminalView: NSView, TerminalEngine {
     var onTitleReport: ((String) -> Void)?
     var onOpenPath: ((String) -> Void)?
     var onPasteImage: ((Data) -> Bool)?
+    var contextMenuItems: (() -> [WLMenuItem])?
+    override func menu(for event: NSEvent) -> NSMenu? { contextMenuItems.map { NSMenu.wl($0()) } }
     var onClickFocus: (() -> Void)?
     var isActivePane: (() -> Bool)?
 
@@ -247,6 +249,9 @@ final class GhosttyTerminalView: NSView, TerminalEngine {
         windowObservers.append(center.addObserver(forName: NSWindow.didChangeScreenNotification,
                                                   object: window, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.updateScreen() }
+        })
+        windowObservers.append(center.addObserver(forName: .pasteConfirmPolicyChanged, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.applyConfig() }
         })
         responderObservation = window.observe(\.firstResponder, options: [.new]) { [weak self] _, _ in
             DispatchQueue.main.async { MainActor.assumeIsolated { self?.refreshFocus() } }
