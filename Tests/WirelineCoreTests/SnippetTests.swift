@@ -191,6 +191,18 @@ final class SnippetTests: XCTestCase {
         XCTAssertEqual(s[0].folder, "Docker")
     }
 
+    func testEmptyFoldersListAndRename() throws {
+        let s = [Snippet(titleZh: "a", titleEn: "", command: "1", folder: "Ops")]
+        XCTAssertEqual(SnippetFolders.all(in: s, extra: ["Web/Nginx", "Ops", " / "]), ["Ops", "Web", "Web/Nginx"])
+        XCTAssertEqual(SnippetFolders.rename("Web", to: "Infra", in: ["Web/Nginx", "Web", "Ops"]),
+                       ["Infra/Nginx", "Infra", "Ops"])
+        XCTAssertEqual(SnippetFolders.rename("Web", to: "Ops", in: ["Web", "Ops"]), ["Ops"])
+        // An old or partial meta file still decodes.
+        XCTAssertEqual(try JSONDecoder().decode(SnippetLibraryMeta.self, from: Data("{}".utf8)), SnippetLibraryMeta())
+        let m = SnippetLibraryMeta(emptyFolders: ["X"], seenBuiltins: ["disk"])
+        XCTAssertEqual(try JSONDecoder().decode(SnippetLibraryMeta.self, from: JSONEncoder().encode(m)), m)
+    }
+
     func testPreFolderFileGetsBuiltinIDsOnce() throws {
         let file = """
         [{"id":"\(UUID().uuidString)","titleZh":"磁盘占用","titleEn":"Disk usage","command":"df -h","platform":"any"},

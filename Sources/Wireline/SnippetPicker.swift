@@ -138,6 +138,10 @@ struct SnippetPicker: View {
     @State private var batchRun: [Snippet]?
     @State private var notice: String?
     @FocusState private var searchFocused: Bool
+    /// Naming a folder inline: nil = new, else the folder being renamed.
+    @State private var folderEdit: String??
+    @State private var folderName = ""
+    @FocusState private var folderNameFocused: Bool
 
     private var platform: PanePlatform { store.platform(for: session) }
     private var hostGroup: String? { hosts.hosts.first { $0.alias == session.alias }?.group }
@@ -170,7 +174,7 @@ struct SnippetPicker: View {
                                 onBack: { self.step = nil; focusSearch() },
                                 onDone: { SnippetPanel.shared.close() })
             } else {
-                searchBar
+                if folderEdit != nil { folderNameBar } else { searchBar }
                 WLFormDivider()
                 list
                 WLFormDivider()
@@ -189,6 +193,7 @@ struct SnippetPicker: View {
         .onDisappear { if sessions.activeID == session.id { sessions.focusActiveTerminal() } }
         .onExitCommand {
             if editing != nil { closeEditor() }
+            else if folderEdit != nil { folderEdit = nil; focusSearch() }
             else if batchRun != nil { batchRun = nil; focusSearch() }
             else if step != nil { step = nil; focusSearch() }
             else if selecting { endSelecting() }
@@ -358,6 +363,11 @@ struct SnippetPicker: View {
                     folder = f
                 }
             }
+            Divider()
+            Button(loc("新建文件夹…", "New Folder…")) { beginFolderEdit(nil) }
+            if let folder {
+                Button(loc("重命名“\(folder)”…", "Rename “\(folder)”…")) { beginFolderEdit(folder) }
+            }
         } label: {
             HStack(spacing: 3) {
                 Image(systemName: "folder").font(.system(size: 10))
@@ -368,6 +378,44 @@ struct SnippetPicker: View {
         .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
         .help(loc("按文件夹筛选", "Filter by folder"))
         .onChange(of: folder) { highlighted = 0 }
+    }
+
+    private var folderNameBar: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "folder.badge.plus").font(.system(size: 12)).foregroundStyle(WL.textDim)
+            TextField(folderEdit == .some(nil) ? loc("新文件夹（可写 父/子）", "New folder (parent/child)")
+                                               : loc("新名称（留空 = 移到顶层）", "New name (empty = top level)"),
+                      text: $folderName)
+                .textFieldStyle(.plain).font(WL.body).foregroundStyle(WL.textPrimary)
+                .focused($folderNameFocused)
+                .onSubmit(commitFolderEdit)
+            Button(loc("取消", "Cancel")) { folderEdit = nil; focusSearch() }.buttonStyle(.wlSecondary)
+            Button(loc("确定", "OK"), action: commitFolderEdit).buttonStyle(.wlPrimary)
+                .disabled(folderEdit == .some(nil) && SnippetFolders.normalize(folderName) == nil)
+        }
+        .padding(.horizontal, 12).padding(.vertical, 7)
+        .wlSearchCapsule(focused: folderNameFocused)
+        .padding(8)
+    }
+
+    private func beginFolderEdit(_ old: String?) {
+        folderName = old ?? folder.map { $0 + "/" } ?? ""
+        folderEdit = .some(old)
+        DispatchQueue.main.async { folderNameFocused = true }
+    }
+
+    private func commitFolderEdit() {
+        guard let edit = folderEdit else { return }
+        let name = SnippetFolders.normalize(folderName)
+        if let old = edit {
+            if name != old { store.renameFolder(old, to: name) }
+            folder = name
+        } else if let name {
+            store.addFolder(name)
+            folder = name
+        } else { return }
+        folderEdit = nil
+        focusSearch()
     }
 
     private func toggle(_ id: UUID) {
