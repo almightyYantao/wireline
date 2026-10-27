@@ -230,6 +230,23 @@ final class SnippetTests: XCTestCase {
         XCTAssertEqual(Snippet.restoringDefaults(out).added, 0)
     }
 
+    func testUnseenDefaultsAddedOnceAndDeletedStayDeleted() {
+        XCTAssertTrue(Snippet.builtinIDsBeforeTracking.isSubset(of: Set(Snippet.defaults.compactMap(\.builtinID))))
+        // A library that has seen everything but "disk" and "mem" (one deleted, one new).
+        var seen = Set(Snippet.defaults.compactMap(\.builtinID))
+        seen.subtract(["disk", "mem"])
+        let mine = Snippet.defaults.filter { $0.builtinID != "disk" && $0.builtinID != "mem" && $0.builtinID != "load" }
+        let (out, newSeen, added) = Snippet.addingUnseenDefaults(mine, seen: seen)
+        XCTAssertEqual(added, 2)
+        XCTAssertEqual(Set(out.compactMap(\.builtinID)), Set(Snippet.defaults.compactMap(\.builtinID)).subtracting(["load"]),
+                       "\"load\" was seen and deleted")
+        XCTAssertEqual(newSeen, Set(Snippet.defaults.compactMap(\.builtinID)))
+        // Next launch: nothing more, even after deleting one.
+        XCTAssertEqual(Snippet.addingUnseenDefaults(Array(out.dropFirst()), seen: newSeen).added, 0)
+        // Present but unseen (e.g. restored by hand) isn't duplicated.
+        XCTAssertEqual(Snippet.addingUnseenDefaults(Snippet.defaults, seen: []).added, 0)
+    }
+
     func testAtomicWriteReplaces() throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

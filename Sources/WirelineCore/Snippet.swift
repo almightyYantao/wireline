@@ -378,6 +378,24 @@ public struct Snippet: Identifiable, Codable, Sendable, Equatable {
         return (current + missing, missing.count)
     }
 
+    /// Built-ins that shipped before Wireline started remembering which ones
+    /// it had offered. A library without that record has seen all of these,
+    /// so ones the user deleted earlier don't come back.
+    public static let builtinIDsBeforeTracking: Set<String> = [
+        "sysinfo", "sysinfo-mac", "disk", "du-top", "mem", "mem-mac", "load", "top", "top-mac",
+        "findproc", "ports", "ports-mac", "port-who", "docker-ps", "docker-logs", "docker-stats",
+        "tail", "journal",
+    ]
+
+    /// Append the built-ins never offered before (not in `seen`); the new
+    /// `seen` covers every built-in, so a deleted one stays deleted.
+    public static func addingUnseenDefaults(_ current: [Snippet], seen: Set<String>)
+        -> (snippets: [Snippet], seen: Set<String>, added: Int) {
+        let have = Set(current.compactMap(\.builtinID))
+        let new = defaults.filter { !seen.contains($0.builtinID ?? "") && !have.contains($0.builtinID ?? "") }
+        return (current + new, seen.union(defaults.compactMap(\.builtinID)), new.count)
+    }
+
     /// The commands of the built-ins as they shipped before the redesign, keyed
     /// by command: an untouched old default gets the new platform on migration.
     public static let legacyDefaultPlatforms: [String: SnippetPlatform] = [

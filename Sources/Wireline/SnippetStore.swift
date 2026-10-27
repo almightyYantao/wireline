@@ -38,6 +38,7 @@ final class SnippetStore {
         guard let data = try? Data(contentsOf: fileURL) else {
             snippets = Snippet.defaults
             save()
+            addUnseenDefaults()
             return
         }
         do {
@@ -49,11 +50,25 @@ final class SnippetStore {
                 if !FileManager.default.fileExists(atPath: backup.path) { try? data.write(to: backup) }
                 save()
             }
+            addUnseenDefaults()
         } catch {
             // Unreadable: show the defaults, but never overwrite the user's file
             // with them — `canSave` stays false until they change something.
             snippets = Snippet.defaults
             canSave = false
+        }
+    }
+
+    /// Templates shipped by a newer version show up once; deleted ones don't
+    /// come back (only "restore built-ins" brings those).
+    private func addUnseenDefaults() {
+        let seen = meta.seenBuiltins.map(Set.init)
+            ?? Snippet.builtinIDsBeforeTracking.union(snippets.compactMap(\.builtinID))
+        let (all, newSeen, added) = Snippet.addingUnseenDefaults(snippets, seen: seen)
+        if added > 0 { snippets = all; save() }
+        if meta.seenBuiltins.map(Set.init) != newSeen {
+            meta.seenBuiltins = newSeen.sorted()
+            saveMeta()
         }
     }
 
