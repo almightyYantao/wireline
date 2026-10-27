@@ -5,7 +5,8 @@ import Foundation
 /// Follows what the user types at a shell prompt, from the bytes sent to the
 /// PTY. It only trusts plain typing: any escape sequence (arrows, history,
 /// paste), Tab (the shell's own completion) or unknown control key makes the
-/// line unknown until the next Enter / Ctrl-C.
+/// line unknown until the next Enter / Ctrl-C, or until the app reads it
+/// back from the screen (`resync`).
 public struct CompletionLineTracker: Sendable, Equatable {
     public private(set) var line = ""
     public private(set) var isValid = true
@@ -25,6 +26,27 @@ public struct CompletionLineTracker: Sendable, Equatable {
         isValid = false
         line = ""
         pendingUTF8 = []
+    }
+
+    /// Take the line as read back from the screen.
+    public mutating func resync(_ line: String) {
+        self.line = line
+        isValid = true
+        pendingUTF8 = []
+    }
+
+    /// The input after a prompt, from the cursor's screen row: `prompt` is what
+    /// was left of the cursor at the empty prompt, `before` / `after` the row
+    /// split at the cursor now. Nil when it can't be trusted — the prompt moved
+    /// or changed, or the cursor isn't at the end of the input (text right of
+    /// it, other than a right prompt after a wide gap).
+    public static func lineFromScreen(prompt: String, before: String, after: String) -> String? {
+        guard !prompt.trimmingCharacters(in: .whitespaces).isEmpty, before.hasPrefix(prompt) else { return nil }
+        if let first = after.first, first != " " { return nil }
+        if !after.isEmpty, !after.hasPrefix("   ") { return nil }
+        let line = String(before.dropFirst(prompt.count))
+        guard !line.contains(where: { $0.isNewline || $0 == "\u{0}" }) else { return nil }
+        return line
     }
 
     /// Feed bytes going to the PTY. Returns the lines submitted with Enter
@@ -123,11 +145,14 @@ public struct Completion: Equatable, Hashable, Sendable {
     public var display: String
     /// The text to type after what the user already has.
     public var insert: String
+    /// Characters to erase first (a fuzzy match retypes the whole word).
+    public var erase: Int
 
-    public init(kind: Kind, display: String, insert: String) {
+    public init(kind: Kind, display: String, insert: String, erase: Int = 0) {
         self.kind = kind
         self.display = display
         self.insert = insert
+        self.erase = erase
     }
 }
 
@@ -237,11 +262,15 @@ public enum CompletionEngine {
         func add(_ kind: Completion.Kind, _ items: [String], escape: Bool = true) {
             let typed = ctx.current
             if typed.isEmpty, !offersEmpty(ctx) { return }
-            for item in rank(items, prefix: typed) where item != typed {
-                let rest = String(item.dropFirst(typed.count))
+            // Retyping the word is only safe when it's on the line as typed (no quotes / escapes).
+            let raw = ctx.line == typed || ctx.line.hasSuffix(" " + typed)
+            let fuzzy = raw && typed.count - pathDirectoryPart(typed).count >= 2
+            for item in rank(items, prefix: typed, fuzzy: fuzzy) where item != typed {
+                let prefix = item.hasPrefix(typed)
+                let rest = prefix ? String(item.dropFirst(typed.count)) : item
                 let insert = (escape ? shellEscape(rest) : rest) + (item.hasSuffix("/") ? "" : " ")
                 guard seen.insert(item).inserted else { continue }
-                out.append(Completion(kind: kind, display: item, insert: insert))
+                out.append(Completion(kind: kind, display: item, insert: insert, erase: prefix ? 0 : typed.count))
             }
         }
 
@@ -276,12 +305,33 @@ public enum CompletionEngine {
         return Array(out.prefix(limit))
     }
 
-    /// Case-sensitive prefix matches (accepting only appends, so the typed text
-    /// must match exactly), shorter then alphabetical; nothing typed keeps input order.
-    static func rank(_ items: [String], prefix: String) -> [String] {
+    /// Case-sensitive prefix matches first, shorter then alphabetical; then,
+    /// with `fuzzy`, case-insensitive subsequence matches, tightest first.
+    /// Nothing typed keeps input order.
+    static func rank(_ items: [String], prefix: String, fuzzy: Bool = false) -> [String] {
         if prefix.isEmpty { return items }
-        return items.filter { $0.hasPrefix(prefix) }
-            .sorted { $0.count != $1.count ? $0.count < $1.count : $0 < $1 }
+        let byLength: (String, String) -> Bool = { $0.count != $1.count ? $0.count < $1.count : $0 < $1 }
+        let exact = items.filter { $0.hasPrefix(prefix) }.sorted(by: byLength)
+        guard fuzzy else { return exact }
+        let scored = items.compactMap { item -> (String, Int)? in
+            guard !item.hasPrefix(prefix), let score = subsequenceScore(prefix, in: item) else { return nil }
+            return (item, score)
+        }
+        return exact + scored.sorted { $0.1 != $1.1 ? $0.1 < $1.1 : byLength($0.0, $1.0) }.map(\.0)
+    }
+
+    /// Lower is better: characters skipped between the first and last match,
+    /// plus how far in the first match starts. Nil when `needle` isn't a subsequence.
+    static func subsequenceScore(_ needle: String, in haystack: String) -> Int? {
+        let n = Array(needle.lowercased()), h = Array(haystack.lowercased())
+        var i = 0, first = -1, last = 0
+        for (j, ch) in h.enumerated() where i < n.count && ch == n[i] {
+            if first < 0 { first = j }
+            last = j
+            i += 1
+        }
+        guard i == n.count else { return nil }
+        return (last - first + 1 - n.count) * 2 + first
     }
 
     /// Full words for path candidates: the typed directory part + each entry.
