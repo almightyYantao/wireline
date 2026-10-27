@@ -20,6 +20,8 @@ public enum AgentAnswerExtractor {
         var blocks: [[String]] = []
         for line in lines[start..<end] {
             if isSpinner(line) { continue }
+            // Claude Code's `∴ Thinking…` block: kept out like a tool block.
+            if marked(line, ["∴"]) { blocks.append([thinkingHeader]); continue }
             if isAnswerStart(line) { blocks.append([String(line.dropFirst().drop { $0 == " " })]) }
             else if !blocks.isEmpty { blocks[blocks.count - 1].append(dedent(line)) }
         }
@@ -64,6 +66,7 @@ public enum AgentAnswerExtractor {
         return String(out)
     }
 
+    private static let thinkingHeader = "\u{0}thinking"
     private static let answerMarks: Set<Character> = ["⏺", "●", "•", "✦"]
     private static let userMarks: Set<Character> = [">", "❯", "›"]
     private static let spinnerMarks: Set<Character> = ["✻", "✶", "✳", "✢", "✽", "·", "*", "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
@@ -92,10 +95,14 @@ public enum AgentAnswerExtractor {
 
     private static let codexToolVerbs = ["Ran ", "Running ", "Explored", "Exploring", "Edited ", "Added ", "Deleted ",
                                          "Updated Plan", "Read ", "Search ", "List ", "Waited", "Called ", "Proposed Change",
-                                         "Change Approved", "Interrupted"]
+                                         "Change Approved", "Interrupted", "Working (", "Thinking"]
 
     static func isTool(_ block: [String], agent: CodingAgent?) -> Bool {
-        guard let header = block.first else { return true }
+        guard let header = block.first, header != thinkingHeader else { return true }
+        // Collapsed tool groups: `Read 3 files (ctrl+o to expand)`, `Searched for 2 patterns, read 1 file`.
+        if header.range(of: #"\(ctrl\+\w to expand\)$"#, options: .regularExpression) != nil { return true }
+        if header.range(of: #"^(Read|Searched for|Listed|Wrote|Updated|Found) \d+ "#, options: .regularExpression) != nil,
+           header.split(separator: " ").count <= 10 { return true }
         if block.dropFirst().contains(where: { l in
             let t = l.drop { $0 == " " }
             return t.hasPrefix("⎿") || t.hasPrefix("└")
