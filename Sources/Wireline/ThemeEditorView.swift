@@ -54,7 +54,8 @@ struct ThemeEditorView: View {
         VStack(alignment: .leading, spacing: 0) {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 2) {
-                    libGroup(loc("内置", "Built-in"), AppTheme.builtIns)
+                    libGroup(loc("内置", "Built-in"), AppTheme.colorSchemes)
+                    libGroup(loc("设计风格", "Design styles"), AppTheme.styled)
                     if !store.customThemes.isEmpty {
                         libGroup(loc("自定义", "Custom"), store.customThemes)
                     }
