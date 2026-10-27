@@ -9,6 +9,8 @@ struct PaletteCommand: Identifiable {
     /// still finds "Settings" and an English one finds "设置".
     var keywords: String = ""
     var subtitle: String? = nil
+    /// Search words to emphasise in a host row.
+    var highlight: [String] = []
     let category: String
     let systemImage: String
     let tint: Color
@@ -202,13 +204,16 @@ struct CommandPaletteView: View {
     /// Hosts first: fuzzy-ranked when typing, most recently used when empty.
     private func hostCommands(_ q: String) -> [PaletteCommand] {
         let hosts: [Host]
+        var notes: [String: String] = [:]
         if q.isEmpty {
             hosts = store.hosts.sorted {
                 let a = store.lastConnected[$0.alias] ?? .distantPast, b = store.lastConnected[$1.alias] ?? .distantPast
                 return a != b ? a > b : $0.alias.localizedCaseInsensitiveCompare($1.alias) == .orderedAscending
             }
         } else {
-            hosts = store.search(q)
+            let found = store.matches(q)
+            hosts = found.map(\.host)
+            for m in found { notes[m.host.alias] = hostMatchNote(m) }
         }
         return hosts.map { host in
             let s = store.statuses[host.alias] ?? .unknown
@@ -219,7 +224,9 @@ struct CommandPaletteView: View {
             case .unknown: ""
             }
             return PaletteCommand(
-                title: host.alias, subtitle: host.connectionSummary, category: loc("连接", "Connect"),
+                title: host.alias,
+                subtitle: [host.connectionSummary, notes[host.alias]].compactMap { $0 }.joined(separator: " · "),
+                highlight: q.isEmpty ? [] : HostQuery(q).highlightTerms, category: loc("连接", "Connect"),
                 systemImage: "network", tint: store.groupColor(forAlias: host.alias)?.color ?? WL.green,
                 badge: text.isEmpty ? nil : (text, s.tagColor)) {
                 connectHost(host, store: store, sessions: sessions, openWindow: openWindow)
@@ -301,6 +308,8 @@ struct CommandPaletteView: View {
             },
             PaletteCommand(title: loc("复制上一条命令的输出", "Copy Last Command Output"), keywords: "复制上一条命令的输出" + " " + "Copy Last Command Output", category: actions,
                            systemImage: "doc.on.clipboard", tint: WL.teal) { copyLastOutput(sessions) },
+            PaletteCommand(title: loc("在阅读器中打开最近回答", "Open Latest Answer in Reader"), keywords: "在阅读器中打开最近回答 AI Claude Codex" + " " + "Open Latest Answer in Reader",
+                           category: actions, systemImage: "doc.richtext", tint: WL.purple) { AgentReader.open(sessions.activeSession) },
             PaletteCommand(title: loc("快捷终端", "Quick Terminal"), keywords: "快捷终端" + " " + "Quick Terminal", category: actions,
                            systemImage: "rectangle.topthird.inset.filled", tint: WL.green) {
                 QuickTerminalController.shared.toggle()
@@ -310,6 +319,28 @@ struct CommandPaletteView: View {
             PaletteCommand(title: loc("设置", "Settings"), keywords: "设置" + " " + "Settings", category: actions,
                            systemImage: "gearshape", tint: WL.textDim) { post(.showSettings) },
         ]
+
+        // Named workspace layouts.
+        let ws = loc("工作区", "Workspace")
+        out.append(PaletteCommand(title: loc("保存当前布局为工作区…", "Save Layout as Workspace…"),
+                                  keywords: "保存工作区 布局 Save Workspace layout", category: ws,
+                                  systemImage: "square.grid.2x2", tint: WL.green) { WorkspaceActions.save(sessions) })
+        for w in WorkspaceStore.shared.workspaces {
+            let sub = loc("\(w.tabs.count) 个标签 · \(w.paneCount) 个窗格", "\(w.tabs.count) tabs · \(w.paneCount) panes")
+            out += [
+                PaletteCommand(title: loc("打开工作区：", "Open Workspace: ") + w.name,
+                               keywords: "打开工作区 Open Workspace " + w.name, subtitle: sub, category: ws,
+                               systemImage: "square.grid.2x2", tint: WL.teal) {
+                    WorkspaceActions.open(w, sessions: sessions, store: store)
+                },
+                PaletteCommand(title: loc("重命名工作区：", "Rename Workspace: ") + w.name,
+                               keywords: "重命名工作区 Rename Workspace " + w.name, category: ws,
+                               systemImage: "pencil", tint: WL.textDim) { WorkspaceActions.rename(w) },
+                PaletteCommand(title: loc("删除工作区：", "Delete Workspace: ") + w.name,
+                               keywords: "删除工作区 Delete Workspace " + w.name, category: ws,
+                               systemImage: "trash", tint: WL.red) { WorkspaceActions.delete(w) },
+            ]
+        }
 
         // Snippets for the active pane: the ones that suit it first, then the
         // ones used most / lately; the rest dimmed. The title shows in the UI
@@ -355,11 +386,11 @@ private struct PaletteRow: View {
                             in: RoundedRectangle(cornerRadius: WL.radius(8), style: .continuous))
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 6) {
-                    Text(command.title).font(WL.body).foregroundStyle(WL.textPrimary).lineLimit(1)
+                    Text(highlighted(command.title, command.highlight)).font(WL.body).foregroundStyle(WL.textPrimary).lineLimit(1)
                     if let s = command.snippet { SnippetBadges(snippet: s) }
                 }
                 if let sub = command.subtitle {
-                    Text(sub).font(command.snippet == nil ? WL.caption : WL.mono(11))
+                    Text(highlighted(sub, command.highlight)).font(command.snippet == nil ? WL.caption : WL.mono(11))
                         .foregroundStyle(WL.textDim).lineLimit(1)
                 }
             }

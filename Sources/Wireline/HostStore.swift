@@ -8,6 +8,9 @@ import WirelineCore
 @Observable
 @MainActor
 final class HostStore {
+    /// The app's store, for sessions that need a host's credentials (they
+    /// don't hold the store).
+    static weak var current: HostStore?
     private(set) var document: SSHConfig.Document
     /// Mirrored into `PrivacyContext` so the AI masker knows the real addresses.
     private(set) var hosts: [Host] { didSet { PrivacyContext.setHosts(hosts) } }
@@ -236,6 +239,7 @@ final class HostStore {
         self.repository = repository
         self.keychain = keychain
         self.checker = checker
+        defer { Self.current = self }
         let saved = UserDefaults.standard.string(forKey: "terminalApp")
         self.terminalApp = saved.flatMap(TerminalApp.init) ?? .terminal
         self.autoCheckOnLaunch = UserDefaults.standard.object(forKey: "autoCheckOnLaunch") as? Bool ?? true
@@ -580,49 +584,10 @@ final class HostStore {
 
     // MARK: - Search (quick connect)
 
-    func search(_ query: String) -> [Host] {
-        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
-        guard !q.isEmpty else {
-            return hosts.sorted { $0.alias.localizedCaseInsensitiveCompare($1.alias) == .orderedAscending }
-        }
-        return hosts
-            .compactMap { host -> (Host, Int)? in
-                guard let score = Self.fuzzyScore(query: q, host: host) else { return nil }
-                return (host, score)
-            }
-            .sorted { $0.1 > $1.1 }
-            .map(\.0)
-    }
+    func search(_ query: String) -> [Host] { matches(query).map(\.host) }
 
-    /// Simple subsequence fuzzy match over alias/hostname/description/group.
-    static func fuzzyScore(query: String, host: Host) -> Int? {
-        let fields = [
-            (host.alias.lowercased(), 100),
-            ((host.hostname ?? "").lowercased(), 40),
-            ((host.descriptionText ?? "").lowercased(), 30),
-            ((host.group ?? "").lowercased(), 20)
-        ]
-        var best: Int?
-        for (field, weight) in fields where !field.isEmpty {
-            if field == query { best = max(best ?? 0, weight + 100) }
-            else if field.hasPrefix(query) { best = max(best ?? 0, weight + 50) }
-            else if field.contains(query) { best = max(best ?? 0, weight + 20) }
-            else if isSubsequence(query, of: field) { best = max(best ?? 0, weight) }
-        }
-        return best
-    }
-
-    static func isSubsequence(_ needle: String, of haystack: String) -> Bool {
-        var it = haystack.makeIterator()
-        for ch in needle {
-            var matched = false
-            while let h = it.next() {
-                if h == ch { matched = true; break }
-            }
-            if !matched { return false }
-        }
-        return true
-    }
+    /// Every host search box goes through this — see `HostQuery`.
+    func matches(_ query: String) -> [HostSearchMatch] { HostSearch.search(query, in: hosts) }
 }
 
 /// Terminal cursor shape; raw values double as the config-file spelling.

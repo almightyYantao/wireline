@@ -45,6 +45,8 @@ final class TerminalSession: Identifiable {
 
     /// Drives the prompt-inline AI command flow (⌘; or a `# …` request line).
     let inlineAI = InlineAIController()
+    /// Smart completion popup (local shells).
+    @ObservationIgnored private(set) lazy var completion = CompletionController(session: self)
     /// Name of the full-screen editor currently running (`"vim"`), else nil.
     /// Drives the vim cheat-sheet overlay.
     var activeEditor: String?
@@ -61,6 +63,11 @@ final class TerminalSession: Identifiable {
     /// prompt has gone away). Drives the "running…" badge shown on a backgrounded
     /// tab. Updated from the terminal view's prompt heuristic.
     var isBusy = false
+    /// The last OSC 133;D exit code, for the island's ✓ / ✕ when busy ends.
+    private var lastExitCode: Int?
+    private var busyGeneration = 0
+    /// How long a run lasts before the island shows it.
+    static let islandBusyDelay: TimeInterval = 3
     /// Name of the program in the foreground of a local shell (`vim`, `node`,
     /// `claude`), nil at the prompt. Picks the pane / tab icon.
     var foregroundName: String?
@@ -69,6 +76,14 @@ final class TerminalSession: Identifiable {
     /// agent sitting at its prompt isn't "running" even though its process is
     /// in the foreground.
     var agentState: CodingAgentTracker.State?
+    /// Which agent that is.
+    var agentKind: CodingAgent?
+    /// The Claude Code / Codex conversation last seen in this pane, so a
+    /// restored pane can resume it. Cleared when you quit the agent.
+    var aiResume: AIResume?
+    @ObservationIgnored private var codexSeenAt: Date?
+    /// A line to type once the shell is up (see `runWhenReady`).
+    @ObservationIgnored private var pendingLine: String?
 
     /// Coarse connection lifecycle for the animated status indicator: dialing
     /// (`connecting`) → server responding (`connected`) → process gone
@@ -275,7 +290,10 @@ final class TerminalSession: Identifiable {
         io.engine = terminalView
         terminalView.onInput = { [weak io, weak self] bytes in
             io?.send(bytes)
-            if let self { IslandCenter.shared.sessionInput(self) }
+            if let self {
+                self.completion.input(bytes)
+                IslandCenter.shared.sessionInput(self)
+            }
         }
         terminalView.onGridResize = { [weak io] in io?.gridDidChange() }
         io.onEditorChange = { [weak self] editor in
@@ -304,6 +322,7 @@ final class TerminalSession: Identifiable {
             switch event {
             case .started:
                 let token = self.commandMarks.started()
+                self.completion.commandStarted()
                 guard !local else { return }
                 DispatchQueue.main.asyncAfter(deadline: .now() + CommandMarkTracker.busyDelay) { [weak self] in
                     MainActor.assumeIsolated {
@@ -313,6 +332,8 @@ final class TerminalSession: Identifiable {
                 }
             case let .finished(exitCode, duration):
                 let wasBusy = self.commandMarks.finished()
+                self.lastExitCode = exitCode
+                self.completion.promptReady()
                 if !local, wasBusy || self.isBusy { self.applyBusy(false, elapsed: duration) }
                 self.notifyCommandFinished(elapsed: duration, exitCode: exitCode)
                 IslandCenter.shared.commandFinished(self, exitCode: exitCode, duration: duration)
@@ -323,10 +344,17 @@ final class TerminalSession: Identifiable {
             self?.connect.noteOutput()
             if let self { IslandCenter.shared.sessionOutput(self) }
         }
+        io.onBytes = { [weak self] bytes in
+            if let self { PhoneRelay.shared.output(self, bytes) }
+        }
         // Bells and desktop notifications (OSC 9 / 777 / 99): a coding agent
         // waiting for you, for the notch island.
         io.onAttention = { [weak self] message in
             if let self { IslandCenter.shared.sessionAttention(self, message: message) }
+        }
+        io.onAgentHook = { [weak self] event in
+            guard let self, case .ssh = self.kind else { return }
+            IslandCenter.shared.agentHook(self.id, event, remote: true)
         }
         io.onConnected = { [weak self] in
             guard let self, self.connectionState == .connecting else { return }
@@ -336,6 +364,7 @@ final class TerminalSession: Identifiable {
             guard let self else { return }
             self.connect.processExited()
             self.commandMarks.reset()
+            self.completion.disconnected()
             self.connectionState = .disconnected
             self.isRunning = false
             IslandCenter.shared.sessionGone(self.id)
@@ -348,6 +377,26 @@ final class TerminalSession: Identifiable {
             if let self { IslandCenter.shared.sessionTitle(self, title) }
         }
         terminalView.onOpenPath = { [weak self] path in self?.openPath(path) }
+        terminalView.onPasteImage = { [weak self] png in self?.pasteImage(png) ?? false }
+        terminalView.contextMenuItems = { [weak self] in
+            guard let self else { return [] }
+            let loc = Localizer.shared, view = self.terminalView
+            var items: [WLMenuItem] = [
+                .item(loc.t("复制", "Copy"), systemImage: "doc.on.doc") { NSApp.sendAction(Selector(("copy:")), to: view, from: nil) },
+                .item(loc.t("粘贴", "Paste"), systemImage: "doc.on.clipboard") { NSApp.sendAction(Selector(("paste:")), to: view, from: nil) },
+            ]
+            if self.agentState != nil {
+                items += [.divider, .item(loc.t("在阅读器中打开最近回答", "Open Latest Answer in Reader"),
+                                          systemImage: "doc.richtext") { AgentReader.open(self) }]
+            }
+            if case .ssh(let alias, _, _, _, _) = self.kind {
+                items += [.divider, .item(loc.t("在此主机安装 Claude Code hooks…", "Install Claude Code Hooks on This Host…"),
+                                          systemImage: "antenna.radiowaves.left.and.right") {
+                    AgentHookServer.confirmRemoteInstall(alias: alias)
+                }]
+            }
+            return items
+        }
         terminalView.onClickFocus = { [weak self] in
             guard let self, let store = self.store, store.activeID != self.id else { return }
             store.activeID = self.id
@@ -396,6 +445,7 @@ final class TerminalSession: Identifiable {
         switch kind {
         case .localShell:
             currentDirectory = path
+            if pendingLine != nil { DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in self?.flushPendingLine() } }
             guard !isManuallyRenamed else { return }
             let name = Self.tabTitle(forPath: path)
             if name != title { title = name }
@@ -440,6 +490,35 @@ final class TerminalSession: Identifiable {
             NotificationCenter.default.post(name: .aiOpenFiles, object: alias)
         case .sftp, .rdp:
             break
+        }
+    }
+
+    /// ⌘V with a screenshot: save it as a PNG where this session's programs can
+    /// read it (here, or the SSH host's /tmp) and type its path.
+    private func pasteImage(_ png: Data) -> Bool {
+        let t = Localizer.shared.t
+        switch kind {
+        case .localShell:
+            do {
+                terminalView.send(txt: ImagePaste.typed(try ImagePaste.saveLocal(png)))
+            } catch {
+                Notifier.post(title: t("图片粘贴失败", "Image paste failed"), body: error.localizedDescription, session: id)
+            }
+            return true
+        case .ssh:
+            guard let store = HostStore.current, let host = store.hosts.first(where: { $0.alias == alias }) else { return false }
+            let remote = "/tmp/" + ImagePaste.fileName()
+            Task { [weak self] in
+                do {
+                    try await FileBrowserModel.put(png, at: remote, host: host, store: store)
+                    self?.terminalView.send(txt: ImagePaste.typed(remote))
+                } catch {
+                    Notifier.post(title: t("图片上传失败", "Image upload failed"), body: error.localizedDescription, session: self?.id)
+                }
+            }
+            return true
+        case .sftp, .rdp:
+            return false
         }
     }
 
@@ -516,7 +595,7 @@ final class TerminalSession: Identifiable {
         let loc = Localizer.shared
         var body = loc.t("耗时 \(Int(elapsed)) 秒", "took \(Int(elapsed))s")
         if let exitCode, exitCode != 0 { body += loc.t(" · 退出码 \(exitCode)", " · exit \(exitCode)") }
-        Notifier.post(title: loc.t("命令完成 · \(title)", "Command finished · \(title)"), body: body)
+        Notifier.post(title: loc.t("命令完成 · \(title)", "Command finished · \(title)"), body: body, session: id)
     }
 
     /// Apply a busy-state change: update the badge and, when a run finishes in a
@@ -525,13 +604,34 @@ final class TerminalSession: Identifiable {
     private func applyBusy(_ busy: Bool, elapsed: TimeInterval) {
         guard busy != isBusy else { return }
         isBusy = busy
+        busyGeneration += 1
+        if busy {
+            lastExitCode = nil
+            // Only runs that last show on the island; short ones would just flicker.
+            let generation = busyGeneration
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.islandBusyDelay) { [weak self] in
+                MainActor.assumeIsolated {
+                    guard let self, self.isBusy, self.busyGeneration == generation else { return }
+                    IslandCenter.shared.busyChanged(self, busy: true, elapsed: 0, exitCode: nil)
+                }
+            }
+        } else {
+            // Polling can see a local job end just before the shell's 133;D
+            // brings its exit code: give that a moment.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                MainActor.assumeIsolated {
+                    guard let self, !self.isBusy else { return }
+                    IslandCenter.shared.busyChanged(self, busy: false, elapsed: elapsed, exitCode: self.lastExitCode)
+                }
+            }
+        }
         guard !busy, elapsed >= 5, NSApp.isActive else { return }
         let inActiveTab = store?.activeTab?.leafID(for: id) != nil
         guard !inActiveTab else { return }
         let loc = Localizer.shared
         Notifier.post(title: loc.t("运行完成 · \(title)", "Finished · \(title)"),
                       body: loc.t("该标签的任务已结束（耗时 \(Int(elapsed)) 秒）",
-                                  "This tab's task is done (\(Int(elapsed))s)"))
+                                  "This tab's task is done (\(Int(elapsed))s)"), session: id)
     }
 
     // MARK: - Foreground-process polling (local shells)
@@ -561,8 +661,10 @@ final class TerminalSession: Identifiable {
         case .job(let pgid, let n): (running, name) = (true, ForegroundProcess.identify(pgid) ?? n)
         }
         if foregroundName != name {
+            let was = foregroundName.flatMap(CodingAgent.init(processName:))
             foregroundName = name
             IslandCenter.shared.foregroundChanged(self)
+            noteCodingAgent(was: was, now: name.flatMap(CodingAgent.init(processName:)))
         }
         if running, !isBusy {
             busyStartedAt = Date()
@@ -572,6 +674,47 @@ final class TerminalSession: Identifiable {
             applyBusy(false, elapsed: elapsed)
             busyStartedAt = nil
         }
+    }
+
+    private func noteCodingAgent(was: CodingAgent?, now: CodingAgent?) {
+        if was != nil, now == nil { aiResume = nil; codexSeenAt = nil }
+        guard now == .codex, was != .codex else { return }
+        // Codex writes its rollout file shortly after starting (or after the
+        // first prompt): look a few times.
+        let since = Date().addingTimeInterval(-5)
+        codexSeenAt = since
+        for delay in [3.0, 20.0, 90.0] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard let self, self.codexSeenAt == since, self.aiResume?.agent != .codex else { return }
+                self.lookUpCodexSession()
+            }
+        }
+    }
+
+    /// The Codex conversation running here, from ~/.codex/sessions (read only).
+    func lookUpCodexSession() {
+        guard let since = codexSeenAt, let cwd = currentDirectory ?? startDirectory else { return }
+        Task.detached(priority: .utility) {
+            let found = CodingAgentSessions.latestCodex(cwd: cwd, since: since)
+            await MainActor.run { [weak self] in
+                guard let self, let found, self.codexSeenAt == since else { return }
+                self.aiResume = found
+                self.store?.persist()
+            }
+        }
+    }
+
+    /// Type `line` and Return once the shell has reported its directory (its
+    /// prompt is up), or after a few seconds at the latest.
+    func runWhenReady(_ line: String) {
+        pendingLine = line
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in self?.flushPendingLine() }
+    }
+
+    private func flushPendingLine() {
+        guard let line = pendingLine, isRunning else { pendingLine = nil; return }
+        pendingLine = nil
+        terminalView.send(txt: line + "\r")
     }
 
     func start() {
@@ -692,6 +835,8 @@ final class TerminalSession: Identifiable {
                 env.append("ZDOTDIR=\(shim.path)")
                 env.append("WIRELINE_USER_ZDOTDIR=\(userZDOTDIR)")
             }
+            // Lets Claude Code hooks in this shell report to this pane.
+            env += AgentHookServer.shared.environment(for: id)
             // Launch as a login shell (leading '-') so ~/.zprofile & ~/.zshrc load,
             // which is what gives the user their familiar prompt, theme, and colors.
             io.start(
@@ -948,6 +1093,9 @@ struct SessionSnapshot: Codable, Sendable {
     var agentID: UUID?
     /// An SSH session's ControlMaster socket (kept by an agent session's ssh).
     var controlSocket: String?
+    /// The coding-agent conversation in a local pane, to resume if its
+    /// process didn't survive.
+    var aiResume: AIResume?
 }
 
 /// The tab / split arrangement, saved next to the session list. Leaves refer to
@@ -1479,6 +1627,7 @@ final class SessionStore {
             let built = entry.sessions.map { item -> TerminalSession? in
                 guard let s = makeSession(from: item.snapshot, store: store) else { return nil }
                 s.pendingScrollback = item.scrollback.map { Data($0.utf8) }
+                resumeCodingAgent(in: s)
                 return s
             }
             guard built.contains(where: { $0 != nil }) else { continue }   // its hosts are gone
@@ -1692,7 +1841,8 @@ final class SessionStore {
         return SessionSnapshot(kind: kind, alias: s.alias, title: s.title,
                                scrollbackKey: s.scrollbackKey, manuallyRenamed: s.isManuallyRenamed,
                                directory: dir, agentID: agentID,
-                               controlSocket: agentID != nil && kind == .ssh ? s.controlSocket : nil)
+                               controlSocket: agentID != nil && kind == .ssh ? s.controlSocket : nil,
+                               aiResume: kind == .local ? s.aiResume : nil)
     }
 
     /// A fresh (not yet started) session for a snapshot; nil when its host is gone.
@@ -1724,6 +1874,7 @@ final class SessionStore {
                                     attachingToAgent: agentID)
         }
         built?.isManuallyRenamed = snap.manuallyRenamed ?? false
+        built?.aiResume = snap.aiResume
         return built
     }
 
@@ -1755,10 +1906,135 @@ final class SessionStore {
             if attach == nil { s.pendingScrollback = loadScrollback(s.scrollbackKey) }
             s.title = snap.title
             _ = spawn(s)                    // starts (start() replays scrollback first)
+            // Still running in the agent: it's attached, nothing to resume.
+            if attach == nil { resumeCodingAgent(in: s) }
         }
         restoreLayout(restored)
         persist()
         // Focus is re-asserted from WirelineApp's .task after the pet window opens
         // (which grabs key status), so we don't fight it with a racing call here.
+    }
+
+    // MARK: - Coding-agent resume
+
+    static let resumeAgentsKey = "resumeCodingAgents"
+    static var resumesCodingAgents: Bool { UserDefaults.standard.bool(forKey: resumeAgentsKey) }
+
+    /// With the setting on, type `claude --resume <id>` / `codex resume <id>`
+    /// into a fresh local pane whose conversation isn't live in another pane.
+    private func resumeCodingAgent(in s: TerminalSession) {
+        guard Self.resumesCodingAgents, case .localShell = s.kind,
+              let r = s.aiResume, let line = r.command else { return }
+        let live = sessions.contains {
+            $0 !== s && $0.isRunning && $0.agentKind != nil && $0.aiResume?.sessionID == r.sessionID
+        }
+        guard !live else { s.aiResume = nil; return }
+        s.runWhenReady(line)
+    }
+
+    // MARK: - Workspaces
+
+    /// This window's tabs as a workspace layout.
+    func workspaceTabs() -> (tabs: [WorkspaceTab], active: Int?) {
+        var out: [WorkspaceTab] = []
+        var active: Int?
+        for tab in tabs {
+            var order: [UUID] = []
+            guard let root = workspaceNode(tab, order: &order) else { continue }
+            if tab.id == activeTabID { active = out.count }
+            out.append(WorkspaceTab(name: tab.sessionIDs.count > 1 ? tabName(tab) : nil, root: root,
+                                    focusedPane: activeID.flatMap { order.firstIndex(of: $0) }))
+        }
+        return (out, active)
+    }
+
+    private func workspaceNode(_ n: PaneNode, order: inout [UUID]) -> WorkspaceNode? {
+        switch n {
+        case .leaf(_, let sid):
+            guard let s = session(sid) else { return nil }
+            order.append(sid)
+            return .pane(workspacePane(s))
+        case .branch(let id, let axis, let a, let b):
+            switch (workspaceNode(a, order: &order), workspaceNode(b, order: &order)) {
+            case (let x?, let y?):
+                return .split(vertical: axis == .vertical, ratio: Double(ratio(for: id)), first: x, second: y)
+            case (let x?, nil): return x
+            case (nil, let y?): return y
+            case (nil, nil): return nil
+            }
+        }
+    }
+
+    private func workspacePane(_ s: TerminalSession) -> WorkspacePane {
+        let snap = snapshot(of: s)
+        let kind: WorkspacePane.Kind = switch snap.kind {
+        case .local: .local
+        case .ssh: .ssh
+        case .sftp: .sftp
+        case .rdp: .rdp
+        }
+        return WorkspacePane(kind: kind, alias: kind == .local ? "" : snap.alias, title: snap.title,
+                             manuallyRenamed: snap.manuallyRenamed ?? false,
+                             directory: snap.directory, aiResume: snap.aiResume)
+    }
+
+    /// Open a workspace's tabs after the current ones: local shells start in
+    /// their saved directory, remote panes connect again. Panes whose host is
+    /// gone are left out. Returns how many panes opened.
+    @discardableResult
+    func openWorkspace(_ w: Workspace, store: HostStore) -> Int {
+        var opened = 0
+        var activeTab: PaneNode?
+        var focus: UUID?
+        for (ti, tab) in w.tabs.enumerated() {
+            var built: [TerminalSession?] = []
+            for p in tab.root.panes {
+                let kind: SessionSnapshot.Kind = switch p.kind {
+                case .local: .local
+                case .ssh: .ssh
+                case .sftp: .sftp
+                case .rdp: .rdp
+                }
+                let snap = SessionSnapshot(kind: kind, alias: p.alias, title: p.title,
+                                           manuallyRenamed: p.manuallyRenamed, directory: p.directory,
+                                           aiResume: kind == .local ? p.aiResume : nil)
+                // A fresh session, never the agent's: a workspace is a template,
+                // the agent's live sessions are reattached by launch restore.
+                built.append(makeSession(from: snap, store: store))
+            }
+            let live = built.compactMap { $0 }
+            guard !live.isEmpty else { continue }
+            for s in live { _ = spawn(s); resumeCodingAgent(in: s) }
+            // Leaves numbered in pane order, as `built` is.
+            var k = 0
+            func number(_ n: WorkspaceNode) -> LayoutSnapshot.Node {
+                switch n {
+                case .pane:
+                    defer { k += 1 }
+                    return .leaf(k)
+                case .split(let v, let r, let a, let b):
+                    return .branch(vertical: v, ratio: r, first: number(a), second: number(b))
+                }
+            }
+            let layout = number(tab.root)
+            guard let pane = buildPane(layout, id: { built.indices.contains($0) ? built[$0]?.id : nil })
+            else { continue }
+            tabs.append(pane)
+            if pane.sessionIDs.count > 1, let name = tab.name, let anchor = pane.sessionIDs.first {
+                tabNames[anchor] = name
+            }
+            opened += live.count
+            if ti == (w.activeTab ?? 0) || activeTab == nil {
+                activeTab = pane
+                focus = tab.focusedPane.flatMap { built.indices.contains($0) ? built[$0]?.id : nil }
+                    ?? pane.sessionIDs.first
+            }
+        }
+        if let activeTab {
+            activeTabID = activeTab.id
+            activeID = focus.flatMap { activeTab.leafID(for: $0) != nil ? $0 : nil } ?? activeTab.sessionIDs.first
+        }
+        persist()
+        return opened
     }
 }

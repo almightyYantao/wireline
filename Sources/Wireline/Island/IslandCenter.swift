@@ -72,6 +72,8 @@ final class IslandCenter {
             for s in sessions?.sessions ?? [] {
                 let state = agents[s.id]?.tracker.state
                 if s.agentState != state { s.agentState = state }
+                let kind = agents[s.id]?.agent
+                if s.agentKind != kind { s.agentKind = kind }
             }
         }
     }
@@ -82,9 +84,14 @@ final class IslandCenter {
         var tracker: CodingAgentTracker
         /// Recognised from its title over SSH (no foreground process to poll).
         var remote: Bool
+        /// The agent's own session id from its hooks (Codex thread id, …).
+        var agentSessionID: String? = nil
     }
 
     private init() {}
+
+    /// The coding agent seen running in a pane, if any.
+    func agent(in sessionID: UUID) -> CodingAgent? { agents[sessionID]?.agent }
 
     private var loc: Localizer { Localizer.shared }
 
@@ -298,6 +305,20 @@ final class IslandCenter {
         }
     }
 
+    /// An exact state from the agent's own hooks (`AgentHookServer`). Hooks
+    /// name their agent, so a pane we hadn't recognised yet is that one.
+    func agentHook(_ sid: UUID, _ event: AgentHooks.Event, agent: CodingAgent = .claude,
+                   agentSessionID: String? = nil, remote: Bool = false) {
+        guard sessions?.session(sid) != nil else { return }
+        var w = agents[sid] ?? AgentWatch(agent: agent, tracker: CodingAgentTracker(now: Date()), remote: remote)
+        if let agentSessionID { w.agentSessionID = agentSessionID }
+        let exclusive = AgentHookTarget.target(for: agent)?.complete ?? true
+        let change = w.tracker.hook(event, at: Date(), exclusive: exclusive)
+        agents[sid] = w
+        publishAgent(sid, change: change)
+        reschedule()
+    }
+
     func sessionOutput(_ s: TerminalSession) {
         guard var w = agents[s.id] else { return }
         let change = w.tracker.output(at: Date())
@@ -352,34 +373,46 @@ final class IslandCenter {
         publishAgent(s.id, change: hint == .working ? .startedWorking : nil)
     }
 
-    /// A shell command finished (OSC 133;D, or the prompt heuristic).
+    /// A shell command finished (OSC 133;D, or the prompt heuristic): over
+    /// SSH, the prompt being back means the agent we saw there exited. The
+    /// command's own row follows the session's busy state (`busyChanged`).
     func commandFinished(_ s: TerminalSession, exitCode: Int?, duration: TimeInterval) {
         if agents[s.id]?.remote == true {
-            agents[s.id] = nil                          // the prompt is back: the agent exited
+            agents[s.id] = nil
             remove("agent:\(s.id)")
         }
-        guard agents[s.id] == nil, !isViewing(s.id) else { return }
-        let threshold = UserDefaults.standard.object(forKey: "notifyCommandAfter") as? Double ?? 10
-        guard duration >= threshold else { return }
+    }
+
+    /// The session's `isBusy` — what the tab's running badge shows — changed.
+    /// A running row while it's busy, a ✓ / ✕ pulse when a long one ends, so
+    /// the island and the tab never disagree. Agent panes have their own row.
+    func busyChanged(_ s: TerminalSession, busy: Bool, elapsed: TimeInterval, exitCode: Int?) {
         let id = "cmd:\(s.id)"
+        guard agents[s.id] == nil else { remove(id); return }
+        if busy {
+            upsert(IslandItem(id: id, source: .command, title: s.title, detail: loc.t("运行中…", "Running…"),
+                              tone: .working, sessionID: s.id, at: Date()))
+            return
+        }
+        let threshold = UserDefaults.standard.object(forKey: "notifyCommandAfter") as? Double ?? 10
+        guard elapsed >= threshold, !isViewing(s.id) else { remove(id); return }
         let failed = (exitCode ?? 0) != 0
-        let detail = failed ? loc.t("退出码 \(exitCode ?? 0) · ", "exit \(exitCode ?? 0) · ") + islandDuration(duration)
-                            : loc.t("完成 · ", "done · ") + islandDuration(duration)
-        upsert(IslandItem(id: id, source: .command, title: s.title, detail: detail, tone: .working,
-                          sessionID: s.id, at: Date()))
+        let detail = failed ? loc.t("退出码 \(exitCode ?? 0) · ", "exit \(exitCode ?? 0) · ") + islandDuration(elapsed)
+                            : loc.t("完成 · ", "done · ") + islandDuration(elapsed)
         finish(id, success: !failed, detail: detail,
-               pulse: (failed ? "✕ " : "✓ ") + s.title + " · " + islandDuration(duration))
+               pulse: (failed ? "✕ " : "✓ ") + s.title + " · " + islandDuration(elapsed))
     }
 
     /// The pane closed or its process went away.
     func sessionGone(_ id: UUID) {
         agents[id] = nil
-        for prefix in ["agent:", "inline:", "note:"] { remove(prefix + id.uuidString) }
+        for prefix in ["agent:", "inline:", "note:", "cmd:"] { remove(prefix + id.uuidString) }
     }
 
     private func publishAgent(_ sid: UUID, change: CodingAgentTracker.Change?) {
         guard let w = agents[sid], let s = sessions?.session(sid) else { return }
         let id = "agent:\(sid)"
+        remove("cmd:\(sid)")
         let title = "\(w.agent.displayName) · \(Self.place(of: s))"
         let source = IslandSource.codingAgent(w.agent.rawValue)
         let tone: IslandTone, detail: String
@@ -393,12 +426,28 @@ final class IslandCenter {
                           sessionID: sid, persistent: true, at: Date()))
         let viewing = isViewing(sid)
         if viewing { board.dismiss(id) }
+        notify(w.agent, s, change: change, viewing: viewing)
         // Only a real turn: a pause mid-task also reads as "finished".
         if case .finished(let ran)? = change, !viewing, ran >= 10 {
             now = Date()
             board.finish(id, success: true, detail: detail,
                          pulse: "✓ " + w.agent.displayName + " · " + islandDuration(ran), at: now)
             reschedule()
+        }
+    }
+
+    /// A system notification when an agent wants you, or finishes a real turn
+    /// while Wireline is in the background. Clicking it opens the pane.
+    private func notify(_ agent: CodingAgent, _ s: TerminalSession, change: CodingAgentTracker.Change?, viewing: Bool) {
+        guard !viewing else { return }
+        let title = "\(agent.displayName) · \(Self.place(of: s))"
+        switch change {
+        case .needsYou(let m)?:
+            Notifier.post(title: title, body: m ?? loc.t("等你回复", "Waiting for you"), session: s.id)
+        case .finished(let ran)? where ran >= 10 && !NSApp.isActive:
+            Notifier.post(title: title, body: loc.t("完成 · ", "Done · ") + islandDuration(ran), session: s.id)
+        default:
+            break
         }
     }
 

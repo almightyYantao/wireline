@@ -21,8 +21,11 @@ struct SettingsView: View {
     // Remote desktop (read by `RDPPreferences` when a pane connects).
     @AppStorage("rdpCommandKeyMode") private var rdpCommandKeyMode = RDPCommandKeyMode.windowsKey.rawValue
     @AppStorage("rdpHiDPI") private var rdpHiDPI = true
+    @AppStorage("smartCompletion") private var smartCompletion = true
+    @AppStorage(SessionStore.resumeAgentsKey) private var resumeCodingAgents = false
     @AppStorage("rdpClipboard") private var rdpClipboard = true
     @AppStorage("rdpAudio") private var rdpAudio = true
+    @AppStorage(PasteConfirmPolicy.defaultsKey) private var pasteConfirm = PasteConfirmPolicy.unlessBracketed.rawValue
 
     var body: some View {
         if embedded { card } else { window }
@@ -174,6 +177,13 @@ struct SettingsView: View {
                     }
                     .toggleStyle(.wlSwitch).wlConfigLocked("gpu-rendering")
                     WLFormDivider()
+                    Toggle(isOn: $smartCompletion) {
+                        WLFormRow(loc("智能补全", "Smart completion"),
+                                  detail: loc("本地终端输入时提示 git 分支、npm 脚本、make 目标、SSH 主机、路径和历史命令。↑↓ 选择，Tab / → 接受，Esc 关闭",
+                                              "Suggest git branches, npm scripts, make targets, SSH hosts, paths and history as you type in local shells. ↑↓ to pick, Tab / → to accept, Esc to dismiss")) { EmptyView() }
+                    }
+                    .toggleStyle(.wlSwitch)
+                    WLFormDivider()
                     Toggle(isOn: $store.inheritWorkingDirectory) { rowLabel(loc("新标签继承当前目录", "New tabs inherit the directory")) }
                         .toggleStyle(.wlSwitch).frame(minHeight: 38).wlConfigLocked("window-inherit-working-directory")
                     WLFormDivider()
@@ -203,12 +213,34 @@ struct SettingsView: View {
                     }
                     .toggleStyle(.wlSwitch).wlConfigLocked("confirm-close-surface")
                     WLFormDivider()
+                    WLFormRow(loc("多行粘贴确认", "Confirm multi-line paste"),
+                              detail: loc("粘贴含换行的文本前先预览；Claude Code 等开启了 bracketed paste 的程序不会把换行当回车",
+                                          "Preview text with newlines before pasting; programs with bracketed paste on (Claude Code …) don't treat newlines as Return")) {
+                        WLSegmented(selection: $pasteConfirm, options: [
+                            WLOption(PasteConfirmPolicy.always.rawValue, loc("总是", "Always")),
+                            WLOption(PasteConfirmPolicy.unlessBracketed.rawValue, loc("仅非 bracketed", "Unless bracketed")),
+                            WLOption(PasteConfirmPolicy.never.rawValue, loc("从不", "Never")),
+                        ], fill: false)
+                        .onChange(of: pasteConfirm) { NotificationCenter.default.post(name: .pasteConfirmPolicyChanged, object: nil) }
+                    }
+                    WLFormDivider()
                     WLFormRow(loc("命令完成提醒", "Command-finished alert"),
                               detail: loc("Wireline 不在前台时，耗时超过这个时长的命令结束会发通知", "When Wireline is in the background, notify for commands that ran at least this long")) {
                         WLStepper(value: $store.notifyCommandAfter, range: 1...600, step: 5,
                                   format: { loc("\(Int($0)) 秒", "\(Int($0))s") })
                             .wlConfigLocked("notify-on-command-finish-after")
                     }
+                    WLFormDivider()
+                    NotificationCardRows()
+                    WLFormDivider()
+                    AgentHooksList()
+                    WLFormDivider()
+                    Toggle(isOn: $resumeCodingAgents) {
+                        WLFormRow(loc("恢复 AI 会话", "Resume coding-agent sessions"),
+                                  detail: loc("重开 Wireline、重开关闭的标签或打开工作区时，原来跑着 Claude Code / Codex 但进程已退出的本地窗格会执行 claude --resume / codex resume 接着上次的对话。还在常驻进程里运行的会话直接接回，不会重复恢复。",
+                                              "When Wireline relaunches, a closed tab is reopened or a workspace opens, a local pane that was running Claude Code / Codex whose process is gone runs claude --resume / codex resume to continue it. Sessions still running in the session agent are reattached instead.")) { EmptyView() }
+                    }
+                    .toggleStyle(.wlSwitch)
                     WLFormDivider()
                     WLFormRow(loc("否则打开于", "Otherwise open in")) {
                         WLMenuPicker(selection: $store.terminalApp,
@@ -579,6 +611,8 @@ struct SettingsView: View {
 
                 MCPServerSection()
 
+                PhoneRelaySection()
+
                 section(loc("隐私", "Privacy"),
                         footer: loc("发给模型前，把密码、token、私钥（以及可选的 IP 和真实主机名）换成占位符；模型回传的命令和文件内容在本地还原后再执行，真实值不离开本机。主机别名不会被替换。",
                                     "Before anything reaches the model, passwords, tokens and keys (and optionally IPs and real hostnames) become placeholders; commands and file edits coming back are restored locally before they run, so the real values never leave this Mac. Host aliases are kept.")) {
@@ -701,5 +735,32 @@ struct SettingsView: View {
             + FontCatalog.shared.monoFamilies().map {
                 WLOption(String?.some($0.name), $0.hasIcons ? $0.name + loc("  · 含图标", "  · icons") : $0.name)
             }
+    }
+}
+
+/// Notification card linger time and background behaviour.
+private struct NotificationCardRows: View {
+    @Bindable private var cards = CardSettings.shared
+    private func loc(_ zh: String, _ en: String) -> String { Localizer.shared.t(zh, en) }
+
+    var body: some View {
+        WLFormRow(loc("通知停留时长", "Notification duration"),
+                  detail: loc("Wireline 在前台时，通知以卡片显示在刘海岛下方（岛关闭时在主窗口右上角）；鼠标悬停时暂停计时",
+                              "While Wireline is in front, notifications show as cards under the notch island (top-right of the main window when the island is off); hovering pauses the timer")) {
+            WLMenuPicker(selection: $cards.linger, options: [
+                WLOption(CardLinger.standard, loc("默认（约 5 秒）", "Default (~5s)")),
+                WLOption(CardLinger.s5, loc("5 秒", "5s")),
+                WLOption(CardLinger.s10, loc("10 秒", "10s")),
+                WLOption(CardLinger.s30, loc("30 秒", "30s")),
+                WLOption(CardLinger.s90, loc("90 秒", "90s")),
+                WLOption(CardLinger.untilClosed, loc("直到关闭", "Until closed")),
+            ], minWidth: 150)
+        }
+        WLFormDivider()
+        Toggle(isOn: $cards.cardsInBackground) {
+            Text(loc("后台时也显示通知卡片", "Show cards while in the background too"))
+                .font(WL.body).foregroundStyle(WL.textPrimary)
+        }
+        .toggleStyle(.wlSwitch).frame(minHeight: 38)
     }
 }

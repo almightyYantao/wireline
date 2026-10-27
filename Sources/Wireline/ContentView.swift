@@ -119,6 +119,7 @@ struct ContentView: View {
         .modifier(SettingsModal())
         .modifier(QuitNoticeModal())
         .modifier(MCPApprovalModal())
+        .modifier(TerminalAssists())
         .modifier(ContentModals(editing: $editing, showBackup: $showBackup, showNewGroup: $showNewGroup,
                                 showQuickConnect: $showQuickConnect, showCommandPalette: $showCommandPalette))
         .onReceive(NotificationCenter.default.publisher(for: .showQuickConnect)) { _ in
@@ -429,12 +430,8 @@ struct LeftPanel: View {
 
     private var trimmed: String { query.trimmingCharacters(in: .whitespaces) }
 
-    private var searchResults: [Host] {
-        let q = trimmed.lowercased()
-        return store.hosts
-            .compactMap { h in HostStore.fuzzyScore(query: q, host: h).map { ($0, h) } }
-            .sorted { $0.0 > $1.0 }.map(\.1)
-    }
+    private var searchMatches: [HostSearchMatch] { store.matches(trimmed) }
+    private var searchResults: [Host] { searchMatches.map(\.host) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -533,8 +530,9 @@ struct LeftPanel: View {
     private var hostSections: some View {
         if !trimmed.isEmpty {
             GroupHeader(title: "搜索结果", count: searchResults.count)
-            ForEach(Array(searchResults.enumerated()), id: \.element.id) { index, host in
-                hostItem(host, highlighted: index == searchHighlight)
+            let terms = HostQuery(trimmed).highlightTerms
+            ForEach(Array(searchMatches.enumerated()), id: \.element.host.id) { index, m in
+                hostItem(m.host, highlighted: index == searchHighlight, match: (m, terms))
             }
             if searchResults.isEmpty {
                 Text(loc("  无匹配主机", "  No matching hosts")).font(WL.small).foregroundStyle(WL.textDim)
@@ -605,7 +603,8 @@ struct LeftPanel: View {
         searchFocused = false
     }
 
-    private func hostItem(_ host: Host, highlighted: Bool = false) -> some View {
+    private func hostItem(_ host: Host, highlighted: Bool = false,
+                          match: (HostSearchMatch, [String])? = nil) -> some View {
         let active = sessions.activeSession?.alias == host.alias && operation == nil
         return HostItem(
             host: host,
@@ -617,7 +616,8 @@ struct LeftPanel: View {
             onConnect: { selectedAlias = host.alias; operation = nil; connectOrFocus(host) },
             onEdit: { onEdit(host) },
             onForward: { operation = .forwarding },
-            onFiles: { onOpenFiles(host) }
+            onFiles: { onOpenFiles(host) },
+            match: match?.0, highlightTerms: match?.1 ?? []
         )
     }
 

@@ -169,6 +169,94 @@ final class SnippetTests: XCTestCase {
         let back = try JSONDecoder().decode([Snippet].self, from: JSONEncoder().encode([s]))
         XCTAssertEqual(back, [s])
     }
+
+    // MARK: Folders & built-ins
+
+    func testFolderNormalizeClampsDepth() {
+        XCTAssertEqual(SnippetFolders.normalize(" Ops / Docker /x/"), "Ops/Docker")
+        XCTAssertNil(SnippetFolders.normalize(" / "))
+        XCTAssertEqual(Snippet(titleZh: "a", titleEn: "", command: "x", folder: "a/b/c").folder, "a/b")
+    }
+
+    func testFolderListingAndRename() {
+        var s = [Snippet(titleZh: "a", titleEn: "", command: "1", folder: "Ops/Docker"),
+                 Snippet(titleZh: "b", titleEn: "", command: "2", folder: "Logs"),
+                 Snippet(titleZh: "c", titleEn: "", command: "3")]
+        XCTAssertEqual(SnippetFolders.all(in: s), ["Logs", "Ops", "Ops/Docker"])
+        XCTAssertTrue(SnippetFolders.contains("Ops", s[0].folder))
+        XCTAssertFalse(SnippetFolders.contains("Op", s[0].folder))
+        SnippetFolders.rename("Ops", to: "Infra", in: &s)
+        XCTAssertEqual(s[0].folder, "Infra/Docker")
+        SnippetFolders.rename("Infra", to: nil, in: &s)
+        XCTAssertEqual(s[0].folder, "Docker")
+    }
+
+    func testEmptyFoldersListAndRename() throws {
+        let s = [Snippet(titleZh: "a", titleEn: "", command: "1", folder: "Ops")]
+        XCTAssertEqual(SnippetFolders.all(in: s, extra: ["Web/Nginx", "Ops", " / "]), ["Ops", "Web", "Web/Nginx"])
+        XCTAssertEqual(SnippetFolders.rename("Web", to: "Infra", in: ["Web/Nginx", "Web", "Ops"]),
+                       ["Infra/Nginx", "Infra", "Ops"])
+        XCTAssertEqual(SnippetFolders.rename("Web", to: "Ops", in: ["Web", "Ops"]), ["Ops"])
+        // An old or partial meta file still decodes.
+        XCTAssertEqual(try JSONDecoder().decode(SnippetLibraryMeta.self, from: Data("{}".utf8)), SnippetLibraryMeta())
+        let m = SnippetLibraryMeta(emptyFolders: ["X"], seenBuiltins: ["disk"])
+        XCTAssertEqual(try JSONDecoder().decode(SnippetLibraryMeta.self, from: JSONEncoder().encode(m)), m)
+    }
+
+    func testPreFolderFileGetsBuiltinIDsOnce() throws {
+        let file = """
+        [{"id":"\(UUID().uuidString)","titleZh":"磁盘占用","titleEn":"Disk usage","command":"df -h","platform":"any"},
+         {"id":"\(UUID().uuidString)","titleZh":"我的","titleEn":"","command":"echo hi","platform":"any","folder":"Mine"}]
+        """.data(using: .utf8)!
+        let (s, migrated) = try SnippetMigration.load(file)
+        XCTAssertTrue(migrated)
+        XCTAssertEqual(s[0].builtinID, "disk")
+        XCTAssertEqual(s[0].folder, "系统 System")
+        XCTAssertNil(s[1].builtinID)
+        XCTAssertEqual(s[1].folder, "Mine")
+        let (again, migratedAgain) = try SnippetMigration.load(JSONEncoder().encode(s))
+        XCTAssertFalse(migratedAgain)
+        XCTAssertEqual(again, s)
+    }
+
+    func testRestoreDefaultsAddsOnlyMissing() {
+        XCTAssertEqual(Set(Snippet.defaults.compactMap(\.builtinID)).count, Snippet.defaults.count, "ids unique")
+        var mine = Array(Snippet.defaults.dropFirst(2))
+        mine[0].command = "df -hT"   // an edited built-in is kept as is
+        let (out, added) = Snippet.restoringDefaults(mine)
+        XCTAssertEqual(added, 2)
+        XCTAssertEqual(out.count, Snippet.defaults.count)
+        XCTAssertEqual(out[0].command, "df -hT")
+        XCTAssertEqual(Snippet.restoringDefaults(out).added, 0)
+    }
+
+    func testUnseenDefaultsAddedOnceAndDeletedStayDeleted() {
+        XCTAssertTrue(Snippet.builtinIDsBeforeTracking.isSubset(of: Set(Snippet.defaults.compactMap(\.builtinID))))
+        // A library that has seen everything but "disk" and "mem" (one deleted, one new).
+        var seen = Set(Snippet.defaults.compactMap(\.builtinID))
+        seen.subtract(["disk", "mem"])
+        let mine = Snippet.defaults.filter { $0.builtinID != "disk" && $0.builtinID != "mem" && $0.builtinID != "load" }
+        let (out, newSeen, added) = Snippet.addingUnseenDefaults(mine, seen: seen)
+        XCTAssertEqual(added, 2)
+        XCTAssertEqual(Set(out.compactMap(\.builtinID)), Set(Snippet.defaults.compactMap(\.builtinID)).subtracting(["load"]),
+                       "\"load\" was seen and deleted")
+        XCTAssertEqual(newSeen, Set(Snippet.defaults.compactMap(\.builtinID)))
+        // Next launch: nothing more, even after deleting one.
+        XCTAssertEqual(Snippet.addingUnseenDefaults(Array(out.dropFirst()), seen: newSeen).added, 0)
+        // Present but unseen (e.g. restored by hand) isn't duplicated.
+        XCTAssertEqual(Snippet.addingUnseenDefaults(Snippet.defaults, seen: []).added, 0)
+    }
+
+    func testAtomicWriteReplaces() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("s.json")
+        try AtomicFile.write(Data("one".utf8), to: url)
+        try AtomicFile.write(Data("two".utf8), to: url)
+        XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "two")
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: dir.path), ["s.json"], "no temp left")
+    }
 }
 
 private func == (a: (zh: String, en: String), b: (String, String)) -> Bool { a.zh == b.0 && a.en == b.1 }

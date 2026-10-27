@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Wireline</title>
+<link rel="stylesheet" href="vendor/xterm.css">
+<style>
+  :root { color-scheme: dark; --bg:#0f1115; --card:#181b22; --dim:#8a91a0; --fg:#e6e8ee; --green:#4ade80; --amber:#fbbf24; --blue:#60a5fa; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:15px -apple-system, system-ui, sans-serif; height:100dvh; display:flex; flex-direction:column; }
+  header { padding:10px 14px; display:flex; align-items:center; gap:8px; border-bottom:1px solid #222; }
+  header b { flex:1; }
+  .dot { width:8px; height:8px; border-radius:50%; background:#555; }
+  .dot.on { background:var(--green); }
+  #status { color:var(--dim); font-size:13px; }
+  #sessions { overflow:auto; max-height:35dvh; }
+  .s { padding:10px 14px; border-bottom:1px solid #1f232b; display:flex; gap:8px; align-items:center; }
+  .s.active { background:var(--card); }
+  .s .t { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .badge { font-size:12px; padding:2px 7px; border-radius:9px; background:#2a2f3a; color:var(--dim); }
+  .badge.working { color:var(--blue); } .badge.needsYou { color:#111; background:var(--amber); } .badge.done { color:var(--green); }
+  .note { color:var(--amber); font-size:12px; padding:0 14px 8px; }
+  #term { flex:1; min-height:0; padding:4px; }
+  #keys { display:flex; gap:6px; padding:8px; flex-wrap:wrap; border-top:1px solid #222; }
+  #keys button, #pair button { background:var(--card); color:var(--fg); border:1px solid #2c313c; border-radius:8px; padding:9px 12px; font-size:15px; }
+  #keys input { flex:1; min-width:120px; background:#0b0d11; color:var(--fg); border:1px solid #2c313c; border-radius:8px; padding:9px; font-size:15px; }
+  #pair { padding:24px; display:none; }
+  .hidden { display:none !important; }
+</style>
+</head>
+<body>
+<header><span class="dot" id="dot"></span><b id="macName">Wireline</b><span id="status"></span></header>
+<div id="pair"><p id="pairMsg">用 Wireline「设置 → 手机中继」里的二维码打开本页。</p><button id="forget" class="hidden">忘记此 Mac</button></div>
+<div id="main" class="hidden">
+  <div id="sessions"></div>
+  <div id="note" class="note"></div>
+  <div id="term"></div>
+  <div id="keys">
+    <button data-k="y&#13;">y</button><button data-k="n&#13;">n</button><button data-k="&#13;">⏎</button>
+    <button data-k="&#27;">Esc</button><button data-k="&#3;">Ctrl-C</button>
+    <button data-k="&#27;[A">↑</button><button data-k="&#27;[B">↓</button>
+    <input id="line" class="hidden" placeholder="输入后回车发送" enterkeyhint="send" autocomplete="off" autocapitalize="off">
+  </div>
+</div>
+<script src="vendor/xterm.js"></script>
+<script src="vendor/addon-fit.js"></script>
+<script src="relay-crypto.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

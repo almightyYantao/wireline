@@ -294,6 +294,16 @@ final class WirelineTerminalView: TerminalView, TerminalEngine {
         return true
     }
 
+    func cursorLine() -> TerminalCursorLine? {
+        let t = getTerminal()
+        guard !t.isCurrentBufferAlternate, scrollPosition >= 1 || !canScroll else { return nil }
+        let (x, y) = t.getCursorLocation()
+        guard let line = t.getLine(row: y) else { return nil }
+        return TerminalCursorLine(row: y,
+                                  before: line.translateToString(endCol: x, skipNullCellsFollowingWide: true),
+                                  after: line.translateToString(trimRight: true, startCol: x, skipNullCellsFollowingWide: true))
+    }
+
     /// Text of the most recent finished command's output, trailing blanks trimmed.
     func lastCommandOutput() -> String? {
         let t = getTerminal()
@@ -543,6 +553,28 @@ final class WirelineTerminalView: TerminalView, TerminalEngine {
 
     /// Asked to open a file path ⌘-clicked in the terminal (URLs are SwiftTerm's).
     var onOpenPath: ((String) -> Void)?
+
+    var onPasteImage: ((Data) -> Bool)?
+
+    var contextMenuItems: (() -> [WLMenuItem])?
+
+    override func menu(for event: NSEvent) -> NSMenu? { contextMenuItems.map { NSMenu.wl($0()) } }
+
+    override func paste(_ sender: Any) {
+        if let png = ImagePaste.png(), onPasteImage?(png) == true { return }
+        let bracketed = getTerminal().bracketedPasteMode
+        guard let text = NSPasteboard.general.string(forType: .string),
+              PasteConfirmPolicy.current.shouldAsk(text, bracketed: bracketed)
+        else { return super.paste(sender) }
+        PasteConfirmCenter.shared.ask(text, from: self) { [weak self] choice in
+            guard let self, choice != .cancel else { return }
+            // What SwiftTerm's own paste sends: newlines as CR, bracketed when asked.
+            var body = choice == .singleLine ? PasteConfirmCenter.singleLine(text) : text
+            body = body.replacingOccurrences(of: "\r\n", with: "\r").replacingOccurrences(of: "\n", with: "\r")
+            let bracketedNow = self.getTerminal().bracketedPasteMode
+            self.send(txt: bracketedNow ? "\u{1b}[200~" + body + "\u{1b}[201~" : body)
+        }
+    }
 
     /// A click landed in this pane: make it the active split.
     var onClickFocus: (() -> Void)?

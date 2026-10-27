@@ -22,6 +22,9 @@ struct WirelineApp: App {
         // Listen for MCP clients as early as possible: `wireline-mcp` may have
         // launched us and is waiting. Tools answer once the stores are attached.
         MCPServerHost.shared.start()
+        AgentHookServer.shared.start()
+        // Before launch finishes, so a click that launched us is routed too.
+        NotificationRouter.shared.install()
     }
 
     var body: some Scene {
@@ -81,6 +84,7 @@ struct WirelineApp: App {
                     if AIConfig.shared.petEnabled { openWindow(id: "pet") }
                     // The notch island: AI / agent activity around the notch.
                     IslandController.shared.start(sessions: sessions)
+                    PhoneRelay.shared.attach(sessions: sessions)
                     IslandPreview.runIfRequested()
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [sessions] in
                         sessions.focusActiveTerminal()
@@ -164,6 +168,8 @@ struct WirelineApp: App {
                     .shortcut(.jumpToNextPrompt, keys)
                 Button("Copy Last Command Output") { copyLastOutput(sessions) }
                     .shortcut(.copyLastOutput, keys)
+                Button("Open Latest Answer in Reader") { AgentReader.open(sessions.activeSession) }
+                    .shortcut(.openAgentReader, keys)
                 Button("Reopen Closed Tab") { sessions.reopenClosed(store: store) }
                     .shortcut(.reopenClosedTab, keys)
                     .disabled(!sessions.canReopenClosed)
@@ -229,6 +235,24 @@ struct WirelineApp: App {
                 if store.sessionAgentEnabled {
                     Button(loc("退出并结束所有会话", "Quit and End All Sessions")) { sessions.quit(endingSessions: true) }
                         .keyboardShortcut("q", modifiers: [.command, .option])
+                }
+            }
+            CommandMenu(loc("工作区", "Workspaces")) {
+                Button(loc("保存当前布局…", "Save Current Layout…")) { WorkspaceActions.save(sessions) }
+                    .disabled(sessions.tabs.isEmpty)
+                let saved = WorkspaceStore.shared.workspaces
+                if !saved.isEmpty {
+                    Divider()
+                    ForEach(saved) { w in
+                        Button(w.name) { WorkspaceActions.open(w, sessions: sessions, store: store) }
+                    }
+                    Divider()
+                    Menu(loc("重命名", "Rename")) {
+                        ForEach(saved) { w in Button(w.name) { WorkspaceActions.rename(w) } }
+                    }
+                    Menu(loc("删除", "Delete")) {
+                        ForEach(saved) { w in Button(w.name) { WorkspaceActions.delete(w) } }
+                    }
                 }
             }
             #if DEBUG

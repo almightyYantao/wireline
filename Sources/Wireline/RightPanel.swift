@@ -695,6 +695,17 @@ struct SessionTab: View {
             return false
         }
     }
+    /// The coding agent this tab's badge reports on: the one that most needs
+    /// you (waiting, then working, then done, then idle).
+    private var agent: (CodingAgent, CodingAgentTracker.State)? {
+        func rank(_ s: CodingAgentTracker.State) -> Int {
+            switch s { case .needsYou: 3; case .working: 2; case .done: 1; case .idle: 0 }
+        }
+        return tab.sessionIDs.compactMap { id -> (CodingAgent, CodingAgentTracker.State)? in
+            guard let s = sessions.session(id), let k = s.agentKind, let st = s.agentState else { return nil }
+            return (k, st)
+        }.max { rank($0.1) < rank($1.1) }
+    }
     /// True when this (non-active) tab produced output you haven't seen yet — shows
     /// a small "new output" dot. The running badge takes precedence over it.
     private var unread: Bool {
@@ -730,7 +741,9 @@ struct SessionTab: View {
                     .foregroundStyle(WL.amber)
                     .help(loc("由 \(client) 通过 MCP 打开", "Opened by \(client) over MCP"))
             }
-            if !isActive && waiting {
+            if let (kind, state) = agent {
+                AgentStatusBadge(agent: kind, state: state)
+            } else if !isActive && waiting {
                 WaitingBadge()
             } else if !isActive && running {
                 RunningBadge()
@@ -892,6 +905,59 @@ struct WaitingBadge: View {
         .padding(.horizontal, 5).padding(.vertical, 1)
         .background(WL.amber.opacity(0.16), in: Capsule())
         .transition(.wlBadge)
+    }
+}
+
+/// A coding agent's name and state on its tab: a spinner while it works,
+/// a highlighted "your turn" when it waits on you, a check when it's done.
+struct AgentStatusBadge: View {
+    @Environment(Localizer.self) private var loc
+    let agent: CodingAgent
+    let state: CodingAgentTracker.State
+
+    private var tint: Color {
+        switch state {
+        case .working, .needsYou: WL.amber
+        case .done: WL.green
+        case .idle: WL.textDim
+        }
+    }
+
+    var body: some View {
+        HStack(spacing: 4) {
+            switch state {
+            case .working:
+                ProgressView().controlSize(.mini).scaleEffect(0.7).frame(width: 9, height: 9).tint(tint)
+            case .needsYou:
+                Circle().fill(tint).frame(width: 5, height: 5).wlPulse(period: 0.8)
+            case .done:
+                Image(systemName: "checkmark").font(.system(size: 8, weight: .bold))
+            case .idle:
+                EmptyView()
+            }
+            Text(agent.abbreviation).font(WL.caption.weight(.semibold).monospaced())
+            if case .needsYou = state {
+                Text(loc("等你", "your turn")).font(WL.caption.weight(.semibold))
+            }
+        }
+        .foregroundStyle(tint)
+        .padding(.horizontal, 5).padding(.vertical, 1)
+        .background(tint.opacity(state == .idle ? 0.08 : 0.16), in: Capsule())
+        .overlay(Capsule().strokeBorder(tint.opacity(isWaiting ? 0.6 : 0), lineWidth: 1))
+        .help(agent.displayName + " · " + label)
+        .animation(Motion.state, value: state)
+        .transition(.wlBadge)
+    }
+
+    private var isWaiting: Bool { if case .needsYou = state { true } else { false } }
+
+    private var label: String {
+        switch state {
+        case .idle: loc("等你输入", "Waiting for a prompt")
+        case .working: loc("工作中…", "Working…")
+        case .needsYou(let m): m ?? loc("等你回复", "Waiting for you")
+        case .done: loc("完成，等你下一步", "Done — your turn")
+        }
     }
 }
 

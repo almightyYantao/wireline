@@ -53,6 +53,9 @@ final class GhosttyTerminalView: NSView, TerminalEngine {
     var onDirectoryChange: ((String?) -> Void)?
     var onTitleReport: ((String) -> Void)?
     var onOpenPath: ((String) -> Void)?
+    var onPasteImage: ((Data) -> Bool)?
+    var contextMenuItems: (() -> [WLMenuItem])?
+    override func menu(for event: NSEvent) -> NSMenu? { contextMenuItems.map { NSMenu.wl($0()) } }
     var onClickFocus: (() -> Void)?
     var isActivePane: (() -> Bool)?
 
@@ -247,6 +250,9 @@ final class GhosttyTerminalView: NSView, TerminalEngine {
                                                   object: window, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.updateScreen() }
         })
+        windowObservers.append(center.addObserver(forName: .pasteConfirmPolicyChanged, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.applyConfig() }
+        })
         responderObservation = window.observe(\.firstResponder, options: [.new]) { [weak self] _, _ in
             DispatchQueue.main.async { MainActor.assumeIsolated { self?.refreshFocus() } }
         }
@@ -371,6 +377,25 @@ final class GhosttyTerminalView: NSView, TerminalEngine {
     func jumpToPrompt(_ delta: Int) -> Bool { binding("jump_to_prompt:\(delta)") }
 
     func lastCommandOutput() -> String? { ioGlue.lastCommandOutput() }
+
+    func cursorLine() -> TerminalCursorLine? {
+        guard let s = surface?.raw else { return nil }
+        let cell = cellSize, size = ghostty_surface_size(s)
+        guard cell.width > 0, cell.height > 0 else { return nil }
+        // Window padding is 0 (GhosttyConfig), so the IME point maps straight to a cell.
+        var x = 0.0, y = 0.0, w = 0.0, h = 0.0
+        ghostty_surface_ime_point(s, &x, &y, &w, &h)
+        let col = Int((x / cell.width).rounded()), row = Int((y / cell.height).rounded()) - 1
+        guard row >= 0, row < Int(size.rows), let text = viewportLine(row, columns: Int(size.columns)) else { return nil }
+        var before = "", cells = 0, rest = Substring(text)
+        while let ch = rest.first, cells < col {
+            before.append(ch)
+            cells += Self.cellWidth(ch)
+            rest = rest.dropFirst()
+        }
+        if cells < col { before += String(repeating: " ", count: col - cells) }
+        return TerminalCursorLine(row: row, before: before, after: String(rest).replacingOccurrences(of: "\\s+$", with: "", options: .regularExpression))
+    }
 
     /// Scrollback + screen as SGR-coloured text with CRLFs — Ghostty's VT
     /// export (`write_screen_file:copy,vt`), whose "copy" of the file path is
@@ -739,7 +764,10 @@ final class GhosttyTerminalView: NSView, TerminalEngine {
     // MARK: Menu actions
 
     @objc func copy(_ sender: Any?) { binding("copy_to_clipboard") }
-    @objc func paste(_ sender: Any?) { binding("paste_from_clipboard") }
+    @objc func paste(_ sender: Any?) {
+        if let png = ImagePaste.png(), onPasteImage?(png) == true { return }
+        binding("paste_from_clipboard")
+    }
     @objc func pasteAsPlainText(_ sender: Any?) { binding("paste_from_clipboard") }
     override func selectAll(_ sender: Any?) { binding("select_all") }
 
@@ -1101,7 +1129,9 @@ extension GhosttyTerminalView: NSMenuItemValidation {
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         switch item.action {
         case #selector(copy(_:)): surface.map { ghostty_surface_has_selection($0.raw) } ?? false
-        case #selector(paste(_:)), #selector(pasteAsPlainText(_:)): NSPasteboard.general.string(forType: .string) != nil
+        case #selector(paste(_:)): NSPasteboard.general.string(forType: .string) != nil
+            || (onPasteImage != nil && ImagePaste.png() != nil)
+        case #selector(pasteAsPlainText(_:)): NSPasteboard.general.string(forType: .string) != nil
         default: true
         }
     }

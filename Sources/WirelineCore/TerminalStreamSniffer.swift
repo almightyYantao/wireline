@@ -28,6 +28,9 @@ public struct TerminalStreamSniffer: Sendable {
         /// Ghostty) or OSC 99 (kitty). `title` is empty when the sequence
         /// carries only a body.
         case notification(title: String, body: String)
+        /// A Claude Code hook on a remote host (`AgentHooks.oscKey`): the
+        /// payload after the key.
+        case agentHook(String)
     }
 
     private enum State: Sendable { case ground, escape, csi, osc, oscEscape, oscIgnore, oscIgnoreEscape }
@@ -101,8 +104,14 @@ public struct TerminalStreamSniffer: Sendable {
             events.append(.workingDirectory(String(decoding: buffer[2...], as: UTF8.self)))
             return
         }
+        if buffer.starts(with: Self.agentHookKey) {
+            events.append(.agentHook(String(decoding: buffer[Self.agentHookKey.count...], as: UTF8.self)))
+            return
+        }
         if let note = Self.notification(buffer) { events.append(note) }
     }
+
+    private static let agentHookKey = Array(AgentHooks.oscKey.utf8)
 
     /// OSC 9 / 777 / 99 payloads as a notification, else nil.
     static func notification(_ payload: [UInt8]) -> Event? {
