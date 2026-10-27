@@ -45,6 +45,8 @@ final class TerminalSession: Identifiable {
 
     /// Drives the prompt-inline AI command flow (⌘; or a `# …` request line).
     let inlineAI = InlineAIController()
+    /// Smart completion popup (local shells).
+    @ObservationIgnored private(set) lazy var completion = CompletionController(session: self)
     /// Name of the full-screen editor currently running (`"vim"`), else nil.
     /// Drives the vim cheat-sheet overlay.
     var activeEditor: String?
@@ -275,7 +277,10 @@ final class TerminalSession: Identifiable {
         io.engine = terminalView
         terminalView.onInput = { [weak io, weak self] bytes in
             io?.send(bytes)
-            if let self { IslandCenter.shared.sessionInput(self) }
+            if let self {
+                self.completion.input(bytes)
+                IslandCenter.shared.sessionInput(self)
+            }
         }
         terminalView.onGridResize = { [weak io] in io?.gridDidChange() }
         io.onEditorChange = { [weak self] editor in
@@ -304,6 +309,7 @@ final class TerminalSession: Identifiable {
             switch event {
             case .started:
                 let token = self.commandMarks.started()
+                self.completion.commandStarted()
                 guard !local else { return }
                 DispatchQueue.main.asyncAfter(deadline: .now() + CommandMarkTracker.busyDelay) { [weak self] in
                     MainActor.assumeIsolated {
@@ -313,6 +319,7 @@ final class TerminalSession: Identifiable {
                 }
             case let .finished(exitCode, duration):
                 let wasBusy = self.commandMarks.finished()
+                self.completion.promptReady()
                 if !local, wasBusy || self.isBusy { self.applyBusy(false, elapsed: duration) }
                 self.notifyCommandFinished(elapsed: duration, exitCode: exitCode)
                 IslandCenter.shared.commandFinished(self, exitCode: exitCode, duration: duration)

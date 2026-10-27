@@ -21,6 +21,7 @@ struct SettingsView: View {
     // Remote desktop (read by `RDPPreferences` when a pane connects).
     @AppStorage("rdpCommandKeyMode") private var rdpCommandKeyMode = RDPCommandKeyMode.windowsKey.rawValue
     @AppStorage("rdpHiDPI") private var rdpHiDPI = true
+    @AppStorage("smartCompletion") private var smartCompletion = true
     @AppStorage("rdpClipboard") private var rdpClipboard = true
     @AppStorage("rdpAudio") private var rdpAudio = true
 
@@ -173,6 +174,13 @@ struct SettingsView: View {
                                   detail: loc("用 Metal 绘制终端，大量输出时更流畅、更省 CPU", "Draw terminals with Metal — smoother, lighter on the CPU under heavy output")) { EmptyView() }
                     }
                     .toggleStyle(.wlSwitch).wlConfigLocked("gpu-rendering")
+                    WLFormDivider()
+                    Toggle(isOn: $smartCompletion) {
+                        WLFormRow(loc("智能补全", "Smart completion"),
+                                  detail: loc("本地终端输入时提示 git 分支、npm 脚本、make 目标、SSH 主机、路径和历史命令。↑↓ 选择，Tab / → 接受，Esc 关闭",
+                                              "Suggest git branches, npm scripts, make targets, SSH hosts, paths and history as you type in local shells. ↑↓ to pick, Tab / → to accept, Esc to dismiss")) { EmptyView() }
+                    }
+                    .toggleStyle(.wlSwitch)
                     WLFormDivider()
                     Toggle(isOn: $store.inheritWorkingDirectory) { rowLabel(loc("新标签继承当前目录", "New tabs inherit the directory")) }
                         .toggleStyle(.wlSwitch).frame(minHeight: 38).wlConfigLocked("window-inherit-working-directory")
