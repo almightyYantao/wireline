@@ -89,6 +89,19 @@ final class AgentHookServer {
         if let old { try old.write(to: url.appendingPathExtension("wireline-backup"), options: .atomic) }
         try new.write(to: url, options: .atomic)
     }
+
+    static var hooksPresent: Bool {
+        AgentHooks.hasAny(settingsJSON: try? Data(contentsOf: claudeSettingsURL))
+    }
+
+    /// Take out only Wireline's hooks, after backing up the file.
+    static func uninstallClaudeHooks() throws {
+        let url = claudeSettingsURL
+        let old = try? Data(contentsOf: url)
+        guard let old, let new = try AgentHooks.removed(settingsJSON: old) else { return }
+        try old.write(to: url.appendingPathExtension("wireline-backup"), options: .atomic)
+        try new.write(to: url, options: .atomic)
+    }
 }
 
 import SwiftUI
@@ -103,22 +116,45 @@ struct ClaudeHooksRow: View {
         WLFormRow(loc("Claude Code 精确状态", "Claude Code exact status"),
                   detail: error ?? loc("往 ~/.claude/settings.json 合并 hooks（保留你已有的 hooks），本地标签里的 Claude Code 会直接报告工作中 / 等你 / 完成。新开的本地标签生效。",
                                        "Merges hooks into ~/.claude/settings.json (your own hooks are kept) so Claude Code in local tabs reports working / waiting / done itself. Applies to newly opened local tabs.")) {
-            if installed {
-                Label(loc("已安装", "Installed"), systemImage: "checkmark.circle.fill")
-                    .font(WL.small).foregroundStyle(WL.green)
-            } else {
-                Button(loc("为 Claude Code 安装 hooks", "Install hooks for Claude Code")) {
-                    do {
-                        try AgentHookServer.installClaudeHooks()
-                        error = nil
-                    } catch {
-                        self.error = loc("安装失败：", "Couldn't install: ") + error.localizedDescription
+            HStack(spacing: 8) {
+                if installed {
+                    Label(loc("已安装", "Installed"), systemImage: "checkmark.circle.fill")
+                        .font(WL.small).foregroundStyle(WL.green)
+                } else {
+                    Button(loc("为 Claude Code 安装 hooks", "Install hooks for Claude Code")) {
+                        do {
+                            try AgentHookServer.installClaudeHooks()
+                            error = nil
+                        } catch {
+                            self.error = loc("安装失败：", "Couldn't install: ") + error.localizedDescription
+                        }
+                        refresh()
                     }
-                    installed = AgentHookServer.hooksInstalled
+                    .buttonStyle(.wlSecondary)
                 }
-                .buttonStyle(.wlSecondary)
+                if present {
+                    Button(loc("卸载", "Uninstall")) {
+                        do {
+                            try AgentHookServer.uninstallClaudeHooks()
+                            error = nil
+                        } catch {
+                            self.error = loc("卸载失败：", "Couldn't uninstall: ") + error.localizedDescription
+                        }
+                        refresh()
+                    }
+                    .buttonStyle(.wlSecondary)
+                    .help(loc("只移除 Wireline 加的 hooks，其余保留；原文件备份为 settings.json.wireline-backup",
+                              "Removes only Wireline's hooks; the old file is backed up as settings.json.wireline-backup"))
+                }
             }
         }
-        .onAppear { installed = AgentHookServer.hooksInstalled }
+        .onAppear { refresh() }
+    }
+
+    @State private var present = AgentHookServer.hooksPresent
+
+    private func refresh() {
+        installed = AgentHookServer.hooksInstalled
+        present = AgentHookServer.hooksPresent
     }
 }

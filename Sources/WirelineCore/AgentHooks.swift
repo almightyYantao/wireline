@@ -115,6 +115,52 @@ public enum AgentHooks {
         return merged(settings: obj) == nil
     }
 
+    /// `settings` with only Wireline's hook commands taken out. Groups and
+    /// events left empty by that go too; everything else stays. Nil when
+    /// there is nothing of ours.
+    public static func removed(settings: [String: Any]) -> [String: Any]? {
+        guard var hooks = settings["hooks"] as? [String: Any] else { return nil }
+        var changed = false
+        for (name, value) in hooks {
+            guard let groups = value as? [Any] else { continue }
+            var kept: [Any] = []
+            for group in groups {
+                guard containsOurs(group), var dict = group as? [String: Any],
+                      let entries = dict["hooks"] as? [Any] else { kept.append(group); continue }
+                changed = true
+                let rest = entries.filter { !isOurs($0) }
+                if rest.isEmpty { continue }
+                dict["hooks"] = rest
+                kept.append(dict)
+            }
+            hooks[name] = kept.isEmpty ? nil : kept
+        }
+        guard changed else { return nil }
+        var out = settings
+        out["hooks"] = hooks.isEmpty ? nil : hooks
+        return out
+    }
+
+    /// Remove from the JSON text of a settings file. Nil when nothing changes.
+    public static func removed(settingsJSON data: Data?) throws -> Data? {
+        guard let data, !data.isEmpty else { return nil }
+        guard let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw CocoaError(.propertyListReadCorrupt)
+        }
+        guard let out = removed(settings: obj) else { return nil }
+        return try JSONSerialization.data(withJSONObject: out, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
+    }
+
+    /// Whether any Wireline hook is present (even a partial install).
+    public static func hasAny(settingsJSON data: Data?) -> Bool {
+        guard let data, let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
+        return removed(settings: obj) != nil
+    }
+
+    private static func isOurs(_ entry: Any) -> Bool {
+        ((entry as? [String: Any])?["command"] as? String)?.contains(marker) == true
+    }
+
     private static func containsOurs(_ group: Any) -> Bool {
         guard let hooks = (group as? [String: Any])?["hooks"] as? [Any] else { return false }
         return hooks.contains { (($0 as? [String: Any])?["command"] as? String)?.contains(marker) == true }
