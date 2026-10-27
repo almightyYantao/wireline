@@ -33,15 +33,15 @@ extension Notification.Name {
 enum PasteChoice { case paste, singleLine, cancel }
 
 struct PasteRequest: Identifiable {
-    let id = UUID()
+    var id = UUID()
     let text: String
     /// Asked from the quick terminal's panel, not the main window.
     let quick: Bool
     fileprivate let answer: (PasteChoice) -> Void
 }
 
-/// One pending multi-line paste at a time; a second ⌘V while one is open is
-/// dropped (cancelled).
+/// One pending multi-line paste at a time; a second ⌘V while one is open
+/// takes its place in the same card (the earlier one is declined).
 @Observable
 @MainActor
 final class PasteConfirmCenter {
@@ -50,8 +50,15 @@ final class PasteConfirmCenter {
     private(set) var current: PasteRequest?
 
     func ask(_ text: String, from view: NSView, answer: @escaping (PasteChoice) -> Void) {
-        guard current == nil else { return answer(.cancel) }
-        current = PasteRequest(text: text, quick: view.window is QuickTerminalPanel, answer: answer)
+        var next = PasteRequest(text: text, quick: view.window is QuickTerminalPanel, answer: answer)
+        if let old = current {
+            // Same id: the open card updates in place instead of closing.
+            if old.quick == next.quick { next.id = old.id }
+            current = next
+            old.answer(.cancel)
+        } else {
+            current = next
+        }
     }
 
     func answer(_ choice: PasteChoice) {

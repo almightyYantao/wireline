@@ -294,6 +294,16 @@ final class WirelineTerminalView: TerminalView, TerminalEngine {
         return true
     }
 
+    func cursorLine() -> TerminalCursorLine? {
+        let t = getTerminal()
+        guard !t.isCurrentBufferAlternate, scrollPosition >= 1 || !canScroll else { return nil }
+        let (x, y) = t.getCursorLocation()
+        guard let line = t.getLine(row: y) else { return nil }
+        return TerminalCursorLine(row: y,
+                                  before: line.translateToString(endCol: x, skipNullCellsFollowingWide: true),
+                                  after: line.translateToString(trimRight: true, startCol: x, skipNullCellsFollowingWide: true))
+    }
+
     /// Text of the most recent finished command's output, trailing blanks trimmed.
     func lastCommandOutput() -> String? {
         let t = getTerminal()

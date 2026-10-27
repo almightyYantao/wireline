@@ -285,14 +285,6 @@ struct WirelineApp: App {
         .windowResizability(.contentSize)
         .defaultPosition(.bottomTrailing)
 
-        // A coding agent's latest answer as Markdown (AgentReader).
-        Window("Wireline Reader", id: "reader") {
-            AgentReaderView()
-                .environment(loc)
-        }
-        .windowStyle(.hiddenTitleBar)
-        .defaultSize(width: 680, height: 720)
-
         // Menu-bar extra: a live count of open items plus quick add / toggle,
         // so the to-do list is one click away without opening a window. Removed
         // from the menu bar entirely when the to-do feature is disabled.

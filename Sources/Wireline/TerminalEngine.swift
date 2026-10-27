@@ -74,6 +74,9 @@ protocol TerminalEngine: NSView, TerminalScrollable {
     @discardableResult func jumpToPrompt(_ delta: Int) -> Bool
     /// Text of the most recent finished command's output.
     func lastCommandOutput() -> String?
+    /// The live screen row holding the cursor, split at the cursor (nil when
+    /// scrolled back or unreadable).
+    func cursorLine() -> TerminalCursorLine?
     /// Scrollback + screen with colours, for restore on next launch (empty while
     /// a full-screen app owns the alternate screen).
     var renderedBuffer: Data { get }
@@ -93,6 +96,12 @@ protocol TerminalEngine: NSView, TerminalScrollable {
     func findPrevious(_ term: String, options: SearchOptions, scrollToResult: Bool) -> Bool
     func searchMatchSummary(_ term: String, options: SearchOptions, limit: Int) -> (index: Int, total: Int)
     func clearSearch()
+}
+
+struct TerminalCursorLine: Equatable {
+    var row: Int
+    var before: String
+    var after: String
 }
 
 extension TerminalEngine {

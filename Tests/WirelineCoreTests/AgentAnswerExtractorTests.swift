@@ -137,4 +137,39 @@ final class AgentAnswerExtractorTests: XCTestCase {
         XCTAssertNil(AgentAnswerExtractor.latestAnswer(in: "$ ls\nfoo bar\n$ "))
         XCTAssertNil(AgentAnswerExtractor.latestAnswer(in: "> run it\n\n⏺ Bash(make)\n  ⎿  ok\n"))
     }
+
+    /// Newer Claude Code: collapsed tool groups, thinking blocks, a rule-only
+    /// input box holding a half-typed draft, and a status line under it.
+    func testClaudeCodeCollapsedToolsAndThinking() {
+        let screen = """
+        > 看看测试为什么挂了
+
+        ∴ Thinking…
+
+          先读测试文件再说。
+
+        ⏺ Read 3 files (ctrl+o to expand)
+
+        ⏺ Searched for 2 patterns, read 1 file (ctrl+o to expand)
+
+        ⏺ Update(Sources/A.swift)
+          ⎿  Updated Sources/A.swift with 1 addition
+
+        ⏺ 测试挂在时区：`Date()` 换成了固定时间。
+          现在全部通过。
+
+        ────────────────────────────────────────────────────────
+        > 下一步呢
+        ────────────────────────────────────────────────────────
+          ⏵⏵ accept edits on (shift+tab to cycle)
+        """
+        XCTAssertEqual(AgentAnswerExtractor.latestAnswer(in: screen, agent: .claude),
+                       "测试挂在时区：`Date()` 换成了固定时间。\n现在全部通过。")
+    }
+
+    /// Codex while still working: the status bullet isn't part of the answer.
+    func testCodexWorkingLine() {
+        let screen = "› fix it\n\n• 改好了，见 `main.rs`。\n\n• Working (12s • esc to interrupt)\n\n› \n"
+        XCTAssertEqual(AgentAnswerExtractor.latestAnswer(in: screen, agent: .codex), "改好了，见 `main.rs`。")
+    }
 }

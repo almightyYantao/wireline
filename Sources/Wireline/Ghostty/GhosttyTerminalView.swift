@@ -378,6 +378,25 @@ final class GhosttyTerminalView: NSView, TerminalEngine {
 
     func lastCommandOutput() -> String? { ioGlue.lastCommandOutput() }
 
+    func cursorLine() -> TerminalCursorLine? {
+        guard let s = surface?.raw else { return nil }
+        let cell = cellSize, size = ghostty_surface_size(s)
+        guard cell.width > 0, cell.height > 0 else { return nil }
+        // Window padding is 0 (GhosttyConfig), so the IME point maps straight to a cell.
+        var x = 0.0, y = 0.0, w = 0.0, h = 0.0
+        ghostty_surface_ime_point(s, &x, &y, &w, &h)
+        let col = Int((x / cell.width).rounded()), row = Int((y / cell.height).rounded()) - 1
+        guard row >= 0, row < Int(size.rows), let text = viewportLine(row, columns: Int(size.columns)) else { return nil }
+        var before = "", cells = 0, rest = Substring(text)
+        while let ch = rest.first, cells < col {
+            before.append(ch)
+            cells += Self.cellWidth(ch)
+            rest = rest.dropFirst()
+        }
+        if cells < col { before += String(repeating: " ", count: col - cells) }
+        return TerminalCursorLine(row: row, before: before, after: String(rest).replacingOccurrences(of: "\\s+$", with: "", options: .regularExpression))
+    }
+
     /// Scrollback + screen as SGR-coloured text with CRLFs — Ghostty's VT
     /// export (`write_screen_file:copy,vt`), whose "copy" of the file path is
     /// intercepted instead of reaching the pasteboard. Empty on the alternate

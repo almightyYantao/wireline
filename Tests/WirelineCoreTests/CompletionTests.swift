@@ -106,4 +106,38 @@ import Testing
         let hist = ": 1700000000:0;ls -la\n: 1700000001:0;git status\nmulti \\\nline\nls -la\n"
         #expect(CompletionParsers.history(hist) == ["ls -la", "git status"])
     }
+
+    @Test func trackerResyncsFromScreen() {
+        let p = "~/src ❯ "
+        #expect(CompletionLineTracker.lineFromScreen(prompt: p, before: p + "git sw", after: "") == "git sw")
+        #expect(CompletionLineTracker.lineFromScreen(prompt: p, before: p + "ls ", after: "      12:01") == "ls ")
+        // Cursor mid-line, autosuggestion or a changed prompt: give up.
+        #expect(CompletionLineTracker.lineFromScreen(prompt: p, before: p + "git", after: "status") == nil)
+        #expect(CompletionLineTracker.lineFromScreen(prompt: p, before: p + "git", after: " status") == nil)
+        #expect(CompletionLineTracker.lineFromScreen(prompt: p, before: "other> git", after: "") == nil)
+        #expect(CompletionLineTracker.lineFromScreen(prompt: "  ", before: "  git", after: "") == nil)
+
+        var t = CompletionLineTracker()
+        t.feed(Array("\u{1b}[A".utf8))
+        t.resync("git log")
+        t.feed(Array(" -1".utf8))
+        #expect(t.isValid && t.line == "git log -1")
+    }
+
+    @Test func fuzzyMatchesRankAfterPrefix() {
+        let items = ["feature/login", "fix-logs", "main", "fl", "release/1.0"]
+        #expect(CompletionEngine.rank(items, prefix: "fl") == ["fl"])
+        #expect(CompletionEngine.rank(items, prefix: "fl", fuzzy: true) == ["fl", "fix-logs", "feature/login"])
+        #expect(CompletionEngine.rank(items, prefix: "MN", fuzzy: true) == ["main"])
+        #expect(CompletionEngine.subsequenceScore("xyz", in: "main") == nil)
+
+        var data = CompletionData()
+        data.branches = ["main", "feature/login"]
+        let fuzzy = CompletionEngine.suggest(.parse("git checkout flgn"), data: data)
+        #expect(fuzzy.first == Completion(kind: .branch, display: "feature/login", insert: "feature/login ", erase: 4))
+        let prefix = CompletionEngine.suggest(.parse("git checkout ma"), data: data)
+        #expect(prefix.first == Completion(kind: .branch, display: "main", insert: "in ", erase: 0))
+        // Quoted words can't be retyped safely: prefix only.
+        #expect(CompletionEngine.suggest(.parse("git checkout 'flgn"), data: data).isEmpty)
+    }
 }

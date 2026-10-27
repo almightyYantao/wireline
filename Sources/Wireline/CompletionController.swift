@@ -18,6 +18,12 @@ final class CompletionController {
     private var generation = 0
     private var panel: NSPanel?
     private var monitor: Any?
+    private var observers: [NSObjectProtocol] = []
+    /// The cursor row and prompt text at the empty prompt, to read the line back
+    /// from the screen after edits the tracker can't follow.
+    private var anchor: (row: Int, prompt: String)?
+    private var needsAnchor = true
+    private var resyncGeneration = 0
     /// Typed with `send` by an accept — tracked, but must not reopen the list.
     private var accepting = false
 
@@ -25,12 +31,22 @@ final class CompletionController {
 
     // MARK: Events from the session
 
+    /// Before the first key at an empty prompt, remember where the prompt is,
+    /// so a line we lost track of can be read back from the screen.
+    private func noteAnchor(_ session: TerminalSession) {
+        guard needsAnchor, tracker.isValid, tracker.line.isEmpty else { return }
+        needsAnchor = false
+        if let c = session.terminalView.cursorLine(), !c.before.trimmingCharacters(in: .whitespaces).isEmpty {
+            anchor = (c.row, c.before)
+        }
+    }
+
     /// SSH: whether the remote shell is at its own prompt (OSC 133 marks).
     private var remoteGate = RemotePromptGate()
 
-    func promptReady() { remoteGate.commandFinished(); tracker.promptReady(); hide() }
-    func commandStarted() { remoteGate.commandStarted(); tracker.invalidate(); hide() }
-    func disconnected() { remoteGate.reset(); tracker.invalidate(); hide() }
+    func promptReady() { remoteGate.commandFinished(); tracker.promptReady(); anchor = nil; needsAnchor = true; hide() }
+    func commandStarted() { remoteGate.commandStarted(); tracker.invalidate(); anchor = nil; needsAnchor = false; hide() }
+    func disconnected() { remoteGate.reset(); tracker.invalidate(); anchor = nil; hide() }
 
     /// Bytes going to the PTY (keys, pastes, our own inserts).
     func input(_ bytes: ArraySlice<UInt8>) {
@@ -38,24 +54,55 @@ final class CompletionController {
         switch session.kind {
         case .localShell:
             // A job (vim, claude, ssh…) owns the terminal: its input isn't a shell line.
-            guard session.io.foregroundJob() == .child else { tracker.invalidate(); hide(); return }
+            guard session.io.foregroundJob() == .child else { tracker.invalidate(); anchor = nil; hide(); return }
+            noteAnchor(session)
             for line in tracker.feed(bytes) { CompletionProvider.shared.record(line) }
         case .ssh(let alias, _, _, _, _):
             // Not sure it's the remote shell's own prompt: stay quiet.
             if bytes.contains(0x04) { remoteGate.endOfInput(lineWasEmpty: tracker.isValid && tracker.line.isEmpty) }
             guard remoteGate.isOpen, !session.io.inAltBuffer, session.activeEditor == nil else {
-                tracker.invalidate(); hide(); return
+                tracker.invalidate(); anchor = nil; hide(); return
             }
+            noteAnchor(session)
             for line in tracker.feed(bytes) {
                 remoteGate.submitted(line)
                 Task { await RemoteCompletionProvider.shared.record(line, alias: alias) }
             }
-            guard remoteGate.isOpen else { tracker.invalidate(); hide(); return }
+            guard remoteGate.isOpen else { tracker.invalidate(); anchor = nil; hide(); return }
         default:
             return
         }
+        if bytes.contains(where: { $0 == 0x0D || $0 == 0x0A || $0 == 0x03 }) {
+            anchor = nil
+            needsAnchor = true
+        }
+        if !tracker.isValid, anchor != nil { scheduleResync() }
         guard Self.enabled, tracker.isValid, !accepting, !tracker.line.isEmpty else { hide(); return }
         refresh()
+    }
+
+    /// After an edit the tracker can't model (arrows, history, paste, the
+    /// shell's Tab), read the line back once the shell has redrawn it.
+    private func scheduleResync() {
+        resyncGeneration += 1
+        let gen = resyncGeneration
+        for delay in [0.08, 0.3] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                MainActor.assumeIsolated {
+                    guard let self, gen == self.resyncGeneration, !self.tracker.isValid else { return }
+                    self.resync()
+                }
+            }
+        }
+    }
+
+    private func resync() {
+        guard let session, let anchor, session.io.foregroundJob() == .child,
+              let c = session.terminalView.cursorLine(), c.row == anchor.row,
+              let line = CompletionLineTracker.lineFromScreen(prompt: anchor.prompt, before: c.before, after: c.after)
+        else { return }
+        tracker.resync(line)
+        if Self.enabled, !line.isEmpty, session.terminalView.window?.firstResponder === session.terminalView { refresh() }
     }
 
     // MARK: Suggesting
@@ -108,6 +155,22 @@ final class CompletionController {
         if panel.parent == nil { window.addChildWindow(panel, ordered: .above) }
         panel.orderFront(nil)
         installMonitor()
+        observe(window)
+    }
+
+    /// Close when the terminal stops being where the user types.
+    private func observe(_ window: NSWindow) {
+        guard observers.isEmpty else { return }
+        let nc = NotificationCenter.default
+        let close: @Sendable (Notification) -> Void = { [weak self] _ in
+            MainActor.assumeIsolated { self?.hide() }
+        }
+        for name in [NSWindow.didResignKeyNotification, NSWindow.didMoveNotification,
+                     NSWindow.didResizeNotification, NSWindow.willCloseNotification] {
+            observers.append(nc.addObserver(forName: name, object: window, queue: .main, using: close))
+        }
+        observers.append(nc.addObserver(forName: NSApplication.didResignActiveNotification, object: nil,
+                                        queue: .main, using: close))
     }
 
     func hide() {
@@ -119,6 +182,8 @@ final class CompletionController {
         }
         if let monitor { NSEvent.removeMonitor(monitor) }
         monitor = nil
+        observers.forEach(NotificationCenter.default.removeObserver)
+        observers = []
     }
 
     private func makePanel(parent: NSWindow) -> NSPanel {
@@ -140,9 +205,12 @@ final class CompletionController {
 
     private func installMonitor() {
         guard monitor == nil else { return }
-        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .scrollWheel, .leftMouseDown,
+                                                             .rightMouseDown, .otherMouseDown]) { [weak self] event in
             guard let self else { return event }
             nonisolated(unsafe) let e = event
+            // Scrolling or clicking anywhere (another pane, a tab) closes the list.
+            guard event.type == .keyDown else { MainActor.assumeIsolated { self.hide() }; return event }
             let used = MainActor.assumeIsolated { self.handle(e) }
             return used ? nil : event
         }
@@ -150,8 +218,9 @@ final class CompletionController {
 
     private func handle(_ event: NSEvent) -> Bool {
         guard !items.isEmpty, let session, let panel,
-              session.terminalView.window?.firstResponder === session.terminalView else { return false }
+              session.terminalView.window?.firstResponder === session.terminalView else { hide(); return false }
         let mods = event.modifierFlags.intersection([.command, .control, .option, .shift])
+        if mods.contains(.command) { hide() }
         guard mods.isEmpty else { return false }
         switch event.keyCode {
         case 125: selected = (selected + 1) % items.count; render(panel); return true
@@ -166,7 +235,7 @@ final class CompletionController {
         hide()
         guard let session else { return }
         accepting = true
-        session.terminalView.send(txt: item.insert)
+        session.terminalView.send(txt: String(repeating: "\u{7F}", count: item.erase) + item.insert)
         accepting = false
     }
 }
