@@ -83,6 +83,8 @@ final class TerminalIO {
     var onBusyChange: ((Bool, TimeInterval) -> Void)?
     /// Every chunk of output (a backgrounded tab flags unread output).
     var onOutput: (() -> Void)?
+    /// The raw bytes of every chunk of output (phone relay).
+    var onBytes: ((ArraySlice<UInt8>) -> Void)?
     /// The program rang the bell (nil) or posted a desktop notification
     /// (OSC 9 / 777 / 99; its text) — coding agents do when they wait for you.
     var onAttention: ((String?) -> Void)?
@@ -312,6 +314,7 @@ final class TerminalIO {
         }
 
         engine?.feed(slice)
+        onBytes?(slice)
         outputObserver?()
         sniffAttention(slice)
         let chunk = String(decoding: slice, as: UTF8.self)

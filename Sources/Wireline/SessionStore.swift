@@ -344,6 +344,9 @@ final class TerminalSession: Identifiable {
             self?.connect.noteOutput()
             if let self { IslandCenter.shared.sessionOutput(self) }
         }
+        io.onBytes = { [weak self] bytes in
+            if let self { PhoneRelay.shared.output(self, bytes) }
+        }
         // Bells and desktop notifications (OSC 9 / 777 / 99): a coding agent
         // waiting for you, for the notch island.
         io.onAttention = { [weak self] message in

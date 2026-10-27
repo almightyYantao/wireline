@@ -84,6 +84,7 @@ struct WirelineApp: App {
                     if AIConfig.shared.petEnabled { openWindow(id: "pet") }
                     // The notch island: AI / agent activity around the notch.
                     IslandController.shared.start(sessions: sessions)
+                    PhoneRelay.shared.attach(sessions: sessions)
                     IslandPreview.runIfRequested()
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [sessions] in
                         sessions.focusActiveTerminal()
