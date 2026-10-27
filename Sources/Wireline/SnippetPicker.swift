@@ -714,10 +714,10 @@ struct SnippetFillForm: View {
     var onConfirm: ([String: String], SnippetSendMode) -> Void
     @State private var values: [String: String]
 
-    init(snippet: Snippet, mode: SnippetSendMode, onBack: @escaping () -> Void,
+    init(snippet: Snippet, mode: SnippetSendMode, initial: [String: String]? = nil, onBack: @escaping () -> Void,
          onConfirm: @escaping ([String: String], SnippetSendMode) -> Void) {
         self.snippet = snippet; self.mode = mode; self.onBack = onBack; self.onConfirm = onConfirm
-        _values = State(initialValue: snippet.initialValues())
+        _values = State(initialValue: initial ?? snippet.initialValues())
     }
 
     var body: some View {
@@ -1037,7 +1037,8 @@ struct SnippetEditorCard: View {
 // MARK: - Batch run
 
 /// Run several snippets, in order, in several open terminal panes. Parameters
-/// take last time's value or their default; dangerous ones are listed first.
+/// are asked for before running (starting from last time's values); a
+/// dangerous batch still needs a second click.
 struct SnippetBatchRunView: View {
     @Environment(SnippetStore.self) private var store
     @Environment(SessionStore.self) private var sessions
@@ -1050,7 +1051,14 @@ struct SnippetBatchRunView: View {
     @State private var targets: Set<UUID> = [] { didSet { armed = false } }
     /// A dangerous batch takes a second click.
     @State private var armed = false
+    /// Parameters filled in for this batch, per snippet.
+    @State private var values: [UUID: [String: String]] = [:] { didSet { armed = false } }
+    /// The snippet whose parameter form is showing.
+    @State private var filling: Snippet?
+    /// Filling was started by the run button: carry on to run when done.
+    @State private var fillingToRun = false
     private var hasDanger: Bool { snippets.contains { SnippetSafety.isDangerous(text($0)) } }
+    private var unfilled: [Snippet] { snippets.filter { !$0.parameters.isEmpty && values[$0.id] == nil } }
 
     private var panes: [TerminalSession] {
         sessions.sessions.filter { s in
@@ -1059,9 +1067,25 @@ struct SnippetBatchRunView: View {
         }
     }
 
-    private func text(_ s: Snippet) -> String { s.filled(with: s.initialValues()) }
+    private func text(_ s: Snippet) -> String { s.filled(with: values[s.id] ?? s.initialValues()) }
 
+    @ViewBuilder
     var body: some View {
+        if let filling {
+            SnippetFillForm(snippet: filling, mode: .run, initial: values[filling.id],
+                            onBack: { self.filling = nil; fillingToRun = false },
+                            onConfirm: { v, _ in
+                                values[filling.id] = v
+                                self.filling = fillingToRun ? unfilled.first : nil
+                                if self.filling == nil, fillingToRun { fillingToRun = false; proceed() }
+                            })
+            .id(filling.id)
+        } else {
+            list
+        }
+    }
+
+    private var list: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
                 Button(action: onBack) { Image(systemName: "chevron.left").font(.system(size: 11, weight: .semibold)) }
@@ -1077,7 +1101,16 @@ struct SnippetBatchRunView: View {
                     ForEach(snippets) { s in
                         let reasons = SnippetSafety.dangerReasons(text(s))
                         VStack(alignment: .leading, spacing: 1) {
-                            Text(s.title(chinese: loc.isChinese)).font(WL.caption).foregroundStyle(WL.textPrimary)
+                            HStack(spacing: 6) {
+                                Text(s.title(chinese: loc.isChinese)).font(WL.caption).foregroundStyle(WL.textPrimary)
+                                if !s.parameters.isEmpty {
+                                    Button(values[s.id] == nil ? loc("填写参数…", "Fill in…") : loc("改参数…", "Edit values…")) {
+                                        fillingToRun = false; filling = s
+                                    }
+                                    .buttonStyle(.wlPlain).font(WL.caption)
+                                    .foregroundStyle(values[s.id] == nil ? WL.green : WL.textDim)
+                                }
+                            }
                             Text(text(s)).font(WL.mono(11)).foregroundStyle(WL.textDim).lineLimit(2)
                             if !reasons.isEmpty {
                                 Text("⚠︎ " + reasons.joined(separator: ", ")).font(WL.caption).foregroundStyle(WL.red)
@@ -1117,21 +1150,28 @@ struct SnippetBatchRunView: View {
                         .buttonStyle(.wlPrimary).tint(WL.red).disabled(targets.isEmpty)
                 } else {
                     Button(loc("执行到 \(targets.count) 个会话", "Run in \(targets.count)")) {
-                        if hasDanger { armed = true } else { run() }
+                        if let first = unfilled.first { fillingToRun = true; filling = first } else { proceed() }
                     }
                     .buttonStyle(.wlPrimary).disabled(targets.isEmpty)
                 }
             }
             .padding(.horizontal, 12).padding(.vertical, 9)
         }
-        .onAppear { targets = [current.id] }
+        .onAppear { if !didAppear { didAppear = true; targets = [current.id] } }
+    }
+
+    @State private var didAppear = false
+
+    /// After the parameters: a dangerous batch still takes the second click.
+    private func proceed() {
+        if hasDanger { armed = true } else { run() }
     }
 
     private func run() {
         for p in panes where targets.contains(p.id) {
             for s in snippets { p.runInTerminal(text(s).trimmingCharacters(in: .newlines)) }
         }
-        for s in snippets { store.recordUse(s.id) }
+        for s in snippets { store.recordUse(s.id, values: values[s.id] ?? [:]) }
         onDone()
     }
 }
