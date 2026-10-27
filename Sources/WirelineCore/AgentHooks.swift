@@ -64,6 +64,55 @@ public enum AgentHooks {
         return Message(sessionID: id, event: event)
     }
 
+    // MARK: - SSH: in-band OSC
+
+    /// Over SSH there's no socket: the remote hook writes
+    /// `OSC 1337;WirelineHook=<event>;<base64 hook JSON> BEL` to its terminal,
+    /// which the pane's output sniffer picks up. Other terminals ignore it.
+    public static let oscKey = "1337;WirelineHook="
+    /// What marks a remote (OSC) hook as ours.
+    public static let remoteMarker = "WirelineHook="
+    /// Hook JSON beyond this is cut (the OSC sniffer drops long payloads).
+    public static let remotePayloadLimit = 2000
+
+    /// The OSC payload after `oscKey`: `<event>[;<base64 JSON>]`.
+    public static func parseOSC(_ payload: String) -> Event? {
+        let parts = payload.split(separator: ";", maxSplits: 1, omittingEmptySubsequences: false)
+        guard let name = parts.first else { return nil }
+        var message: String?
+        if parts.count == 2, let data = Data(base64Encoded: String(parts[1]), options: .ignoreUnknownCharacters) {
+            message = Self.message(in: data)
+        }
+        return Event(name: String(name), message: message)
+    }
+
+    /// `message` of a hook JSON payload; a cut-off payload still yields it
+    /// when the field comes before the cut.
+    static func message(in data: Data) -> String? {
+        if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            return (obj["message"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        }
+        let text = String(decoding: data, as: UTF8.self)
+        guard let r = text.range(of: "\"message\""),
+              let open = text[r.upperBound...].firstIndex(of: "\"") else { return nil }
+        var out = "", escape = false
+        for ch in text[text.index(after: open)...] {
+            if escape { out.append(ch == "n" ? "\n" : ch); escape = false; continue }
+            if ch == "\\" { escape = true; continue }
+            if ch == "\"" { return out.isEmpty ? nil : out }
+            out.append(ch)
+        }
+        return nil
+    }
+
+    /// The remote hook command: writes the OSC straight to the controlling
+    /// terminal (a hook's stdout is captured by Claude Code). No env vars
+    /// needed — they don't survive SSH — and it always exits 0.
+    public static func remoteCommand(for event: String) -> String {
+        "{ printf '\\033]\(oscKey)\(event);'; { head -c \(remotePayloadLimit); cat >/dev/null; } | base64 | tr -d '\\n'; "
+            + "printf '\\007'; } 2>/dev/null >/dev/tty; true"
+    }
+
     // MARK: - ~/.claude/settings.json
 
     /// What marks a hook as ours, so installing twice adds nothing.
@@ -79,14 +128,16 @@ public enum AgentHooks {
 
     /// `settings` with Wireline's hooks added to its `hooks` section, leaving
     /// every existing hook alone. Nil when they're all there already.
-    public static func merged(settings: [String: Any]) -> [String: Any]? {
+    public static func merged(settings: [String: Any], remote: Bool = false) -> [String: Any]? {
+        let mark = remote ? remoteMarker : marker
         var out = settings
         var hooks = settings["hooks"] as? [String: Any] ?? [:]
         var changed = false
         for name in Event.hookNames {
             var groups = hooks[name] as? [Any] ?? []
-            if groups.contains(where: containsOurs) { continue }
-            groups.append(["hooks": [["type": "command", "command": command(for: name)]]] as [String: Any])
+            if groups.contains(where: { containsOurs($0, mark) }) { continue }
+            let cmd = remote ? remoteCommand(for: name) : command(for: name)
+            groups.append(["hooks": [["type": "command", "command": cmd]]] as [String: Any])
             hooks[name] = groups
             changed = true
         }
@@ -97,7 +148,7 @@ public enum AgentHooks {
 
     /// Merge into the JSON text of a settings file (nil / empty: no file yet).
     /// Returns the new text, or nil when nothing needs writing.
-    public static func merged(settingsJSON data: Data?) throws -> Data? {
+    public static func merged(settingsJSON data: Data?, remote: Bool = false) throws -> Data? {
         var settings: [String: Any] = [:]
         if let data, !data.allSatisfy({ $0 == 0x20 || $0 == 0x0A || $0 == 0x09 || $0 == 0x0D }) {
             guard let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
@@ -105,17 +156,17 @@ public enum AgentHooks {
             }
             settings = obj
         }
-        guard let out = merged(settings: settings) else { return nil }
+        guard let out = merged(settings: settings, remote: remote) else { return nil }
         return try JSONSerialization.data(withJSONObject: out, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
     }
 
     /// Whether every Wireline hook is present.
-    public static func isInstalled(settingsJSON data: Data?) -> Bool {
+    public static func isInstalled(settingsJSON data: Data?, remote: Bool = false) -> Bool {
         guard let data, let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
-        return merged(settings: obj) == nil
+        return merged(settings: obj, remote: remote) == nil
     }
 
-    private static func containsOurs(_ group: Any) -> Bool {
+    private static func containsOurs(_ group: Any, _ marker: String) -> Bool {
         guard let hooks = (group as? [String: Any])?["hooks"] as? [Any] else { return false }
         return hooks.contains { (($0 as? [String: Any])?["command"] as? String)?.contains(marker) == true }
     }

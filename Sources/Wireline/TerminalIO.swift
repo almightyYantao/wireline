@@ -86,6 +86,8 @@ final class TerminalIO {
     /// The program rang the bell (nil) or posted a desktop notification
     /// (OSC 9 / 777 / 99; its text) — coding agents do when they wait for you.
     var onAttention: ((String?) -> Void)?
+    /// A Claude Code hook reported in-band by a remote host (`AgentHooks.oscKey`).
+    var onAgentHook: ((AgentHooks.Event) -> Void)?
     /// The first byte from the host arrived — dialing → connected.
     var onConnected: (() -> Void)?
     /// The process exited (ssh dropped, logout, killed).
@@ -286,6 +288,8 @@ final class TerminalIO {
             case let .notification(title, body):
                 let text = [title, body].filter { !$0.isEmpty }.joined(separator: ": ")
                 onAttention?(text.isEmpty ? nil : text)
+            case let .agentHook(payload):
+                if let e = AgentHooks.parseOSC(payload) { onAgentHook?(e) }
             default: break
             }
         }
@@ -436,7 +440,7 @@ final class TerminalIO {
     // MARK: Full-screen editor detection
 
     private var detectTail = ""
-    private var inAltBuffer = false
+    private(set) var inAltBuffer = false
     /// While in the alt screen and not yet identified, keep sniffing content for
     /// vim's on-screen signatures (see `contentLooksLikeVim`).
     private var vimSniffing = false

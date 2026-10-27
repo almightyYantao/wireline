@@ -5,6 +5,8 @@ import WirelineCore
 /// Smart completion for local shells: follows the typed line from the bytes
 /// sent to the PTY and shows a small list near the cursor. Only while the
 /// shell itself owns the terminal — never inside vim, an AI CLI or any job.
+/// SSH panes only once the remote shell's OSC 133 marks say it's at its own
+/// prompt (`RemotePromptGate`), with history / paths over SFTP.
 @MainActor
 final class CompletionController {
     static var enabled: Bool { UserDefaults.standard.object(forKey: "smartCompletion") as? Bool ?? true }
@@ -23,15 +25,35 @@ final class CompletionController {
 
     // MARK: Events from the session
 
-    func promptReady() { tracker.promptReady(); hide() }
-    func commandStarted() { tracker.invalidate(); hide() }
+    /// SSH: whether the remote shell is at its own prompt (OSC 133 marks).
+    private var remoteGate = RemotePromptGate()
+
+    func promptReady() { remoteGate.commandFinished(); tracker.promptReady(); hide() }
+    func commandStarted() { remoteGate.commandStarted(); tracker.invalidate(); hide() }
+    func disconnected() { remoteGate.reset(); tracker.invalidate(); hide() }
 
     /// Bytes going to the PTY (keys, pastes, our own inserts).
     func input(_ bytes: ArraySlice<UInt8>) {
-        guard let session, case .localShell = session.kind else { return }
-        // A job (vim, claude, ssh…) owns the terminal: its input isn't a shell line.
-        guard session.io.foregroundJob() == .child else { tracker.invalidate(); hide(); return }
-        for line in tracker.feed(bytes) { CompletionProvider.shared.record(line) }
+        guard let session else { return }
+        switch session.kind {
+        case .localShell:
+            // A job (vim, claude, ssh…) owns the terminal: its input isn't a shell line.
+            guard session.io.foregroundJob() == .child else { tracker.invalidate(); hide(); return }
+            for line in tracker.feed(bytes) { CompletionProvider.shared.record(line) }
+        case .ssh(let alias, _, _, _, _):
+            // Not sure it's the remote shell's own prompt: stay quiet.
+            if bytes.contains(0x04) { remoteGate.endOfInput(lineWasEmpty: tracker.isValid && tracker.line.isEmpty) }
+            guard remoteGate.isOpen, !session.io.inAltBuffer, session.activeEditor == nil else {
+                tracker.invalidate(); hide(); return
+            }
+            for line in tracker.feed(bytes) {
+                remoteGate.submitted(line)
+                Task { await RemoteCompletionProvider.shared.record(line, alias: alias) }
+            }
+            guard remoteGate.isOpen else { tracker.invalidate(); hide(); return }
+        default:
+            return
+        }
         guard Self.enabled, tracker.isValid, !accepting, !tracker.line.isEmpty else { hide(); return }
         refresh()
     }
@@ -42,7 +64,12 @@ final class CompletionController {
         generation += 1
         let gen = generation
         let ctx = CompletionContext.parse(tracker.line)
-        let cwd = session?.currentDirectory ?? FileManager.default.homeDirectoryForCurrentUser.path
+        guard let session else { return }
+        if case .ssh(let alias, _, _, _, _) = session.kind {
+            refreshRemote(ctx, alias: alias, cwd: session.remoteDirectory, gen: gen)
+            return
+        }
+        let cwd = session.currentDirectory ?? FileManager.default.homeDirectoryForCurrentUser.path
         Task.detached(priority: .userInitiated) {
             let data = CompletionProvider.shared.data(for: ctx, cwd: cwd)
             let result = CompletionEngine.suggest(ctx, data: data)
@@ -50,6 +77,19 @@ final class CompletionController {
                 guard let self, gen == self.generation, self.tracker.isValid else { return }
                 self.show(result)
             }
+        }
+    }
+
+    private func refreshRemote(_ ctx: CompletionContext, alias: String, cwd: String?, gen: Int) {
+        guard let store = HostStore.current, let host = store.hosts.first(where: { $0.alias == alias }) else { return }
+        let credential = FileBrowserModel.credential(for: host, store: store)
+        let hostname = host.connectHostname, port = host.effectivePort, user = host.user ?? NSUserName()
+        Task { [weak self] in
+            let data = await RemoteCompletionProvider.shared.data(
+                for: ctx, alias: alias, cwd: cwd, credential: credential, hostname: hostname, port: port, user: user)
+            let result = CompletionEngine.suggest(ctx, data: data)
+            guard let self, gen == self.generation, self.tracker.isValid, self.remoteGate.isOpen else { return }
+            self.show(result)
         }
     }
 

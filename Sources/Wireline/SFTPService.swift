@@ -318,6 +318,12 @@ final class FileBrowserModel {
     /// Write `data` to `remote` on `host`, connecting first if needed — reusing
     /// the Files page's connection when it has one, else a short-lived one.
     static func put(_ data: Data, at remote: String, host: Host, store: HostStore) async throws {
+        try await withConnection(host: host, store: store) { try await $0.upload(remote, data: data) }
+    }
+
+    /// Run `body` on a connection to `host`, as `put` does.
+    static func withConnection<T: Sendable>(host: Host, store: HostStore,
+                                            _ body: (SFTPConnection) async throws -> T) async throws -> T {
         let borrowed = live[host.alias] != nil
         let m = obtain(host: host, store: store)
         defer { if !borrowed { m.release() } }
@@ -326,7 +332,7 @@ final class FileBrowserModel {
             while m.connecting { try await Task.sleep(for: .milliseconds(100)) }
             guard m.connected else { throw SFTPConnection.Fail(msg: m.status ?? "未连接") }
         }
-        try await m.conn.upload(remote, data: data)
+        return try await body(m.conn)
     }
 
     /// The page went away: disconnect now, or once the queue drains.
@@ -388,6 +394,10 @@ final class FileBrowserModel {
     /// Returns the credential to try, or nil when the host needs a password we
     /// don't have yet.
     private func resolveCredential() -> SFTPConnection.Credential? {
+        Self.credential(for: host, store: store)
+    }
+
+    static func credential(for host: Host, store: HostStore) -> SFTPConnection.Credential? {
         // 1) An explicit IdentityFile in the config wins. A Touch ID–protected
         //    key comes from the vault (its file may be in the Trash by now).
         if let idf = host.identityFile, !idf.isEmpty {
@@ -413,7 +423,7 @@ final class FileBrowserModel {
         return nil
     }
 
-    private func readKey(_ path: String) -> String? {
+    private static func readKey(_ path: String) -> String? {
         let expanded = (path as NSString).expandingTildeInPath
         return try? String(contentsOfFile: expanded, encoding: .utf8)
     }

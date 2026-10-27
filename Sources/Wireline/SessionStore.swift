@@ -337,6 +337,10 @@ final class TerminalSession: Identifiable {
         io.onAttention = { [weak self] message in
             if let self { IslandCenter.shared.sessionAttention(self, message: message) }
         }
+        io.onAgentHook = { [weak self] event in
+            guard let self, case .ssh = self.kind else { return }
+            IslandCenter.shared.agentHook(self.id, event, remote: true)
+        }
         io.onConnected = { [weak self] in
             guard let self, self.connectionState == .connecting else { return }
             self.connectionState = .connected
@@ -345,6 +349,7 @@ final class TerminalSession: Identifiable {
             guard let self else { return }
             self.connect.processExited()
             self.commandMarks.reset()
+            self.completion.disconnected()
             self.connectionState = .disconnected
             self.isRunning = false
             IslandCenter.shared.sessionGone(self.id)
@@ -368,6 +373,12 @@ final class TerminalSession: Identifiable {
             if self.agentState != nil {
                 items += [.divider, .item(loc.t("在阅读器中打开最近回答", "Open Latest Answer in Reader"),
                                           systemImage: "doc.richtext") { AgentReader.open(self) }]
+            }
+            if case .ssh(let alias, _, _, _, _) = self.kind {
+                items += [.divider, .item(loc.t("在此主机安装 Claude Code hooks…", "Install Claude Code Hooks on This Host…"),
+                                          systemImage: "antenna.radiowaves.left.and.right") {
+                    AgentHookServer.confirmRemoteInstall(alias: alias)
+                }]
             }
             return items
         }

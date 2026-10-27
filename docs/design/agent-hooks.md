@@ -44,9 +44,32 @@ Settings → General → "Install hooks for Claude Code" merges the three entrie
 `WIRELINE_HOOK_SOCK` marker so installing again is a no-op, and the old file is
 copied to `settings.json.wireline-backup` first.
 
+## SSH panes: in-band OSC
+
+Env vars and sockets don't cross SSH, so remote hooks report in-band. The hook
+writes to its controlling terminal (its stdout is captured by Claude Code):
+
+```sh
+{ printf '\033]1337;WirelineHook=Stop;'; { head -c 2000; cat >/dev/null; } | base64 | tr -d '\n'; printf '\007'; } 2>/dev/null >/dev/tty; true
+```
+
+- `TerminalStreamSniffer` reports `OSC 1337;WirelineHook=<event>;<base64 JSON>`
+  as `.agentHook`; `TerminalIO.onAgentHook` → `IslandCenter.agentHook(remote: true)`,
+  SSH sessions only. The JSON is cut at 2000 bytes so the OSC stays under the
+  sniffer's 4096 limit; `message` is still read from a cut payload.
+- Install: right-click an SSH pane → "Install Claude Code Hooks on This Host…",
+  confirmed in an alert, then merged over SFTP (`AgentHooks.merged(remote: true)`,
+  marker `WirelineHook=`, backup `settings.json.wireline-backup`). Never automatic.
+- Other terminals ignore unknown OSC 1337 keys. Any remote output can spoof
+  it (e.g. `cat` of a crafted file); the effect is limited to the island's state.
+- Why not `ssh -R` of the socket: needs `StreamLocalBindUnlink`, sshd
+  `AllowStreamLocalForwarding`, a per-connection remote path and env plumbing
+  (`SendEnv`/`SetEnv` are often refused); OSC needs nothing on the server.
+
 ## Not covered
 
-- SSH panes: the remote shell has no socket. Would need a reverse-forwarded
-  socket (`ssh -R`) or OSC in-band messages.
+- tmux / screen on the remote swallow the OSC unless passthrough is on
+  (`set -g allow-passthrough on` plus DCS wrapping) — not done.
+- Hooks spawned without a controlling terminal (`/dev/tty` unavailable) are silent.
 - Other agents (Codex …) still run on the heuristics.
 - Uninstall button.

@@ -91,7 +91,7 @@ final class GhosttyIO {
             case .privateMode(1004, let on): focusReporting = on
             case .privateMode(1049, let on), .privateMode(1047, let on), .privateMode(47, let on): alternateScreen = on
             case .privateMode: break
-            case .bell, .notification: break   // TerminalIO sniffs these for every engine
+            case .bell, .notification, .agentHook: break   // TerminalIO sniffs these for every engine
             }
         }
         #if WIRELINE_GHOSTTY_MANUAL_IO

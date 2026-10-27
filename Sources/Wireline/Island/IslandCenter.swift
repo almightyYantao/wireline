@@ -305,9 +305,9 @@ final class IslandCenter {
 
     /// An exact state from the agent's own hooks (`AgentHookServer`). Hooks
     /// only come from Claude Code, so a pane we hadn't recognised yet is one.
-    func agentHook(_ sid: UUID, _ event: AgentHooks.Event) {
+    func agentHook(_ sid: UUID, _ event: AgentHooks.Event, remote: Bool = false) {
         guard sessions?.session(sid) != nil else { return }
-        var w = agents[sid] ?? AgentWatch(agent: .claude, tracker: CodingAgentTracker(now: Date()), remote: false)
+        var w = agents[sid] ?? AgentWatch(agent: .claude, tracker: CodingAgentTracker(now: Date()), remote: remote)
         let change = w.tracker.hook(event, at: Date())
         agents[sid] = w
         publishAgent(sid, change: change)

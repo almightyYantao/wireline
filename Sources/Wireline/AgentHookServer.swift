@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Observation
 import WirelineCore
@@ -88,6 +89,48 @@ final class AgentHookServer {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         if let old { try old.write(to: url.appendingPathExtension("wireline-backup"), options: .atomic) }
         try new.write(to: url, options: .atomic)
+    }
+
+    /// SSH: merge the in-band (OSC) hooks into the host's ~/.claude/settings.json
+    /// over SFTP, backing up the old file. Only from an explicit menu command.
+    /// Returns false when they were already there.
+    static func installRemoteClaudeHooks(host: Host, store: HostStore) async throws -> Bool {
+        try await FileBrowserModel.withConnection(host: host, store: store) { conn in
+            let path = ".claude/settings.json"
+            let old: Data? = await conn.stat(path) != nil ? try await conn.download(path) : nil
+            guard let new = try AgentHooks.merged(settingsJSON: old, remote: true) else { return false }
+            try await conn.makeDirectoryIfMissing(".claude")
+            if let old { try await conn.upload(path + ".wireline-backup", data: old) }
+            try await conn.upload(path, data: new)
+            return true
+        }
+    }
+
+    /// The context-menu command: confirm, install, report.
+    static func confirmRemoteInstall(alias: String) {
+        let loc = Localizer.shared
+        guard let store = HostStore.current, let host = store.hosts.first(where: { $0.alias == alias }) else { return }
+        let ask = NSAlert()
+        ask.messageText = loc.t("在 \(alias) 上安装 Claude Code hooks？", "Install Claude Code hooks on \(alias)?")
+        ask.informativeText = loc.t(
+            "通过 SFTP 往远端 ~/.claude/settings.json 合并 UserPromptSubmit / Notification / Stop 三个 hook（保留已有 hooks，旧文件备份为 settings.json.wireline-backup）。hook 把状态以终端转义序列写回本标签，其他终端会忽略。",
+            "Merges UserPromptSubmit / Notification / Stop hooks into the remote ~/.claude/settings.json over SFTP (your hooks are kept; the old file is saved as settings.json.wireline-backup). The hooks report state back to this tab as a terminal escape sequence, which other terminals ignore.")
+        ask.addButton(withTitle: loc.t("安装", "Install"))
+        ask.addButton(withTitle: loc.t("取消", "Cancel"))
+        guard ask.runModal() == .alertFirstButtonReturn else { return }
+        Task {
+            let done = NSAlert()
+            do {
+                let changed = try await installRemoteClaudeHooks(host: host, store: store)
+                done.messageText = changed ? loc.t("已安装", "Installed") : loc.t("已经装过了", "Already installed")
+                done.informativeText = loc.t("在 \(alias) 上新启动的 Claude Code 生效。", "Applies to Claude Code started on \(alias) from now on.")
+            } catch {
+                done.alertStyle = .warning
+                done.messageText = loc.t("安装失败", "Couldn't install")
+                done.informativeText = error.localizedDescription
+            }
+            done.runModal()
+        }
     }
 }
 
