@@ -73,6 +73,12 @@ final class TerminalSession: Identifiable {
     var agentState: CodingAgentTracker.State?
     /// Which agent that is.
     var agentKind: CodingAgent?
+    /// The Claude Code / Codex conversation last seen in this pane, so a
+    /// restored pane can resume it. Cleared when you quit the agent.
+    var aiResume: AIResume?
+    @ObservationIgnored private var codexSeenAt: Date?
+    /// A line to type once the shell is up (see `runWhenReady`).
+    @ObservationIgnored private var pendingLine: String?
 
     /// Coarse connection lifecycle for the animated status indicator: dialing
     /// (`connecting`) → server responding (`connected`) → process gone
@@ -430,6 +436,7 @@ final class TerminalSession: Identifiable {
         switch kind {
         case .localShell:
             currentDirectory = path
+            if pendingLine != nil { DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in self?.flushPendingLine() } }
             guard !isManuallyRenamed else { return }
             let name = Self.tabTitle(forPath: path)
             if name != title { title = name }
@@ -624,8 +631,10 @@ final class TerminalSession: Identifiable {
         case .job(let pgid, let n): (running, name) = (true, ForegroundProcess.identify(pgid) ?? n)
         }
         if foregroundName != name {
+            let was = foregroundName.flatMap(CodingAgent.init(processName:))
             foregroundName = name
             IslandCenter.shared.foregroundChanged(self)
+            noteCodingAgent(was: was, now: name.flatMap(CodingAgent.init(processName:)))
         }
         if running, !isBusy {
             busyStartedAt = Date()
@@ -635,6 +644,47 @@ final class TerminalSession: Identifiable {
             applyBusy(false, elapsed: elapsed)
             busyStartedAt = nil
         }
+    }
+
+    private func noteCodingAgent(was: CodingAgent?, now: CodingAgent?) {
+        if was != nil, now == nil { aiResume = nil; codexSeenAt = nil }
+        guard now == .codex, was != .codex else { return }
+        // Codex writes its rollout file shortly after starting (or after the
+        // first prompt): look a few times.
+        let since = Date().addingTimeInterval(-5)
+        codexSeenAt = since
+        for delay in [3.0, 20.0, 90.0] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard let self, self.codexSeenAt == since, self.aiResume?.agent != .codex else { return }
+                self.lookUpCodexSession()
+            }
+        }
+    }
+
+    /// The Codex conversation running here, from ~/.codex/sessions (read only).
+    func lookUpCodexSession() {
+        guard let since = codexSeenAt, let cwd = currentDirectory ?? startDirectory else { return }
+        Task.detached(priority: .utility) {
+            let found = CodingAgentSessions.latestCodex(cwd: cwd, since: since)
+            await MainActor.run { [weak self] in
+                guard let self, let found, self.codexSeenAt == since else { return }
+                self.aiResume = found
+                self.store?.persist()
+            }
+        }
+    }
+
+    /// Type `line` and Return once the shell has reported its directory (its
+    /// prompt is up), or after a few seconds at the latest.
+    func runWhenReady(_ line: String) {
+        pendingLine = line
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in self?.flushPendingLine() }
+    }
+
+    private func flushPendingLine() {
+        guard let line = pendingLine, isRunning else { pendingLine = nil; return }
+        pendingLine = nil
+        terminalView.send(txt: line + "\r")
     }
 
     func start() {
@@ -1013,6 +1063,9 @@ struct SessionSnapshot: Codable, Sendable {
     var agentID: UUID?
     /// An SSH session's ControlMaster socket (kept by an agent session's ssh).
     var controlSocket: String?
+    /// The coding-agent conversation in a local pane, to resume if its
+    /// process didn't survive.
+    var aiResume: AIResume?
 }
 
 /// The tab / split arrangement, saved next to the session list. Leaves refer to
@@ -1544,6 +1597,7 @@ final class SessionStore {
             let built = entry.sessions.map { item -> TerminalSession? in
                 guard let s = makeSession(from: item.snapshot, store: store) else { return nil }
                 s.pendingScrollback = item.scrollback.map { Data($0.utf8) }
+                resumeCodingAgent(in: s)
                 return s
             }
             guard built.contains(where: { $0 != nil }) else { continue }   // its hosts are gone
@@ -1757,7 +1811,8 @@ final class SessionStore {
         return SessionSnapshot(kind: kind, alias: s.alias, title: s.title,
                                scrollbackKey: s.scrollbackKey, manuallyRenamed: s.isManuallyRenamed,
                                directory: dir, agentID: agentID,
-                               controlSocket: agentID != nil && kind == .ssh ? s.controlSocket : nil)
+                               controlSocket: agentID != nil && kind == .ssh ? s.controlSocket : nil,
+                               aiResume: kind == .local ? s.aiResume : nil)
     }
 
     /// A fresh (not yet started) session for a snapshot; nil when its host is gone.
@@ -1789,6 +1844,7 @@ final class SessionStore {
                                     attachingToAgent: agentID)
         }
         built?.isManuallyRenamed = snap.manuallyRenamed ?? false
+        built?.aiResume = snap.aiResume
         return built
     }
 
@@ -1820,10 +1876,135 @@ final class SessionStore {
             if attach == nil { s.pendingScrollback = loadScrollback(s.scrollbackKey) }
             s.title = snap.title
             _ = spawn(s)                    // starts (start() replays scrollback first)
+            // Still running in the agent: it's attached, nothing to resume.
+            if attach == nil { resumeCodingAgent(in: s) }
         }
         restoreLayout(restored)
         persist()
         // Focus is re-asserted from WirelineApp's .task after the pet window opens
         // (which grabs key status), so we don't fight it with a racing call here.
+    }
+
+    // MARK: - Coding-agent resume
+
+    static let resumeAgentsKey = "resumeCodingAgents"
+    static var resumesCodingAgents: Bool { UserDefaults.standard.bool(forKey: resumeAgentsKey) }
+
+    /// With the setting on, type `claude --resume <id>` / `codex resume <id>`
+    /// into a fresh local pane whose conversation isn't live in another pane.
+    private func resumeCodingAgent(in s: TerminalSession) {
+        guard Self.resumesCodingAgents, case .localShell = s.kind,
+              let r = s.aiResume, let line = r.command else { return }
+        let live = sessions.contains {
+            $0 !== s && $0.isRunning && $0.agentKind != nil && $0.aiResume?.sessionID == r.sessionID
+        }
+        guard !live else { s.aiResume = nil; return }
+        s.runWhenReady(line)
+    }
+
+    // MARK: - Workspaces
+
+    /// This window's tabs as a workspace layout.
+    func workspaceTabs() -> (tabs: [WorkspaceTab], active: Int?) {
+        var out: [WorkspaceTab] = []
+        var active: Int?
+        for tab in tabs {
+            var order: [UUID] = []
+            guard let root = workspaceNode(tab, order: &order) else { continue }
+            if tab.id == activeTabID { active = out.count }
+            out.append(WorkspaceTab(name: tab.sessionIDs.count > 1 ? tabName(tab) : nil, root: root,
+                                    focusedPane: activeID.flatMap { order.firstIndex(of: $0) }))
+        }
+        return (out, active)
+    }
+
+    private func workspaceNode(_ n: PaneNode, order: inout [UUID]) -> WorkspaceNode? {
+        switch n {
+        case .leaf(_, let sid):
+            guard let s = session(sid) else { return nil }
+            order.append(sid)
+            return .pane(workspacePane(s))
+        case .branch(let id, let axis, let a, let b):
+            switch (workspaceNode(a, order: &order), workspaceNode(b, order: &order)) {
+            case (let x?, let y?):
+                return .split(vertical: axis == .vertical, ratio: Double(ratio(for: id)), first: x, second: y)
+            case (let x?, nil): return x
+            case (nil, let y?): return y
+            case (nil, nil): return nil
+            }
+        }
+    }
+
+    private func workspacePane(_ s: TerminalSession) -> WorkspacePane {
+        let snap = snapshot(of: s)
+        let kind: WorkspacePane.Kind = switch snap.kind {
+        case .local: .local
+        case .ssh: .ssh
+        case .sftp: .sftp
+        case .rdp: .rdp
+        }
+        return WorkspacePane(kind: kind, alias: kind == .local ? "" : snap.alias, title: snap.title,
+                             manuallyRenamed: snap.manuallyRenamed ?? false,
+                             directory: snap.directory, aiResume: snap.aiResume)
+    }
+
+    /// Open a workspace's tabs after the current ones: local shells start in
+    /// their saved directory, remote panes connect again. Panes whose host is
+    /// gone are left out. Returns how many panes opened.
+    @discardableResult
+    func openWorkspace(_ w: Workspace, store: HostStore) -> Int {
+        var opened = 0
+        var activeTab: PaneNode?
+        var focus: UUID?
+        for (ti, tab) in w.tabs.enumerated() {
+            var built: [TerminalSession?] = []
+            for p in tab.root.panes {
+                let kind: SessionSnapshot.Kind = switch p.kind {
+                case .local: .local
+                case .ssh: .ssh
+                case .sftp: .sftp
+                case .rdp: .rdp
+                }
+                let snap = SessionSnapshot(kind: kind, alias: p.alias, title: p.title,
+                                           manuallyRenamed: p.manuallyRenamed, directory: p.directory,
+                                           aiResume: kind == .local ? p.aiResume : nil)
+                // A fresh session, never the agent's: a workspace is a template,
+                // the agent's live sessions are reattached by launch restore.
+                built.append(makeSession(from: snap, store: store))
+            }
+            let live = built.compactMap { $0 }
+            guard !live.isEmpty else { continue }
+            for s in live { _ = spawn(s); resumeCodingAgent(in: s) }
+            // Leaves numbered in pane order, as `built` is.
+            var k = 0
+            func number(_ n: WorkspaceNode) -> LayoutSnapshot.Node {
+                switch n {
+                case .pane:
+                    defer { k += 1 }
+                    return .leaf(k)
+                case .split(let v, let r, let a, let b):
+                    return .branch(vertical: v, ratio: r, first: number(a), second: number(b))
+                }
+            }
+            let layout = number(tab.root)
+            guard let pane = buildPane(layout, id: { built.indices.contains($0) ? built[$0]?.id : nil })
+            else { continue }
+            tabs.append(pane)
+            if pane.sessionIDs.count > 1, let name = tab.name, let anchor = pane.sessionIDs.first {
+                tabNames[anchor] = name
+            }
+            opened += live.count
+            if ti == (w.activeTab ?? 0) || activeTab == nil {
+                activeTab = pane
+                focus = tab.focusedPane.flatMap { built.indices.contains($0) ? built[$0]?.id : nil }
+                    ?? pane.sessionIDs.first
+            }
+        }
+        if let activeTab {
+            activeTabID = activeTab.id
+            activeID = focus.flatMap { activeTab.leafID(for: $0) != nil ? $0 : nil } ?? activeTab.sessionIDs.first
+        }
+        persist()
+        return opened
     }
 }

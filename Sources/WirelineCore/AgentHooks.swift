@@ -46,6 +46,8 @@ public enum AgentHooks {
     public struct Message: Equatable, Sendable {
         public var sessionID: UUID
         public var event: Event
+        /// The Claude Code conversation the event belongs to (`session_id`).
+        public var resume: AIResume?
     }
 
     /// `<uuid> <event>` optionally followed by the hook's JSON payload (whose
@@ -55,13 +57,17 @@ public enum AgentHooks {
             .split(separator: " ", maxSplits: 2, omittingEmptySubsequences: true)
         guard parts.count >= 2, let id = UUID(uuidString: String(parts[0])) else { return nil }
         var message: String?
+        var resume: AIResume?
+        if parts.count == 3 {
+            resume = CodingAgentSessions.claude(hookPayload: String(parts[2]))
+        }
         if parts.count == 3, let data = parts[2].data(using: .utf8),
            let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
            let m = obj["message"] as? String, !m.isEmpty {
             message = m
         }
         guard let event = Event(name: String(parts[1]), message: message) else { return nil }
-        return Message(sessionID: id, event: event)
+        return Message(sessionID: id, event: event, resume: resume)
     }
 
     // MARK: - SSH: in-band OSC

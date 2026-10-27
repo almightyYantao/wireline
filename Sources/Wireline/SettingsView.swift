@@ -22,6 +22,7 @@ struct SettingsView: View {
     @AppStorage("rdpCommandKeyMode") private var rdpCommandKeyMode = RDPCommandKeyMode.windowsKey.rawValue
     @AppStorage("rdpHiDPI") private var rdpHiDPI = true
     @AppStorage("smartCompletion") private var smartCompletion = true
+    @AppStorage(SessionStore.resumeAgentsKey) private var resumeCodingAgents = false
     @AppStorage("rdpClipboard") private var rdpClipboard = true
     @AppStorage("rdpAudio") private var rdpAudio = true
     @AppStorage(PasteConfirmPolicy.defaultsKey) private var pasteConfirm = PasteConfirmPolicy.unlessBracketed.rawValue
@@ -231,6 +232,13 @@ struct SettingsView: View {
                     }
                     WLFormDivider()
                     ClaudeHooksRow()
+                    WLFormDivider()
+                    Toggle(isOn: $resumeCodingAgents) {
+                        WLFormRow(loc("恢复 AI 会话", "Resume coding-agent sessions"),
+                                  detail: loc("重开 Wireline、重开关闭的标签或打开工作区时，原来跑着 Claude Code / Codex 但进程已退出的本地窗格会执行 claude --resume / codex resume 接着上次的对话。还在常驻进程里运行的会话直接接回，不会重复恢复。",
+                                              "When Wireline relaunches, a closed tab is reopened or a workspace opens, a local pane that was running Claude Code / Codex whose process is gone runs claude --resume / codex resume to continue it. Sessions still running in the session agent are reattached instead.")) { EmptyView() }
+                    }
+                    .toggleStyle(.wlSwitch)
                     WLFormDivider()
                     WLFormRow(loc("否则打开于", "Otherwise open in")) {
                         WLMenuPicker(selection: $store.terminalApp,
