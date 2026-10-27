@@ -91,7 +91,20 @@ final class WindowChromeController {
     private func installZoomMonitor(_ window: NSWindow) {
         guard monitor == nil else { return }
         monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .leftMouseUp]) { [weak window] event in
-            guard let window, event.window === window, event.clickCount >= 2 else { return event }
+            guard let window, event.window === window else { return event }
+            // A press on the tab track must start a tab drag, not a window move:
+            // the system title bar moves the window from anywhere in its strip,
+            // whatever the view under the pointer says. Freeze the window for
+            // that press; any press elsewhere (or the release) unfreezes it.
+            // (A drag session can swallow the release, hence the next press too.)
+            if event.type == .leftMouseDown {
+                let top = (window.contentView?.bounds.height ?? window.frame.height) - event.locationInWindow.y
+                let p = CGPoint(x: event.locationInWindow.x, y: top)
+                window.isMovable = !TitleBarZoomGuard.shared.rects.values.contains { $0.contains(p) }
+            } else if !window.isMovable, !TitleBarZoomGuard.shared.pointerInNoZoomZone {
+                window.isMovable = true
+            }
+            guard event.clickCount >= 2 else { return event }
             // A double-click on a title-band control that uses it (the tab
             // track: double-click renames). The system title bar would zoom the
             // window on any double-click here, so hand the control a plain
@@ -164,6 +177,21 @@ extension View {
 final class TitleBarZoomGuard: @unchecked Sendable {
     static let shared = TitleBarZoomGuard()
     var pointerInNoZoomZone = false
+    /// Tabs under the pointer. While any is, the window under the pointer
+    /// can't be moved: newer macOS decides title-bar window drags before the
+    /// press reaches the app, so freezing it on mouse-down is sometimes too late.
+    private var hoveredTabs: Set<UUID> = []
+
+    @MainActor func setTabHover(_ id: UUID, _ inside: Bool) {
+        if inside { hoveredTabs.insert(id) } else { hoveredTabs.remove(id) }
+        pointerInNoZoomZone = !hoveredTabs.isEmpty
+        // Mid-drag the pointer leaves the tab: keep the window still until release.
+        guard inside || NSEvent.pressedMouseButtons == 0 else { return }
+        let n = NSWindow.windowNumber(at: NSEvent.mouseLocation, belowWindowWithWindowNumber: 0)
+        guard let w = NSApp.window(withWindowNumber: n) ?? NSApp.keyWindow else { return }
+        let movable = hoveredTabs.isEmpty
+        if w.isMovable != movable { w.isMovable = movable }
+    }
     /// Title-band controls that use double-click themselves, in window
     /// coordinates with a top-left origin (SwiftUI's global space).
     var rects: [UUID: CGRect] = [:]

@@ -753,8 +753,13 @@ final class GhosttyTerminalView: NSView, TerminalEngine {
         super.updateTrackingAreas()
     }
 
+    /// A click landed on this view, so nothing covers it: the press, drag and
+    /// release reach the surface (text selection) even if an overlay paused it.
+    private var mouseHeld = false
+    private var mouseLive: Bool { allowMouseReporting || mouseHeld }
+
     private func sendMousePos(_ event: NSEvent) {
-        guard allowMouseReporting, let s = surface?.raw else { return }
+        guard mouseLive, let s = surface?.raw else { return }
         let p = convert(event.locationInWindow, from: nil)
         ghostty_surface_mouse_pos(s, p.x, frame.height - p.y, GhosttyInput.mods(event.modifierFlags))
     }
@@ -772,7 +777,8 @@ final class GhosttyTerminalView: NSView, TerminalEngine {
             linkClick = link.url
             return
         }
-        guard allowMouseReporting, let s = surface?.raw else { return }
+        mouseHeld = true
+        guard let s = surface?.raw else { return }
         sendMousePos(event)
         _ = ghostty_surface_mouse_button(s, GHOSTTY_MOUSE_PRESS, GHOSTTY_MOUSE_LEFT, GhosttyInput.mods(event.modifierFlags))
     }
@@ -787,11 +793,12 @@ final class GhosttyTerminalView: NSView, TerminalEngine {
         // ⌘-click: libghostty opens a URL under the pointer (OPEN_URL, sent
         // synchronously from the release); otherwise look for a path.
         openedURLDuringClick = false
-        if allowMouseReporting {
+        if mouseLive {
             sendMousePos(event)
             _ = ghostty_surface_mouse_button(s, GHOSTTY_MOUSE_RELEASE, GHOSTTY_MOUSE_LEFT, GhosttyInput.mods(event.modifierFlags))
             ghostty_surface_mouse_pressure(s, 0, 0)
         }
+        mouseHeld = false
         if event.modifierFlags.contains(.command), event.clickCount == 1, !openedURLDuringClick,
            let token = pathToken(at: convert(event.locationInWindow, from: nil)) {
             onOpenPath?(token)

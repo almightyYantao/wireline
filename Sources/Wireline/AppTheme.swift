@@ -104,12 +104,25 @@ extension AppTheme {
         isBuiltIn: true
     )
 
-    /// Built-ins = the default + every bundled terminal color scheme, each with
-    /// stock shape/typography so they read as pure recolors.
-    static var builtIns: [AppTheme] {
+    /// Built-ins = the default + every bundled terminal color scheme (stock
+    /// shape/typography, pure recolors) + the design-style skins.
+    static var builtIns: [AppTheme] { colorSchemes + styled }
+
+    /// The default + bundled terminal color schemes.
+    static var colorSchemes: [AppTheme] {
         [wirelineDefault] + TerminalTheme.presets.map {
             AppTheme(name: $0.name, colors: $0, isBuiltIn: true)
         }
+    }
+
+    /// Whole skins after well-known UI design styles (stylekit.top/styles):
+    /// colors plus corner radius, borders, density, type and translucency.
+    static let styled: [AppTheme] = TerminalTheme.styled.map { s in
+        AppTheme(name: s.colors.name, colors: s.colors,
+                 shape: .init(radiusScale: s.radius, borderWidth: s.border, density: s.density),
+                 type: .init(design: s.design),
+                 background: .init(chromeOpacity: s.chrome),
+                 isBuiltIn: true)
     }
 }
 

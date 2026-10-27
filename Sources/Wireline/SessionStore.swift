@@ -356,6 +356,7 @@ final class TerminalSession: Identifiable {
             guard let self else { return false }
             return self.store?.activeID == self.id
         }
+        rdp?.view.isActivePane = terminalView.isActivePane
         io.onCommentRequest = { [weak self] nl in
             guard let self, self.store?.activeID == self.id else { return }
             self.inlineAI.activate(prefill: nl)
@@ -1069,6 +1070,7 @@ final class SessionStore {
             // Remaining panes grow into the space (performClose animates, one reflow).
             self?.requestClose([id])
         }
+        session.rdp?.view.onCloseRequested = { [weak self] in self?.requestClose([id]) }
         sessions.append(session)
         session.start()
         return id
