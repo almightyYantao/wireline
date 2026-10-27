@@ -124,6 +124,7 @@ private struct QuickTerminalView: View {
             .overlay(UnevenRoundedRectangle(bottomLeadingRadius: WL.radius(14),
                                             bottomTrailingRadius: WL.radius(14), style: .continuous)
                 .strokeBorder(WL.hairline, lineWidth: 1))
+            .modifier(PasteConfirmModal(quick: true))
             .preferredColorScheme(WL.colorScheme)
     }
 }

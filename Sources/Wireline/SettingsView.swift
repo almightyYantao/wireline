@@ -23,6 +23,7 @@ struct SettingsView: View {
     @AppStorage("rdpHiDPI") private var rdpHiDPI = true
     @AppStorage("rdpClipboard") private var rdpClipboard = true
     @AppStorage("rdpAudio") private var rdpAudio = true
+    @AppStorage(PasteConfirmPolicy.defaultsKey) private var pasteConfirm = PasteConfirmPolicy.unlessBracketed.rawValue
 
     var body: some View {
         if embedded { card } else { window }
@@ -202,6 +203,17 @@ struct SettingsView: View {
                                   detail: loc("标签或分屏里还有命令、Claude Code 等在运行时，关闭前先问一下", "Ask before closing a tab or pane that's still running a command or a coding agent")) { EmptyView() }
                     }
                     .toggleStyle(.wlSwitch).wlConfigLocked("confirm-close-surface")
+                    WLFormDivider()
+                    WLFormRow(loc("多行粘贴确认", "Confirm multi-line paste"),
+                              detail: loc("粘贴含换行的文本前先预览；Claude Code 等开启了 bracketed paste 的程序不会把换行当回车",
+                                          "Preview text with newlines before pasting; programs with bracketed paste on (Claude Code …) don't treat newlines as Return")) {
+                        WLSegmented(selection: $pasteConfirm, options: [
+                            WLOption(PasteConfirmPolicy.always.rawValue, loc("总是", "Always")),
+                            WLOption(PasteConfirmPolicy.unlessBracketed.rawValue, loc("仅非 bracketed", "Unless bracketed")),
+                            WLOption(PasteConfirmPolicy.never.rawValue, loc("从不", "Never")),
+                        ], fill: false)
+                        .onChange(of: pasteConfirm) { NotificationCenter.default.post(name: .pasteConfirmPolicyChanged, object: nil) }
+                    }
                     WLFormDivider()
                     WLFormRow(loc("命令完成提醒", "Command-finished alert"),
                               detail: loc("Wireline 不在前台时，耗时超过这个时长的命令结束会发通知", "When Wireline is in the background, notify for commands that ran at least this long")) {

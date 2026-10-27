@@ -248,6 +248,9 @@ final class GhosttyTerminalView: NSView, TerminalEngine {
                                                   object: window, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.updateScreen() }
         })
+        windowObservers.append(center.addObserver(forName: .pasteConfirmPolicyChanged, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.applyConfig() }
+        })
         responderObservation = window.observe(\.firstResponder, options: [.new]) { [weak self] _, _ in
             DispatchQueue.main.async { MainActor.assumeIsolated { self?.refreshFocus() } }
         }
