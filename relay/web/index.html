@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Wireline</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css">
+<style>
+  :root { color-scheme: dark; --bg:#0f1115; --card:#181b22; --dim:#8a91a0; --fg:#e6e8ee; --green:#4ade80; --amber:#fbbf24; --blue:#60a5fa; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:15px -apple-system, system-ui, sans-serif; height:100dvh; display:flex; flex-direction:column; }
+  header { padding:10px 14px; display:flex; align-items:center; gap:8px; border-bottom:1px solid #222; }
+  header b { flex:1; }
+  .dot { width:8px; height:8px; border-radius:50%; background:#555; }
+  .dot.on { background:var(--green); }
+  #status { color:var(--dim); font-size:13px; }
+  #sessions { overflow:auto; max-height:35dvh; }
+  .s { padding:10px 14px; border-bottom:1px solid #1f232b; display:flex; gap:8px; align-items:center; }
+  .s.active { background:var(--card); }
+  .s .t { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .badge { font-size:12px; padding:2px 7px; border-radius:9px; background:#2a2f3a; color:var(--dim); }
+  .badge.working { color:var(--blue); } .badge.needsYou { color:#111; background:var(--amber); } .badge.done { color:var(--green); }
+  .note { color:var(--amber); font-size:12px; padding:0 14px 8px; }
+  #term { flex:1; min-height:0; padding:4px; }
+  #keys { display:flex; gap:6px; padding:8px; flex-wrap:wrap; border-top:1px solid #222; }
+  #keys button, #pair button { background:var(--card); color:var(--fg); border:1px solid #2c313c; border-radius:8px; padding:9px 12px; font-size:15px; }
+  #keys input { flex:1; min-width:120px; background:#0b0d11; color:var(--fg); border:1px solid #2c313c; border-radius:8px; padding:9px; font-size:15px; }
+  #pair { padding:24px; display:none; }
+  .hidden { display:none !important; }
+</style>
+</head>
+<body>
+<header><span class="dot" id="dot"></span><b id="macName">Wireline</b><span id="status"></span></header>
+<div id="pair"><p id="pairMsg">用 Wireline「设置 → 手机中继」里的二维码打开本页。</p><button id="forget" class="hidden">忘记此 Mac</button></div>
+<div id="main" class="hidden">
+  <div id="sessions"></div>
+  <div id="note" class="note"></div>
+  <div id="term"></div>
+  <div id="keys">
+    <button data-k="y&#13;">y</button><button data-k="n&#13;">n</button><button data-k="&#13;">⏎</button>
+    <button data-k="&#27;">Esc</button><button data-k="&#3;">Ctrl-C</button>
+    <button data-k="&#27;[A">↑</button><button data-k="&#27;[B">↓</button>
+    <input id="line" placeholder="输入后回车发送" enterkeyhint="send" autocomplete="off" autocapitalize="off">
+  </div>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.js"></script>
+<script src="relay-crypto.js"></script>
+<script>
+(async () => {
+  const R = window.WLRelay, $ = (id) => document.getElementById(id);
+  const STORE = 'wireline.relay';
+  const status = (s) => { $('status').textContent = s; };
+
+  // Pairing link: #v=1&k=<mac pub>&c=<code>&n=<name>. Never sent to the server.
+  let saved = JSON.parse(localStorage.getItem(STORE) || 'null');
+  let pairCode = null;
+  const frag = new URLSearchParams(location.hash.slice(1));
+  if (frag.get('v') === '1' && frag.get('k')) {
+    const keys = saved && saved.mac === frag.get('k') ? saved : await R.generateKeys().then((k) => ({
+      priv: k.privateJwk, pub: R.b64(k.publicRaw) }));
+    saved = { ...keys, mac: frag.get('k'), name: frag.get('n') || 'Mac', paired: false };
+    pairCode = frag.get('c');
+    localStorage.setItem(STORE, JSON.stringify(saved));
+    history.replaceState(null, '', location.pathname);
+  }
+  if (!saved) { $('pair').style.display = 'block'; return; }
+  $('macName').textContent = saved.name;
+  $('forget').classList.remove('hidden');
+  $('forget').onclick = () => { localStorage.removeItem(STORE); location.reload(); };
+
+  const macPub = R.unb64url(saved.mac), phonePub = R.unb64(saved.pub);
+  const room = await R.roomID(macPub);
+  const term = new Terminal({ fontSize: 12, convertEol: false, scrollback: 5000, theme: { background: '#0f1115' } });
+  const fit = new FitAddon.FitAddon();
+  term.loadAddon(fit);
+
+  let ws, ch, myNonce, current = null, sessions = [];
+  // WebCrypto is async: keep frames in counter order both ways.
+  let outQ = Promise.resolve(), inQ = Promise.resolve();
+  const send = (msg) => { outQ = outQ.then(async () => {
+    if (!ch || ws.readyState !== 1) return;
+    const c = ch, frame = await c.seal(R.enc.encode(JSON.stringify(msg)));
+    if (c === ch) ws.send(JSON.stringify({ d: R.payload.sealed(frame) }));
+  }).catch(() => {}); };
+  const input = (data) => current && send({ t: 'input', sid: current, data });
+  term.onData(input);
+
+  function render() {
+    const box = $('sessions'); box.innerHTML = '';
+    for (const s of sessions) {
+      const row = document.createElement('div');
+      row.className = 's' + (s.id === current ? ' active' : '');
+      const t = document.createElement('span'); t.className = 't'; t.textContent = s.title;
+      row.append(t);
+      if (s.agent || s.busy) {
+        const b = document.createElement('span');
+        b.className = 'badge ' + (s.state || '');
+        b.textContent = (s.agent ? s.agent + ' · ' : '') + ({ idle: '空闲', working: '工作中', needsYou: '等你确认', done: '完成' }[s.state] || '运行中');
+        row.append(b);
+      }
+      row.onclick = () => watch(s.id);
+      box.append(row);
+    }
+    const cur = sessions.find((s) => s.id === current);
+    $('note').textContent = cur && cur.state === 'needsYou' ? (cur.note || '等你确认') : '';
+  }
+
+  function watch(sid) {
+    current = sid; term.reset(); render(); send({ t: 'watch', sid });
+  }
+
+  async function onMessage(m) {
+    switch (m.t) {
+      case 'paired':
+        saved.paired = true; localStorage.setItem(STORE, JSON.stringify(saved));
+        send({ t: 'list' }); break;
+      case 'sessions':
+        sessions = m.list || [];
+        if (!current) {
+          const waiting = sessions.find((s) => s.state === 'needsYou') || sessions[0];
+          if (waiting) watch(waiting.id);
+        }
+        render(); break;
+      case 'snapshot': if (m.sid === current) { term.reset(); term.write(R.unb64(m.data)); } break;
+      case 'out': if (m.sid === current) term.write(R.unb64(m.data)); break;
+      case 'error': status(m.message); break;
+    }
+  }
+
+  let retry = 1000;
+  function connect() {
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    ws = new WebSocket(`${proto}//${location.host}${location.pathname.replace(/[^/]*$/, '')}ws?room=${room}&role=phone`);
+    ch = null;
+    status('连接中…');
+    ws.onmessage = (ev) => { inQ = inQ.then(() => handle(ev)).catch(() => {}); };
+    const handle = async (ev) => {
+      const e = JSON.parse(ev.data);
+      if (e.t === 'mac') {
+        $('dot').classList.toggle('on', e.up);
+        if (e.up) { myNonce = R.nonce(); ws.send(JSON.stringify({ d: R.payload.handshake({ t: 'hello', v: 1, pub: saved.pub, nonce: R.b64(myNonce) }) })); status('握手中…'); }
+        else { ch = null; status('Mac 离线'); }
+        return;
+      }
+      if (e.t === 'full') { status('中继已满'); return; }
+      if (!e.d) return;
+      const p = R.payload.parse(e.d);
+      if (p.handshake) {
+        if (p.handshake.t === 'deny') { status('Mac 拒绝：未配对或已撤销'); return; }
+        if (p.handshake.t !== 'welcome' || ch) return;
+        const key = await R.sessionKey(saved.priv, macPub, macPub, phonePub, myNonce, R.unb64(p.handshake.nonce));
+        ch = R.channel(key, 'phone');
+        retry = 1000;
+        status('已连接');
+        $('main').classList.remove('hidden');
+        if (!term.element) { term.open($('term')); fit.fit(); }
+        if (!saved.paired && pairCode) send({ t: 'pair', code: pairCode, name: navigator.platform || 'Phone' });
+        else send({ t: 'list' });
+        return;
+      }
+      if (p.sealed && ch) {
+        try { await onMessage(JSON.parse(R.dec.decode(await ch.open(p.sealed)))); }
+        catch { status('解密失败，重连'); ws.close(); }
+      }
+    };
+    ws.onclose = () => { ch = null; $('dot').classList.remove('on'); status('已断开，重连中…'); setTimeout(connect, retry); retry = Math.min(retry * 2, 30000); };
+  }
+  connect();
+
+  for (const b of document.querySelectorAll('#keys button')) b.onclick = () => input(b.dataset.k);
+  $('line').onkeydown = (e) => { if (e.key === 'Enter') { input(e.target.value + '\r'); e.target.value = ''; } };
+  addEventListener('resize', () => term.element && fit.fit());
+})();
+</script>
+</body>
+</html>

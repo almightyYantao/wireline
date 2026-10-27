@@ -13,5 +13,5 @@ const jwkOf = (byte) => createPrivateKey({
 
 const mac = jwkOf(0x11), phone = jwkOf(0x22);
 const macPub = R.unb64url(mac.x), phonePub = R.unb64url(phone.x);
-const key = await R.sessionKey(phone, macPub, phonePub, new Uint8Array(16).fill(0xaa), new Uint8Array(16).fill(0xbb));
+const key = await R.sessionKey(phone, macPub, macPub, phonePub, new Uint8Array(16).fill(0xaa), new Uint8Array(16).fill(0xbb));
 console.log(R.b64(await R.channel(key, 'mac').seal(R.enc.encode('hello phone'))));

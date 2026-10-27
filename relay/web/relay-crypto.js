@@ -25,9 +25,9 @@
     return b64url(new Uint8Array(await subtle.digest('SHA-256', macPub))).slice(0, 22);
   }
 
-  async function sessionKey(privateJwk, macPub, phonePub, phoneNonce, macNonce) {
+  async function sessionKey(privateJwk, peerPub, macPub, phonePub, phoneNonce, macNonce) {
     const priv = await subtle.importKey('jwk', privateJwk, { name: 'X25519' }, false, ['deriveBits']);
-    const peer = await subtle.importKey('raw', macPub, { name: 'X25519' }, false, []);
+    const peer = await subtle.importKey('raw', peerPub, { name: 'X25519' }, false, []);
     const shared = await subtle.deriveBits({ name: 'X25519', public: peer }, priv, 256);
     const ikm = await subtle.importKey('raw', shared, 'HKDF', false, ['deriveKey']);
     return subtle.deriveKey({ name: 'HKDF', hash: 'SHA-256', salt: concat(phoneNonce, macNonce), info: concat(LABEL, macPub, phonePub) },
