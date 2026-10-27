@@ -121,14 +121,19 @@ public struct Snippet: Identifiable, Codable, Sendable, Equatable {
     public var lastValues: [String: String]
     public var useCount: Int
     public var lastUsed: Date?
+    /// Folder path, at most two levels: "Docker" or "Ops/Docker" (nil = top level).
+    public var folder: String?
+    /// Set on the shipped templates, so "restore built-ins" knows what's missing.
+    public var builtinID: String?
 
     public init(id: UUID = UUID(), titleZh: String, titleEn: String, command: String,
                 platform: SnippetPlatform = .any, hostGroup: String? = nil,
                 categoryOverride: SnippetCategory? = nil, lastValues: [String: String] = [:],
-                useCount: Int = 0, lastUsed: Date? = nil) {
+                useCount: Int = 0, lastUsed: Date? = nil, folder: String? = nil, builtinID: String? = nil) {
         self.id = id; self.titleZh = titleZh; self.titleEn = titleEn; self.command = command
         self.platform = platform; self.hostGroup = hostGroup; self.categoryOverride = categoryOverride
         self.lastValues = lastValues; self.useCount = useCount; self.lastUsed = lastUsed
+        self.folder = SnippetFolders.normalize(folder); self.builtinID = builtinID
     }
 
     /// From a single title in either language (or the old "中文 / English" form).
@@ -288,6 +293,7 @@ public struct Snippet: Identifiable, Codable, Sendable, Equatable {
 
     private enum CodingKeys: String, CodingKey {
         case id, name, titleZh, titleEn, command, platform, hostGroup, category, lastValues, useCount, lastUsed
+        case folder, builtinID
     }
 
     public init(from decoder: Decoder) throws {
@@ -308,6 +314,8 @@ public struct Snippet: Identifiable, Codable, Sendable, Equatable {
         lastValues = (try? c.decodeIfPresent([String: String].self, forKey: .lastValues)) ?? [:]
         useCount = (try? c.decodeIfPresent(Int.self, forKey: .useCount)) ?? 0
         lastUsed = try? c.decodeIfPresent(Date.self, forKey: .lastUsed)
+        folder = SnippetFolders.normalize(try? c.decodeIfPresent(String.self, forKey: .folder))
+        builtinID = try? c.decodeIfPresent(String.self, forKey: .builtinID)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -325,23 +333,50 @@ public struct Snippet: Identifiable, Codable, Sendable, Equatable {
         if !lastValues.isEmpty { try c.encode(lastValues, forKey: .lastValues) }
         if useCount > 0 { try c.encode(useCount, forKey: .useCount) }
         try c.encodeIfPresent(lastUsed, forKey: .lastUsed)
+        try c.encodeIfPresent(folder, forKey: .folder)
+        try c.encodeIfPresent(builtinID, forKey: .builtinID)
     }
 
     // MARK: Built-ins
 
+    private static func builtin(_ id: String, _ zh: String, _ en: String, _ folder: String, _ command: String,
+                                _ platform: SnippetPlatform = .any) -> Snippet {
+        Snippet(titleZh: zh, titleEn: en, command: command, platform: platform, folder: folder, builtinID: id)
+    }
+
+    /// The shipped templates. Ids are stable: "restore built-ins" re-adds any
+    /// whose id is missing and never touches one the user kept or edited.
     public static let defaults: [Snippet] = [
-        Snippet(titleZh: "磁盘占用", titleEn: "Disk usage", command: "df -h"),
-        Snippet(titleZh: "内存", titleEn: "Memory", command: "free -h", platform: .linux),
-        Snippet(titleZh: "内存", titleEn: "Memory", command: "vm_stat", platform: .macos),
-        Snippet(titleZh: "系统负载", titleEn: "Load", command: "uptime"),
-        Snippet(titleZh: "监听端口", titleEn: "Listening ports", command: "ss -tlnp", platform: .linux),
-        Snippet(titleZh: "监听端口", titleEn: "Listening ports", command: "lsof -nP -iTCP -sTCP:LISTEN", platform: .macos),
+        builtin("sysinfo", "系统信息", "System info", "系统 System",
+                "uname -a; cat /etc/os-release 2>/dev/null | head -4; uptime", .linux),
+        builtin("sysinfo-mac", "系统信息", "System info", "系统 System", "sw_vers; uname -a; uptime", .macos),
+        builtin("disk", "磁盘占用", "Disk usage", "系统 System", "df -h"),
+        builtin("du-top", "目录大小", "Largest directories", "系统 System",
+                "du -sh {{path:.}}/* 2>/dev/null | sort -rh | head -20"),
+        builtin("mem", "内存", "Memory", "系统 System", "free -h", .linux),
+        builtin("mem-mac", "内存", "Memory", "系统 System", "vm_stat", .macos),
+        builtin("load", "系统负载", "Load", "系统 System", "uptime"),
         // BSD `ps` (macOS) has no --sort.
-        Snippet(titleZh: "进程占用", titleEn: "Top processes", command: "ps aux --sort=-%cpu | head", platform: .linux),
-        Snippet(titleZh: "进程占用", titleEn: "Top processes", command: "top -l 1 -o cpu -n 10", platform: .macos),
-        Snippet(titleZh: "查看日志", titleEn: "Tail log", command: "tail -f {{path:/var/log/syslog}}"),
-        Snippet(titleZh: "查找进程", titleEn: "Find process", command: "ps aux | grep {{keyword}}"),
+        builtin("top", "进程占用", "Top processes", "系统 System", "ps aux --sort=-%cpu | head", .linux),
+        builtin("top-mac", "进程占用", "Top processes", "系统 System", "top -l 1 -o cpu -n 10", .macos),
+        builtin("findproc", "查找进程", "Find process", "系统 System", "ps aux | grep {{keyword}}"),
+        builtin("ports", "监听端口", "Listening ports", "网络 Network", "ss -tlnp", .linux),
+        builtin("ports-mac", "监听端口", "Listening ports", "网络 Network", "lsof -nP -iTCP -sTCP:LISTEN", .macos),
+        builtin("port-who", "端口占用", "Who uses a port", "网络 Network", "sudo lsof -nP -i :{{port:80}}"),
+        builtin("docker-ps", "容器列表", "Containers", "Docker",
+                "docker ps --format 'table {{.Names}}\\t{{.Image}}\\t{{.Status}}\\t{{.Ports}}'"),
+        builtin("docker-logs", "容器日志", "Container logs", "Docker", "docker logs -f --tail 200 {{container}}"),
+        builtin("docker-stats", "容器资源", "Container stats", "Docker", "docker stats --no-stream"),
+        builtin("tail", "查看日志", "Tail log", "日志 Logs", "tail -f {{path:/var/log/syslog}}"),
+        builtin("journal", "服务日志", "Service log", "日志 Logs", "journalctl -u {{service}} -n 200 -f", .linux),
     ]
+
+    /// Snippets in `current` plus the built-ins whose id is missing from it.
+    public static func restoringDefaults(_ current: [Snippet]) -> (snippets: [Snippet], added: Int) {
+        let have = Set(current.compactMap(\.builtinID))
+        let missing = defaults.filter { !have.contains($0.builtinID ?? "") }
+        return (current + missing, missing.count)
+    }
 
     /// The commands of the built-ins as they shipped before the redesign, keyed
     /// by command: an untouched old default gets the new platform on migration.
@@ -389,12 +424,82 @@ public enum SnippetMigration {
         let raw = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] ?? []
         var snippets = try JSONDecoder().decode([Snippet].self, from: data)
         let isLegacy = raw.contains { $0["titleZh"] == nil && $0["titleEn"] == nil }
-        guard isLegacy else { return (snippets, false) }
-        for i in snippets.indices where snippets[i].platform == .any {
-            if let p = Snippet.legacyDefaultPlatforms[snippets[i].command] { snippets[i].platform = p }
+        var migrated = false
+        if isLegacy {
+            for i in snippets.indices where snippets[i].platform == .any {
+                if let p = Snippet.legacyDefaultPlatforms[snippets[i].command] { snippets[i].platform = p }
+            }
+            let have = Set(snippets.map(\.command))
+            snippets += Snippet.defaults.filter { $0.platform == .macos && !have.contains($0.command) }
+            migrated = true
         }
-        let have = Set(snippets.map(\.command))
-        snippets += Snippet.defaults.filter { $0.platform == .macos && !have.contains($0.command) }
-        return (snippets, true)
+        // Files from before folders: recognise the shipped snippets still there
+        // (same command and platform), so they get their id and folder.
+        if !raw.contains(where: { $0["builtinID"] != nil }) {
+            for i in snippets.indices where snippets[i].builtinID == nil {
+                guard let d = Snippet.defaults.first(where: {
+                    $0.command == snippets[i].command && $0.platform == snippets[i].platform
+                }), !snippets.contains(where: { $0.builtinID == d.builtinID }) else { continue }
+                snippets[i].builtinID = d.builtinID
+                if snippets[i].folder == nil { snippets[i].folder = d.folder }
+                migrated = true
+            }
+        }
+        return (snippets, migrated)
+    }
+}
+
+/// Folder paths: "/"-separated, trimmed, at most two levels.
+public enum SnippetFolders {
+    public static let maxDepth = 2
+
+    public static func normalize(_ path: String?) -> String? {
+        guard let path else { return nil }
+        let parts = path.split(separator: "/").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        return parts.isEmpty ? nil : parts.prefix(maxDepth).joined(separator: "/")
+    }
+
+    /// Every folder in use, parents included, sorted so a parent precedes its children.
+    public static func all(in snippets: [Snippet]) -> [String] {
+        var set = Set<String>()
+        for f in snippets.compactMap(\.folder) {
+            set.insert(f)
+            if let parent = parent(of: f) { set.insert(parent) }
+        }
+        return set.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+    }
+
+    public static func parent(of path: String) -> String? {
+        let parts = path.split(separator: "/")
+        return parts.count > 1 ? parts.dropLast().joined(separator: "/") : nil
+    }
+
+    /// Whether a snippet in `folder` shows when browsing `selected` (a parent shows its children's).
+    public static func contains(_ selected: String, _ folder: String?) -> Bool {
+        guard let folder else { return false }
+        return folder == selected || folder.hasPrefix(selected + "/")
+    }
+
+    /// Rename a folder (and its subfolders) to `newPath`.
+    public static func rename(_ old: String, to newPath: String?, in snippets: inout [Snippet]) {
+        let target = normalize(newPath)
+        for i in snippets.indices where contains(old, snippets[i].folder) {
+            let rest = snippets[i].folder!.dropFirst(old.count)
+            snippets[i].folder = normalize((target ?? "") + rest)
+        }
+    }
+}
+
+/// Write-then-rename, so a crash mid-write never leaves a half-written file.
+public enum AtomicFile {
+    public static func write(_ data: Data, to url: URL) throws {
+        let dir = url.deletingLastPathComponent()
+        let tmp = dir.appendingPathComponent(".\(url.lastPathComponent).\(UUID().uuidString).tmp")
+        try data.write(to: tmp)
+        if rename(tmp.path, url.path) != 0 {
+            let err = errno
+            try? FileManager.default.removeItem(at: tmp)
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(err))
+        }
     }
 }
