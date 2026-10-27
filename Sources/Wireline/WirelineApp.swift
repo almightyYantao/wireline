@@ -236,6 +236,24 @@ struct WirelineApp: App {
                         .keyboardShortcut("q", modifiers: [.command, .option])
                 }
             }
+            CommandMenu(loc("工作区", "Workspaces")) {
+                Button(loc("保存当前布局…", "Save Current Layout…")) { WorkspaceActions.save(sessions) }
+                    .disabled(sessions.tabs.isEmpty)
+                let saved = WorkspaceStore.shared.workspaces
+                if !saved.isEmpty {
+                    Divider()
+                    ForEach(saved) { w in
+                        Button(w.name) { WorkspaceActions.open(w, sessions: sessions, store: store) }
+                    }
+                    Divider()
+                    Menu(loc("重命名", "Rename")) {
+                        ForEach(saved) { w in Button(w.name) { WorkspaceActions.rename(w) } }
+                    }
+                    Menu(loc("删除", "Delete")) {
+                        ForEach(saved) { w in Button(w.name) { WorkspaceActions.delete(w) } }
+                    }
+                }
+            }
             #if DEBUG
             CommandMenu("Debug") {
                 Button("Preview Notch Island") { IslandPreview.run() }

@@ -320,6 +320,28 @@ struct CommandPaletteView: View {
                            systemImage: "gearshape", tint: WL.textDim) { post(.showSettings) },
         ]
 
+        // Named workspace layouts.
+        let ws = loc("工作区", "Workspace")
+        out.append(PaletteCommand(title: loc("保存当前布局为工作区…", "Save Layout as Workspace…"),
+                                  keywords: "保存工作区 布局 Save Workspace layout", category: ws,
+                                  systemImage: "square.grid.2x2", tint: WL.green) { WorkspaceActions.save(sessions) })
+        for w in WorkspaceStore.shared.workspaces {
+            let sub = loc("\(w.tabs.count) 个标签 · \(w.paneCount) 个窗格", "\(w.tabs.count) tabs · \(w.paneCount) panes")
+            out += [
+                PaletteCommand(title: loc("打开工作区：", "Open Workspace: ") + w.name,
+                               keywords: "打开工作区 Open Workspace " + w.name, subtitle: sub, category: ws,
+                               systemImage: "square.grid.2x2", tint: WL.teal) {
+                    WorkspaceActions.open(w, sessions: sessions, store: store)
+                },
+                PaletteCommand(title: loc("重命名工作区：", "Rename Workspace: ") + w.name,
+                               keywords: "重命名工作区 Rename Workspace " + w.name, category: ws,
+                               systemImage: "pencil", tint: WL.textDim) { WorkspaceActions.rename(w) },
+                PaletteCommand(title: loc("删除工作区：", "Delete Workspace: ") + w.name,
+                               keywords: "删除工作区 Delete Workspace " + w.name, category: ws,
+                               systemImage: "trash", tint: WL.red) { WorkspaceActions.delete(w) },
+            ]
+        }
+
         // Snippets for the active pane: the ones that suit it first, then the
         // ones used most / lately; the rest dimmed. The title shows in the UI
         // language — the other one (and the command) only feed the search.
