@@ -63,7 +63,7 @@ enum MCPServerTools {
                      schema([:])),
             readOnly("hosts_list",
                      "Hosts from the user's ~/.ssh/config: alias, address, user, port, group, description, reachability, open sessions, and remembered notes. Filter by a text query or a group.",
-                     schema(["query": ["type": "string", "description": "Case-insensitive match on alias, address, group or description"],
+                     schema(["query": ["type": "string", "description": "Space-separated words, all must match alias, address, user, group, #tag or description; supports tag:x group:x user:x"],
                              "group": ["type": "string", "description": "Only hosts in this group"]])),
             readOnly("session_read",
                      "Recent output of an open session (ANSI stripped; Wireline keeps about the last 20000 characters).",
@@ -247,14 +247,8 @@ enum MCPServerTools {
     }
 
     private static func hostsList(_ hosts: HostStore, _ sessions: SessionStore, query: String?, group: String?) -> Outcome {
-        let q = query?.trimmingCharacters(in: .whitespaces).lowercased() ?? ""
         let g = group?.trimmingCharacters(in: .whitespaces) ?? ""
-        let picked = hosts.hosts.filter { h in
-            if !g.isEmpty, (h.group ?? "") != g { return false }
-            guard !q.isEmpty else { return true }
-            return [h.alias, h.hostname ?? "", h.group ?? "", h.descriptionText ?? ""]
-                .contains { $0.lowercased().contains(q) }
-        }
+        let picked = hosts.search(query ?? "").filter { g.isEmpty || ($0.group ?? "") == g }
         let list: [[String: Any]] = picked.map { h in
             var d: [String: Any] = ["alias": h.alias, "protocol": h.hostProtocol.rawValue,
                                     "address": h.connectHostname, "port": h.effectivePort,

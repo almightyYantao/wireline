@@ -9,6 +9,8 @@ struct PaletteCommand: Identifiable {
     /// still finds "Settings" and an English one finds "设置".
     var keywords: String = ""
     var subtitle: String? = nil
+    /// Search words to emphasise in a host row.
+    var highlight: [String] = []
     let category: String
     let systemImage: String
     let tint: Color
@@ -202,13 +204,16 @@ struct CommandPaletteView: View {
     /// Hosts first: fuzzy-ranked when typing, most recently used when empty.
     private func hostCommands(_ q: String) -> [PaletteCommand] {
         let hosts: [Host]
+        var notes: [String: String] = [:]
         if q.isEmpty {
             hosts = store.hosts.sorted {
                 let a = store.lastConnected[$0.alias] ?? .distantPast, b = store.lastConnected[$1.alias] ?? .distantPast
                 return a != b ? a > b : $0.alias.localizedCaseInsensitiveCompare($1.alias) == .orderedAscending
             }
         } else {
-            hosts = store.search(q)
+            let found = store.matches(q)
+            hosts = found.map(\.host)
+            for m in found { notes[m.host.alias] = hostMatchNote(m) }
         }
         return hosts.map { host in
             let s = store.statuses[host.alias] ?? .unknown
@@ -219,7 +224,9 @@ struct CommandPaletteView: View {
             case .unknown: ""
             }
             return PaletteCommand(
-                title: host.alias, subtitle: host.connectionSummary, category: loc("连接", "Connect"),
+                title: host.alias,
+                subtitle: [host.connectionSummary, notes[host.alias]].compactMap { $0 }.joined(separator: " · "),
+                highlight: q.isEmpty ? [] : HostQuery(q).highlightTerms, category: loc("连接", "Connect"),
                 systemImage: "network", tint: store.groupColor(forAlias: host.alias)?.color ?? WL.green,
                 badge: text.isEmpty ? nil : (text, s.tagColor)) {
                 connectHost(host, store: store, sessions: sessions, openWindow: openWindow)
@@ -357,11 +364,11 @@ private struct PaletteRow: View {
                             in: RoundedRectangle(cornerRadius: WL.radius(8), style: .continuous))
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 6) {
-                    Text(command.title).font(WL.body).foregroundStyle(WL.textPrimary).lineLimit(1)
+                    Text(highlighted(command.title, command.highlight)).font(WL.body).foregroundStyle(WL.textPrimary).lineLimit(1)
                     if let s = command.snippet { SnippetBadges(snippet: s) }
                 }
                 if let sub = command.subtitle {
-                    Text(sub).font(command.snippet == nil ? WL.caption : WL.mono(11))
+                    Text(highlighted(sub, command.highlight)).font(command.snippet == nil ? WL.caption : WL.mono(11))
                         .foregroundStyle(WL.textDim).lineLimit(1)
                 }
             }

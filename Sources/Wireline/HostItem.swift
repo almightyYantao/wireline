@@ -16,6 +16,9 @@ struct HostItem: View {
     var onEdit: () -> Void
     var onForward: () -> Void = {}
     var onFiles: () -> Void = {}
+    /// Set in search results: which fields hit, and the words to highlight.
+    var match: HostSearchMatch? = nil
+    var highlightTerms: [String] = []
     @State private var hover = false
 
     private var s: HostStatus { status ?? .unknown }
@@ -109,10 +112,14 @@ struct HostItem: View {
                 Image(systemName: authSymbol).font(.system(size: 9)).foregroundStyle(WL.textDim)
             }
             VStack(alignment: .leading, spacing: 2) {
-                Text(host.alias).font(WL.body)
+                Text(highlighted(host.alias, highlightTerms)).font(WL.body)
                     .foregroundStyle(isActive ? WL.greenBright : WL.textPrimary)
-                Text(host.connectionSummary).font(WL.caption)
+                Text(highlighted(host.connectionSummary, highlightTerms)).font(WL.caption)
                     .foregroundStyle(WL.textDim).lineLimit(1)
+                if let match, let note = hostMatchNote(match) {
+                    Text(highlighted(note, highlightTerms)).font(WL.small)
+                        .foregroundStyle(WL.textDim).lineLimit(1)
+                }
             }
             Spacer(minLength: 6)
             if host.autoSudo {
@@ -148,4 +155,29 @@ struct InlineAction: View {
         .buttonStyle(.wlPlain)
         .wlHover($hover)
     }
+}
+
+/// `text` with every occurrence of `terms` emphasised.
+func highlighted(_ text: String, _ terms: [String]) -> AttributedString {
+    var out = AttributedString(text)
+    for r in HostSearch.highlightRanges(in: text, terms: terms) {
+        guard let lo = AttributedString.Index(r.lowerBound, within: out),
+              let hi = AttributedString.Index(r.upperBound, within: out) else { continue }
+        out[lo..<hi].foregroundColor = WL.amber
+        out[lo..<hi].underlineStyle = .single
+    }
+    return out
+}
+
+/// A line naming the matched fields that the row doesn't already show.
+@MainActor
+func hostMatchNote(_ m: HostSearchMatch) -> String? {
+    let loc = Localizer.shared
+    var parts: [String] = []
+    let h = m.host
+    if m.fields.contains(.group), let g = h.group { parts.append(loc.t("分组 ", "group ") + g) }
+    if m.fields.contains(.tag), !h.tags.isEmpty { parts.append(h.tags.map { "#" + $0 }.joined(separator: " ")) }
+    if m.fields.contains(.description), !m.fields.contains(.tag), let d = h.descriptionText { parts.append(d) }
+    if m.fields.contains(.address), let j = h.proxyJump { parts.append("via " + j) }
+    return parts.isEmpty ? nil : parts.joined(separator: " · ")
 }

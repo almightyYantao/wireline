@@ -131,16 +131,23 @@ struct SnippetPicker: View {
     @State private var step: SnippetStep?
     /// nil = the list; `.some(nil)` = a new snippet; `.some(s)` = editing s.
     @State private var editing: Snippet??
+    /// Browsing one folder (and its subfolder); nil = everything.
+    @State private var folder: String?
+    @State private var selecting = false
+    @State private var selection: Set<UUID> = []
+    @State private var batchRun: [Snippet]?
+    @State private var notice: String?
     @FocusState private var searchFocused: Bool
 
     private var platform: PanePlatform { store.platform(for: session) }
     private var hostGroup: String? { hosts.hosts.first { $0.alias == session.alias }?.group }
 
     private var results: [Snippet] {
-        let ranked = Snippet.ranked(store.snippets, platform: platform, hostGroup: hostGroup)
+        var ranked = Snippet.ranked(store.snippets, platform: platform, hostGroup: hostGroup)
+        if let folder { ranked = ranked.filter { SnippetFolders.contains(folder, $0.folder) } }
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
         guard !q.isEmpty else { return ranked }
-        return ranked.filter { SearchText.matches(q, in: $0.allTitles + " " + $0.command) }
+        return ranked.filter { SearchText.matches(q, in: $0.allTitles + " " + $0.command + " " + ($0.folder ?? "")) }
     }
 
     /// Rows plus the trailing "+ New snippet" row.
@@ -150,8 +157,13 @@ struct SnippetPicker: View {
         let shape = RoundedRectangle(cornerRadius: WL.radius(14), style: .continuous)
         VStack(spacing: 0) {
             if let editing {
-                SnippetEditorCard(original: editing, groups: hosts.groups,
+                SnippetEditorCard(original: editing, groups: hosts.groups, folders: store.folders,
+                                  defaultFolder: folder,
                                   onSave: save, onCancel: { closeEditor() })
+            } else if let batchRun {
+                SnippetBatchRunView(snippets: batchRun, current: session,
+                                    onBack: { self.batchRun = nil; focusSearch() },
+                                    onDone: { endSelecting(); SnippetPanel.shared.close() })
             } else if let step {
                 SnippetStepView(step: step, session: session,
                                 onStep: { self.step = $0 },
@@ -177,7 +189,9 @@ struct SnippetPicker: View {
         .onDisappear { if sessions.activeID == session.id { sessions.focusActiveTerminal() } }
         .onExitCommand {
             if editing != nil { closeEditor() }
+            else if batchRun != nil { batchRun = nil; focusSearch() }
             else if step != nil { step = nil; focusSearch() }
+            else if selecting { endSelecting() }
             else { SnippetPanel.shared.close() }
         }
     }
@@ -208,6 +222,7 @@ struct SnippetPicker: View {
                 }
                 .buttonStyle(.wlPlain).transition(.opacity)
             }
+            folderMenu
         }
         .padding(.horizontal, 12).padding(.vertical, 7)
         .wlSearchCapsule(focused: searchFocused)
@@ -231,12 +246,14 @@ struct SnippetPicker: View {
                         SnippetRow(snippet: s,
                                    matches: s.matches(platform: platform, hostGroup: hostGroup),
                                    highlighted: i == highlighted,
-                                   onEdit: { openEditor(s) },
-                                   onDelete: { store.remove(s) })
+                                   showFolder: folder == nil,
+                                   checked: selecting ? selection.contains(s.id) : nil,
+                                   onEdit: selecting ? nil : { openEditor(s) },
+                                   onDelete: selecting ? nil : { store.remove(s) })
                             .onContinuousHover { phase in
                                 if case .active = phase, highlighted != i, !keyboardNav { highlighted = i }
                             }
-                            .onTapGesture { activate(i, .insert) }
+                            .onTapGesture { selecting ? toggle(s.id) : activate(i, .insert) }
                             .wlContextMenu(menu(for: s, index: i))
                             .id(s.id)
                     }
@@ -246,12 +263,13 @@ struct SnippetPicker: View {
                             .frame(maxWidth: .infinity).padding(.vertical, 14)
                             .transition(.opacity)
                     }
-                    newRow
+                    if !selecting { newRow
                         .onContinuousHover { phase in
                             if case .active = phase, !keyboardNav { highlighted = results.count }
                         }
                         .onTapGesture { openEditor(nil) }
                         .id("new")
+                    }
                 }
                 .padding(6)
             }
@@ -277,15 +295,91 @@ struct SnippetPicker: View {
         .wlResultHighlight(highlighted == results.count)
     }
 
+    @ViewBuilder
     private var footer: some View {
-        HStack(spacing: 10) {
-            Text(scopeLabel).font(WL.caption).foregroundStyle(WL.textDim).lineLimit(1)
-            Spacer(minLength: 8)
-            KeyHint(keys: "↩", label: loc("插入", "Insert"))
-            KeyHint(keys: "⌘↩", label: loc("运行", "Run"))
+        if selecting { selectionBar } else {
+            HStack(spacing: 10) {
+                Text(notice ?? scopeLabel).font(WL.caption).foregroundStyle(notice == nil ? WL.textDim : WL.green)
+                    .lineLimit(1)
+                Spacer(minLength: 8)
+                KeyHint(keys: "↩", label: loc("插入", "Insert"))
+                KeyHint(keys: "⌘↩", label: loc("运行", "Run"))
+                Menu {
+                    Button(loc("多选…", "Select…")) { selecting = true; selection = [] }
+                    Divider()
+                    Button(loc("恢复内置模板", "Restore Built-in Templates")) {
+                        let n = store.restoreDefaults()
+                        notice = n == 0 ? loc("内置模板都在", "All built-ins present")
+                                        : loc("已恢复 \(n) 个内置模板", "Restored \(n) built-ins")
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle").font(.system(size: 12)).foregroundStyle(WL.textDim)
+                }
+                .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                .help(loc("更多", "More"))
+            }
+            .padding(.horizontal, 14).padding(.vertical, 8)
         }
-        .padding(.horizontal, 14).padding(.vertical, 8)
     }
+
+    private var selectedSnippets: [Snippet] { results.filter { selection.contains($0.id) } }
+
+    private var selectionBar: some View {
+        HStack(spacing: 8) {
+            Button(selection.count == results.count && !results.isEmpty ? loc("全不选", "None") : loc("全选", "All")) {
+                selection = selection.count == results.count ? [] : Set(results.map(\.id))
+            }
+            .buttonStyle(.wlSecondary)
+            Text(loc("已选 \(selection.count)", "\(selection.count) selected")).font(WL.caption).foregroundStyle(WL.textDim)
+            Spacer(minLength: 4)
+            Menu {
+                Button(loc("顶层（无文件夹）", "Top level (no folder)")) { moveSelection(to: nil) }
+                if !store.folders.isEmpty { Divider() }
+                ForEach(store.folders, id: \.self) { f in
+                    Button(f.replacingOccurrences(of: "/", with: " › ")) { moveSelection(to: f) }
+                }
+            } label: { Text(loc("移动到", "Move to")).font(WL.caption) }
+            .menuStyle(.borderlessButton).fixedSize().disabled(selection.isEmpty)
+            Button(loc("执行…", "Run…")) { batchRun = selectedSnippets }
+                .buttonStyle(.wlSecondary).disabled(selection.isEmpty)
+            Button(loc("删除", "Delete")) { store.remove(ids: selection); selection = [] }
+                .buttonStyle(.wlDestructive).disabled(selection.isEmpty)
+            Button(loc("完成", "Done")) { endSelecting() }.buttonStyle(.wlPrimary)
+        }
+        .padding(.horizontal, 10).padding(.vertical, 7)
+    }
+
+    private var folderMenu: some View {
+        Menu {
+            Button(loc("全部文件夹", "All folders")) { folder = nil }
+            if !store.folders.isEmpty { Divider() }
+            ForEach(store.folders, id: \.self) { f in
+                Button((SnippetFolders.parent(of: f) == nil ? "" : "    ") + (f.split(separator: "/").last.map(String.init) ?? f)) {
+                    folder = f
+                }
+            }
+        } label: {
+            HStack(spacing: 3) {
+                Image(systemName: "folder").font(.system(size: 10))
+                if let folder { Text(folder.split(separator: "/").last.map(String.init) ?? folder).font(WL.caption) }
+            }
+            .foregroundStyle(folder == nil ? WL.textDim : WL.green)
+        }
+        .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+        .help(loc("按文件夹筛选", "Filter by folder"))
+        .onChange(of: folder) { highlighted = 0 }
+    }
+
+    private func toggle(_ id: UUID) {
+        if selection.contains(id) { selection.remove(id) } else { selection.insert(id) }
+    }
+
+    private func moveSelection(to f: String?) {
+        store.move(ids: selection, to: f)
+        if let folder, !SnippetFolders.contains(folder, f) { selection = [] }
+    }
+
+    private func endSelecting() { selecting = false; selection = []; focusSearch() }
 
     /// "macOS · 本机" / "Linux · prod" / "未识别（按 Linux）".
     private var scopeLabel: String {
@@ -309,6 +403,11 @@ struct SnippetPicker: View {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(s.command, forType: .string)
             },
+            .submenu(loc("移动到", "Move to"), systemImage: "folder",
+                     [.item(loc("顶层（无文件夹）", "Top level (no folder)")) { store.move(ids: [s.id], to: nil) }]
+                     + store.folders.map { f in .item(f.replacingOccurrences(of: "/", with: " › ")) {
+                         store.move(ids: [s.id], to: f) } }),
+            .item(loc("多选…", "Select…"), systemImage: "checklist") { selecting = true; selection = [s.id] },
             .divider,
             .item(loc("删除", "Delete"), systemImage: "trash", destructive: true) { store.remove(s) },
         ]
@@ -366,18 +465,29 @@ struct SnippetRow: View {
     let snippet: Snippet
     let matches: Bool
     let highlighted: Bool
+    var showFolder = false
+    /// Non-nil in multi-select mode.
+    var checked: Bool? = nil
     var onEdit: (() -> Void)?
     var onDelete: (() -> Void)?
     @State private var hover = false
 
     var body: some View {
         HStack(spacing: 10) {
+            if let checked {
+                Image(systemName: checked ? "checkmark.square.fill" : "square")
+                    .font(.system(size: 13)).foregroundStyle(checked ? WL.green : WL.textDim)
+            }
             SnippetIcon(category: snippet.category, highlighted: highlighted)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Text(snippet.title(chinese: loc.isChinese)).font(WL.body).foregroundStyle(WL.textPrimary)
                         .lineLimit(1)
                     SnippetBadges(snippet: snippet)
+                    if showFolder, let f = snippet.folder {
+                        Text(f.replacingOccurrences(of: "/", with: " › ")).font(WL.caption)
+                            .foregroundStyle(WL.textDim).lineLimit(1)
+                    }
                 }
                 Text(Snippet.commandLines(snippet.command).first ?? "")
                     .font(WL.mono(11)).foregroundStyle(WL.textDim).lineLimit(1).truncationMode(.tail)
@@ -727,6 +837,7 @@ struct SnippetEditorCard: View {
     @Environment(Localizer.self) private var loc
     let original: Snippet?
     let groups: [String]
+    var folders: [String] = []
     var onSave: (Snippet) -> Void
     var onCancel: () -> Void
 
@@ -736,10 +847,14 @@ struct SnippetEditorCard: View {
     @State private var platform: SnippetPlatform
     @State private var group: String
     @State private var icon: String
+    @State private var folder: String
     @FocusState private var titleFocused: Bool
 
-    init(original: Snippet?, groups: [String], onSave: @escaping (Snippet) -> Void, onCancel: @escaping () -> Void) {
-        self.original = original; self.groups = groups; self.onSave = onSave; self.onCancel = onCancel
+    init(original: Snippet?, groups: [String], folders: [String] = [], defaultFolder: String? = nil,
+         onSave: @escaping (Snippet) -> Void, onCancel: @escaping () -> Void) {
+        self.original = original; self.groups = groups; self.folders = folders
+        self.onSave = onSave; self.onCancel = onCancel
+        _folder = State(initialValue: original.map { $0.folder ?? "" } ?? defaultFolder ?? "")
         _titleZh = State(initialValue: original?.titleZh ?? "")
         _titleEn = State(initialValue: original?.titleEn ?? "")
         _command = State(initialValue: original?.command ?? "")
@@ -789,6 +904,19 @@ struct SnippetEditorCard: View {
                              "Write parameters as {{name}} or {{name:default}} (or «name»); you fill them in before inserting. Go templates like {{.Names}} are left alone."))
                         .font(WL.caption).foregroundStyle(WL.textDim)
                         .fixedSize(horizontal: false, vertical: true)
+                    labeled(loc("文件夹（可写 父/子，最多两级）", "Folder (parent/child, two levels max)")) {
+                        HStack(spacing: 6) {
+                            TextField("", text: $folder, prompt: Text(loc("无", "None")).foregroundStyle(WL.textDim.opacity(0.6)))
+                                .wlField(font: WL.body)
+                            if !folders.isEmpty {
+                                Menu {
+                                    Button(loc("无", "None")) { folder = "" }
+                                    ForEach(folders, id: \.self) { f in Button(f) { folder = f } }
+                                } label: { Image(systemName: "folder").font(.system(size: 11)) }
+                                .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                            }
+                        }
+                    }
                     labeled(loc("适用系统", "Platform")) {
                         WLSegmented(selection: $platform, options: [
                             WLOption(.any, loc("通用", "Any")),
@@ -853,7 +981,100 @@ struct SnippetEditorCard: View {
         s.platform = platform
         s.hostGroup = group.isEmpty ? nil : group
         s.categoryOverride = SnippetCategory(rawValue: icon)
+        s.folder = SnippetFolders.normalize(folder)
         onSave(s)
+    }
+}
+
+// MARK: - Batch run
+
+/// Run several snippets, in order, in several open terminal panes. Parameters
+/// take last time's value or their default; dangerous ones are listed first.
+struct SnippetBatchRunView: View {
+    @Environment(SnippetStore.self) private var store
+    @Environment(SessionStore.self) private var sessions
+    @Environment(Localizer.self) private var loc
+    let snippets: [Snippet]
+    let current: TerminalSession
+    var onBack: () -> Void
+    var onDone: () -> Void
+
+    @State private var targets: Set<UUID> = []
+
+    private var panes: [TerminalSession] {
+        sessions.sessions.filter { s in
+            guard s.isRunning else { return false }
+            switch s.kind { case .localShell, .ssh: return true; case .sftp, .rdp: return false }
+        }
+    }
+
+    private func text(_ s: Snippet) -> String { s.filled(with: s.initialValues()) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Button(action: onBack) { Image(systemName: "chevron.left").font(.system(size: 11, weight: .semibold)) }
+                    .buttonStyle(.wlIcon(size: 22))
+                Text(loc("批量执行 \(snippets.count) 条", "Run \(snippets.count) snippets"))
+                    .font(WL.body.weight(.semibold)).foregroundStyle(WL.textPrimary)
+                Spacer()
+            }
+            .padding(.horizontal, 10).padding(.vertical, 8)
+            WLFormDivider()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(snippets) { s in
+                        let reasons = SnippetSafety.dangerReasons(text(s))
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(s.title(chinese: loc.isChinese)).font(WL.caption).foregroundStyle(WL.textPrimary)
+                            Text(text(s)).font(WL.mono(11)).foregroundStyle(WL.textDim).lineLimit(2)
+                            if !reasons.isEmpty {
+                                Text("⚠︎ " + reasons.joined(separator: ", ")).font(WL.caption).foregroundStyle(WL.red)
+                            }
+                        }
+                    }
+                    Text(loc("执行到", "Run in")).font(WL.caption).foregroundStyle(WL.textDim).padding(.top, 6)
+                    ForEach(panes) { p in
+                        Button {
+                            if targets.contains(p.id) { targets.remove(p.id) } else { targets.insert(p.id) }
+                        } label: {
+                            HStack(spacing: 8) {
+                                Image(systemName: targets.contains(p.id) ? "checkmark.square.fill" : "square")
+                                    .foregroundStyle(targets.contains(p.id) ? WL.green : WL.textDim)
+                                Text(p.title).font(WL.body).foregroundStyle(WL.textPrimary).lineLimit(1)
+                                if p.id == current.id {
+                                    Text(loc("当前", "current")).font(WL.caption).foregroundStyle(WL.textDim)
+                                }
+                                Spacer()
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.wlPlain)
+                    }
+                }
+                .padding(12)
+            }
+            .frame(maxHeight: 340)
+            .fixedSize(horizontal: false, vertical: true)
+            WLFormDivider()
+            HStack {
+                Button(loc("全部会话", "All panes")) { targets = Set(panes.map(\.id)) }.buttonStyle(.wlSecondary)
+                Spacer()
+                Button(loc("取消", "Cancel"), action: onBack).buttonStyle(.wlSecondary)
+                Button(loc("执行到 \(targets.count) 个会话", "Run in \(targets.count)")) { run() }
+                    .buttonStyle(.wlPrimary).disabled(targets.isEmpty)
+            }
+            .padding(.horizontal, 12).padding(.vertical, 9)
+        }
+        .onAppear { targets = [current.id] }
+    }
+
+    private func run() {
+        for p in panes where targets.contains(p.id) {
+            for s in snippets { p.runInTerminal(text(s).trimmingCharacters(in: .newlines)) }
+        }
+        for s in snippets { store.recordUse(s.id) }
+        onDone()
     }
 }
 

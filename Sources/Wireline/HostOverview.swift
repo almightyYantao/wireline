@@ -20,10 +20,8 @@ struct HostOverview: View {
     }
 
     private var sections: [(title: String, group: String?, hosts: [Host])] {
-        let q = filter.trimmingCharacters(in: .whitespaces).lowercased()
-        func match(_ h: Host) -> Bool {
-            q.isEmpty || h.alias.lowercased().contains(q) || h.connectionSummary.lowercased().contains(q)
-        }
+        let q = HostQuery(filter)
+        func match(_ h: Host) -> Bool { q.isEmpty || q.match(h) != nil }
         var out = store.groups.map { (title: $0, group: Optional($0), hosts: store.hosts(inGroup: $0).filter(match)) }
         if store.hasUngrouped {
             out.append((title: loc("未分组", "Ungrouped"), group: nil, hosts: store.hosts(inGroup: nil).filter(match)))

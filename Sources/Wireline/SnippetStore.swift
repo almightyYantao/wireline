@@ -61,7 +61,7 @@ final class SnippetStore {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         if let data = try? encoder.encode(snippets) {
-            try? data.write(to: fileURL, options: .atomic)
+            try? AtomicFile.write(data, to: fileURL)
         }
     }
 
@@ -72,7 +72,32 @@ final class SnippetStore {
         if let i = snippets.firstIndex(where: { $0.id == snippet.id }) { snippets[i] = snippet; save() }
     }
 
-    func remove(_ snippet: Snippet) { canSave = true; snippets.removeAll { $0.id == snippet.id }; save() }
+    func remove(_ snippet: Snippet) { remove(ids: [snippet.id]) }
+
+    func remove(ids: Set<UUID>) { canSave = true; snippets.removeAll { ids.contains($0.id) }; save() }
+
+    func move(ids: Set<UUID>, to folder: String?) {
+        canSave = true
+        let f = SnippetFolders.normalize(folder)
+        for i in snippets.indices where ids.contains(snippets[i].id) { snippets[i].folder = f }
+        save()
+    }
+
+    var folders: [String] { SnippetFolders.all(in: snippets) }
+
+    func renameFolder(_ old: String, to new: String?) {
+        canSave = true; SnippetFolders.rename(old, to: new, in: &snippets); save()
+    }
+
+    /// Re-add the shipped templates that are missing; returns how many.
+    @discardableResult
+    func restoreDefaults() -> Int {
+        canSave = true
+        let (all, added) = Snippet.restoringDefaults(snippets)
+        snippets = all
+        save()
+        return added
+    }
 
     /// Count a use (for the recent / frequent ordering) and remember the values
     /// typed into its parameters.
