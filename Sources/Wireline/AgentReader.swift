@@ -2,11 +2,6 @@ import SwiftUI
 import AppKit
 import WirelineCore
 
-extension Notification.Name {
-    /// Bring up the reader window (the main window's root opens it).
-    static let showAgentReader = Notification.Name("wireline.showAgentReader")
-}
-
 /// "Open latest answer in reader": a coding agent's last answer, lifted out of
 /// the scrollback (`AgentAnswerExtractor`) and shown as Markdown in its own window.
 @Observable
@@ -24,6 +19,8 @@ final class AgentReader {
     private(set) var document: Document?
     /// The pane it came from, for Refresh.
     @ObservationIgnored private weak var source: TerminalSession?
+    /// Hosted directly, so it opens from the quick terminal with no main window.
+    @ObservationIgnored private var window: NSWindow?
 
     static func open(_ session: TerminalSession?) {
         let loc = Localizer.shared
@@ -33,7 +30,25 @@ final class AgentReader {
                                               "No agent answer found (Claude Code, Codex)"), isError: true)
             return
         }
-        NotificationCenter.default.post(name: .showAgentReader, object: nil)
+        shared.show()
+    }
+
+    private func show() {
+        if window == nil {
+            let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 680, height: 720),
+                             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+                             backing: .buffered, defer: false)
+            w.title = "Wireline Reader"
+            w.titlebarAppearsTransparent = true
+            w.titleVisibility = .hidden
+            w.isReleasedWhenClosed = false
+            w.contentView = NSHostingView(rootView: AgentReaderView().environment(Localizer.shared))
+            w.center()
+            w.setFrameAutosaveName("WirelineReader")
+            window = w
+        }
+        NSApp.activate()
+        window?.makeKeyAndOrderFront(nil)
     }
 
     func refresh() {
@@ -55,14 +70,10 @@ final class AgentReader {
     }
 }
 
-/// The main window's paste-confirm card, and the reader window's opener.
+/// The main window's paste-confirm card.
 struct TerminalAssists: ViewModifier {
-    @Environment(\.openWindow) private var openWindow
-
     func body(content: Content) -> some View {
-        content
-            .modifier(PasteConfirmModal())
-            .onReceive(NotificationCenter.default.publisher(for: .showAgentReader)) { _ in openWindow(id: "reader") }
+        content.modifier(PasteConfirmModal())
     }
 }
 
