@@ -13,7 +13,7 @@
 - Mac 和手机都是**出站** WebSocket 连接到中继；Mac 不监听任何端口，不需要公网 IP / 端口转发。
 - 中继以 **room** 为单位：`room = base64url(SHA256(Mac 公钥))[:22]`。每个 room 至多一个 Mac 连接、若干手机连接（默认 4）。
 - 中继只认外层信封（谁发给谁），载荷是端到端密文；不存任何数据，进程重启即清空。
-- 中继同时托管 `relay/web/index.html`，手机扫码直接打开同一个域名（WebCrypto 要求安全上下文，生产必须 HTTPS）。
+- 中继同时托管 `relay/web/`（含打包的 xterm.js），手机扫码直接打开同一个域名（WebCrypto 要求安全上下文，生产必须 HTTPS）。
 
 ## 外层协议（中继看得到的部分）
 
@@ -113,13 +113,14 @@ Mac→手机：
 ## 代码位置
 
 - `relay/main.go`：中继（Go 标准库，自带 WebSocket 实现），`relay/Dockerfile`，`relay/README.md`。
-- `relay/web/index.html`：手机端（xterm.js CDN）。
+- `relay/web/`：手机端，`index.html` + `app.js` + `relay-crypto.js`；xterm.js 5.5.0 与 addon-fit 0.10.0 打包在 `vendor/`（MIT，附 LICENSE 和来源校验值），不依赖 CDN。中继下发 CSP：`script-src 'self'`、`connect-src 'self'`，禁止内联脚本和第三方源。
 - `Sources/WirelineCore/RelayProtocol.swift`：握手、密钥派生、帧加解密、消息编解码、配对码、配对链接、限流器（纯逻辑，有单测）。
 - `Sources/Wireline/PhoneRelay.swift`：中继客户端、会话桥接、设置页一节。
 
-## 待拍板
+## 已定（2026-10）
 
-1. 是否加临时密钥做前向保密（协议 v2）。
-2. 手机私钥放 localStorage（可导出 JWK）还是 IndexedDB 里不可导出的 CryptoKey。
-3. 手机端是否允许输入任意文本，还是只开放快捷键（y/n/Esc/Ctrl-C/回车）。
-4. 中继是否强制 `RELAY_TOKEN`，以及是否给手机连接也加门槛（目前手机只靠 E2E 认证，任何人都能占 4 个手机名额做 DoS）。
+1. 前向保密：协议 v2，每条连接临时 X25519，静态密钥只做认证。
+2. 手机私钥：IndexedDB 里 `extractable=false` 的 CryptoKey，旧 localStorage JWK 自动迁移后删除。
+3. 手机输入：默认只放行快捷键，Mac 端强制；「允许完整输入」可全局或按设备开，默认关。
+4. 中继门槛：默认强制 `RELAY_TOKEN`，Mac 和手机都要带，手机的从二维码拿。
+5. 前端依赖：xterm.js 打包进 `relay/web/vendor`，不走 CDN。
