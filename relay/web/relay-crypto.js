@@ -3,7 +3,7 @@
 (function (root) {
   const subtle = root.crypto.subtle;
   const enc = new TextEncoder(), dec = new TextDecoder();
-  const LABEL = enc.encode('wireline-relay v1');
+  const LABEL = enc.encode('wireline-relay v2');
 
   const b64 = (u8) => { let s = ''; for (const b of u8) s += String.fromCharCode(b); return btoa(s); };
   const unb64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
@@ -15,22 +15,33 @@
     return out;
   };
 
-  async function generateKeys() {
-    const kp = await subtle.generateKey({ name: 'X25519' }, true, ['deriveBits']);
-    return { privateJwk: await subtle.exportKey('jwk', kp.privateKey),
-             publicRaw: new Uint8Array(await subtle.exportKey('raw', kp.publicKey)) };
+  const VERSION = 2;
+
+  // { privateKey: CryptoKey, publicRaw }. Static keys are made non-extractable.
+  async function generateKeys(extractable = false) {
+    const kp = await subtle.generateKey({ name: 'X25519' }, extractable, ['deriveBits']);
+    return { privateKey: kp.privateKey, publicRaw: new Uint8Array(await subtle.exportKey('raw', kp.publicKey)) };
   }
+
+  const importPrivate = (jwk) => subtle.importKey('jwk', jwk, { name: 'X25519' }, false, ['deriveBits']);
 
   async function roomID(macPub) {
     return b64url(new Uint8Array(await subtle.digest('SHA-256', macPub))).slice(0, 22);
   }
 
-  async function sessionKey(privateJwk, peerPub, macPub, phonePub, phoneNonce, macNonce) {
-    const priv = await subtle.importKey('jwk', privateJwk, { name: 'X25519' }, false, ['deriveBits']);
-    const peer = await subtle.importKey('raw', peerPub, { name: 'X25519' }, false, []);
-    const shared = await subtle.deriveBits({ name: 'X25519', public: peer }, priv, 256);
-    const ikm = await subtle.importKey('raw', shared, 'HKDF', false, ['deriveKey']);
-    return subtle.deriveKey({ name: 'HKDF', hash: 'SHA-256', salt: concat(phoneNonce, macNonce), info: concat(LABEL, macPub, phonePub) },
+  async function dh(priv, pub) {
+    const peer = await subtle.importKey('raw', pub, { name: 'X25519' }, false, []);
+    return new Uint8Array(await subtle.deriveBits({ name: 'X25519', public: peer }, priv, 256));
+  }
+
+  // HKDF(ikm: X25519(eph, peerEph) || X25519(static, peerStatic), salt: phoneNonce || macNonce,
+  // info: label || macStatic || phoneStatic || macEph || phoneEph). t holds the public values.
+  async function sessionKey(staticKey, ephemeralKey, t, side) {
+    const [peerStatic, peerEph] = side === 'mac' ? [t.phoneStatic, t.phoneEph] : [t.macStatic, t.macEph];
+    const ikm = await subtle.importKey('raw', concat(await dh(ephemeralKey, peerEph), await dh(staticKey, peerStatic)),
+                                       'HKDF', false, ['deriveKey']);
+    return subtle.deriveKey({ name: 'HKDF', hash: 'SHA-256', salt: concat(t.phoneNonce, t.macNonce),
+                              info: concat(LABEL, t.macStatic, t.phoneStatic, t.macEph, t.phoneEph) },
                             ikm, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
   }
 
@@ -74,6 +85,6 @@
     },
   };
 
-  root.WLRelay = { b64, unb64, b64url, unb64url, enc, dec, generateKeys, roomID, sessionKey, channel, payload,
+  root.WLRelay = { VERSION, b64, unb64, b64url, unb64url, enc, dec, generateKeys, importPrivate, roomID, sessionKey, channel, payload,
                    nonce: () => root.crypto.getRandomValues(new Uint8Array(16)) };
 })(typeof window !== 'undefined' ? window : globalThis);

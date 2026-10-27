@@ -219,24 +219,24 @@ final class PhoneRelay {
     }
 
     private func handshake(_ peer: String, _ h: RelayHandshake) {
-        guard peers[peer]?.channel == nil, h.t == "hello", h.v == 1,
-              let pub = h.pub.flatMap({ Data(base64Encoded: $0) }), pub.count == 32,
-              let nonce = h.nonce.flatMap({ Data(base64Encoded: $0) }), nonce.count == RelayCrypto.nonceSize else {
-            kick(peer); return
-        }
+        guard peers[peer]?.channel == nil, let (pub, epub, nonce) = h.helloParts else { kick(peer); return }
         guard isPaired(pub) || pairing?.isOpen() == true else {
             sendEnvelope(RelayEnvelope(to: peer, d: RelayPayload.handshake(.deny).encoded))
             kick(peer); return
         }
+        // A fresh ephemeral per connection, dropped once the key is derived.
+        let ephemeral = Curve25519.KeyAgreement.PrivateKey()
         let macNonce = RelayCrypto.randomNonce()
-        guard let key = try? RelayCrypto.sessionKey(privateKey: macKey, peerPublicKey: pub, macPublicKey: macPublicKey,
-                                                    phonePublicKey: pub, phoneNonce: nonce, macNonce: macNonce) else {
+        let t = RelayTranscript(macStatic: macPublicKey, phoneStatic: pub, macEphemeral: ephemeral.publicKey.rawRepresentation,
+                                phoneEphemeral: epub, phoneNonce: nonce, macNonce: macNonce)
+        guard let key = try? RelayCrypto.sessionKey(staticKey: macKey, ephemeralKey: ephemeral, transcript: t, side: .mac) else {
             kick(peer); return
         }
         peers[peer]?.phonePublicKey = pub
         peers[peer]?.channel = RelayChannel(key: key, side: .mac)
         peers[peer]?.authed = isPaired(pub)
-        sendEnvelope(RelayEnvelope(to: peer, d: RelayPayload.handshake(.welcome(nonce: macNonce)).encoded))
+        sendEnvelope(RelayEnvelope(to: peer, d: RelayPayload.handshake(
+            .welcome(ephemeralKey: ephemeral.publicKey.rawRepresentation, nonce: macNonce)).encoded))
         if isPaired(pub) { touch(pub) }
     }
 

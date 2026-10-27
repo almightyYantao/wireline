@@ -4,7 +4,8 @@ import CryptoKit
 /// Phone relay wire protocol (docs/design/phone-relay.md): handshake, key
 /// derivation, sealed frames and the inner messages. Mirrors relay/web/index.html.
 public enum RelayCrypto {
-    public static let label = Data("wireline-relay v1".utf8)
+    public static let version = 2
+    public static let label = Data("wireline-relay v2".utf8)
     public static let nonceSize = 16
 
     /// The relay room a Mac lives in: derived from its public key.
@@ -16,15 +17,31 @@ public enum RelayCrypto {
         Data((0 ..< nonceSize).map { _ in UInt8.random(in: 0 ... 255) })
     }
 
-    /// HKDF-SHA256(X25519(priv, peer), salt: phoneNonce‖macNonce, info: label‖macPub‖phonePub).
-    public static func sessionKey(privateKey: Curve25519.KeyAgreement.PrivateKey, peerPublicKey: Data,
-                                  macPublicKey: Data, phonePublicKey: Data,
-                                  phoneNonce: Data, macNonce: Data) throws -> SymmetricKey {
-        let peer = try Curve25519.KeyAgreement.PublicKey(rawRepresentation: peerPublicKey)
-        let shared = try privateKey.sharedSecretFromKeyAgreement(with: peer)
-        return shared.hkdfDerivedSymmetricKey(using: SHA256.self, salt: phoneNonce + macNonce,
-                                              sharedInfo: label + macPublicKey + phonePublicKey,
-                                              outputByteCount: 32)
+    /// HKDF-SHA256(ikm: X25519(eph, peerEph) ‖ X25519(static, peerStatic),
+    /// salt: phoneNonce ‖ macNonce, info: label ‖ macStatic ‖ phoneStatic ‖ macEph ‖ phoneEph).
+    /// The ephemeral pair gives forward secrecy; the static pair authenticates both ends.
+    public static func sessionKey(staticKey: Curve25519.KeyAgreement.PrivateKey,
+                                  ephemeralKey: Curve25519.KeyAgreement.PrivateKey,
+                                  transcript t: RelayTranscript, side: RelayChannel.Side) throws -> SymmetricKey {
+        let (peerStatic, peerEphemeral) = side == .mac ? (t.phoneStatic, t.phoneEphemeral) : (t.macStatic, t.macEphemeral)
+        func dh(_ k: Curve25519.KeyAgreement.PrivateKey, _ pub: Data) throws -> Data {
+            try k.sharedSecretFromKeyAgreement(with: .init(rawRepresentation: pub)).withUnsafeBytes { Data($0) }
+        }
+        let ikm = try dh(ephemeralKey, peerEphemeral) + dh(staticKey, peerStatic)
+        return HKDF<SHA256>.deriveKey(inputKeyMaterial: SymmetricKey(data: ikm), salt: t.phoneNonce + t.macNonce,
+                                      info: label + t.macStatic + t.phoneStatic + t.macEphemeral + t.phoneEphemeral,
+                                      outputByteCount: 32)
+    }
+}
+
+/// The public values of one handshake, as both ends see them.
+public struct RelayTranscript: Equatable, Sendable {
+    public var macStatic, phoneStatic, macEphemeral, phoneEphemeral, phoneNonce, macNonce: Data
+
+    public init(macStatic: Data, phoneStatic: Data, macEphemeral: Data, phoneEphemeral: Data, phoneNonce: Data, macNonce: Data) {
+        self.macStatic = macStatic; self.phoneStatic = phoneStatic
+        self.macEphemeral = macEphemeral; self.phoneEphemeral = phoneEphemeral
+        self.phoneNonce = phoneNonce; self.macNonce = macNonce
     }
 }
 
@@ -100,14 +117,32 @@ public enum RelayPayload: Equatable, Sendable {
 public struct RelayHandshake: Codable, Equatable, Sendable {
     public var t: String
     public var v: Int?
+    /// Static (identity) public key: phone only.
     public var pub: String?
+    /// Ephemeral public key for this connection.
+    public var epub: String?
     public var nonce: String?
 
-    public static func hello(publicKey: Data, nonce: Data) -> Self {
-        Self(t: "hello", v: 1, pub: publicKey.base64EncodedString(), nonce: nonce.base64EncodedString())
+    public init(t: String, v: Int? = nil, pub: String? = nil, epub: String? = nil, nonce: String? = nil) {
+        self.t = t; self.v = v; self.pub = pub; self.epub = epub; self.nonce = nonce
     }
-    public static func welcome(nonce: Data) -> Self { Self(t: "welcome", nonce: nonce.base64EncodedString()) }
+
+    public static func hello(publicKey: Data, ephemeralKey: Data, nonce: Data) -> Self {
+        Self(t: "hello", v: RelayCrypto.version, pub: publicKey.base64EncodedString(),
+             epub: ephemeralKey.base64EncodedString(), nonce: nonce.base64EncodedString())
+    }
+    public static func welcome(ephemeralKey: Data, nonce: Data) -> Self {
+        Self(t: "welcome", epub: ephemeralKey.base64EncodedString(), nonce: nonce.base64EncodedString())
+    }
     public static let deny = Self(t: "deny")
+
+    func key(_ s: String?) -> Data? { s.flatMap { Data(base64Encoded: $0) }.flatMap { $0.count == 32 ? $0 : nil } }
+    /// Phone's static and ephemeral keys and nonce, when well formed.
+    public var helloParts: (pub: Data, epub: Data, nonce: Data)? {
+        guard t == "hello", v == RelayCrypto.version, let p = key(pub), let e = key(epub),
+              let n = nonce.flatMap({ Data(base64Encoded: $0) }), n.count == RelayCrypto.nonceSize else { return nil }
+        return (p, e, n)
+    }
 }
 
 /// Relay envelope (what the relay itself reads).

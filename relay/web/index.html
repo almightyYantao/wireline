@@ -58,8 +58,8 @@
   let pairCode = null;
   const frag = new URLSearchParams(location.hash.slice(1));
   if (frag.get('v') === '1' && frag.get('k')) {
-    const keys = saved && saved.mac === frag.get('k') ? saved : await R.generateKeys().then((k) => ({
-      priv: k.privateJwk, pub: R.b64(k.publicRaw) }));
+    const keys = saved && saved.mac === frag.get('k') ? saved : await R.generateKeys(true).then(async (k) => ({
+      priv: await crypto.subtle.exportKey('jwk', k.privateKey), pub: R.b64(k.publicRaw) }));
     saved = { ...keys, mac: frag.get('k'), name: frag.get('n') || 'Mac', paired: false };
     pairCode = frag.get('c');
     localStorage.setItem(STORE, JSON.stringify(saved));
@@ -76,7 +76,8 @@
   const fit = new FitAddon.FitAddon();
   term.loadAddon(fit);
 
-  let ws, ch, myNonce, current = null, sessions = [];
+  const staticKey = await R.importPrivate(saved.priv);
+  let ws, ch, myNonce, myEph, current = null, sessions = [];
   // WebCrypto is async: keep frames in counter order both ways.
   let outQ = Promise.resolve(), inQ = Promise.resolve();
   const send = (msg) => { outQ = outQ.then(async () => {
@@ -140,7 +141,13 @@
       const e = JSON.parse(ev.data);
       if (e.t === 'mac') {
         $('dot').classList.toggle('on', e.up);
-        if (e.up) { myNonce = R.nonce(); ws.send(JSON.stringify({ d: R.payload.handshake({ t: 'hello', v: 1, pub: saved.pub, nonce: R.b64(myNonce) }) })); status('握手中…'); }
+        if (e.up) {
+          // Fresh ephemeral per connection: forward secrecy.
+          myNonce = R.nonce(); myEph = await R.generateKeys();
+          ws.send(JSON.stringify({ d: R.payload.handshake({ t: 'hello', v: R.VERSION, pub: saved.pub,
+                                                             epub: R.b64(myEph.publicRaw), nonce: R.b64(myNonce) }) }));
+          status('握手中…');
+        }
         else { ch = null; status('Mac 离线'); }
         return;
       }
@@ -150,7 +157,10 @@
       if (p.handshake) {
         if (p.handshake.t === 'deny') { status('Mac 拒绝：未配对或已撤销'); return; }
         if (p.handshake.t !== 'welcome' || ch) return;
-        const key = await R.sessionKey(saved.priv, macPub, macPub, phonePub, myNonce, R.unb64(p.handshake.nonce));
+        const key = await R.sessionKey(staticKey, myEph.privateKey, {
+          macStatic: macPub, phoneStatic: phonePub, macEph: R.unb64(p.handshake.epub), phoneEph: myEph.publicRaw,
+          phoneNonce: myNonce, macNonce: R.unb64(p.handshake.nonce) }, 'phone');
+        myEph = null;
         ch = R.channel(key, 'phone');
         retry = 1000;
         status('已连接');

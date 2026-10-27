@@ -44,22 +44,28 @@
 
 基元：X25519 + HKDF-SHA256 + AES-256-GCM（Mac 用 CryptoKit，浏览器用 WebCrypto，算法一一对应）。
 
-握手（中继可见、不保密）：
-- 手机→Mac：`{"t":"hello","v":1,"pub":"<手机公钥 b64>","nonce":"<16 字节 b64>"}`
-- Mac→手机：`{"t":"welcome","nonce":"<16 字节 b64>"}`（未配对且不在配对窗口：`{"t":"deny"}` 并 kick）
+每端两把密钥：长期**静态**密钥（身份，Mac 的在 Keychain，手机的是 IndexedDB 里不可导出的 CryptoKey），和每条连接新生成、派生完即丢弃的**临时**密钥。
 
-会话密钥：
+握手（协议 v2，中继可见、不保密）：
+- 手机→Mac：`{"t":"hello","v":2,"pub":"<手机静态公钥>","epub":"<手机临时公钥>","nonce":"<16 字节>"}`（均 b64）
+- Mac→手机：`{"t":"welcome","epub":"<Mac 临时公钥>","nonce":"<16 字节>"}`（未配对且不在配对窗口：`{"t":"deny"}` 并 kick）
+- `v` 不是 2 的 hello 一律断开（v1 没有前向保密，不兼容）。
+
+会话密钥（类似 Noise KK）：
 ```
-shared = X25519(mac_priv, phone_pub)            // 双方相同
-salt   = phone_nonce || mac_nonce
-info   = "wireline-relay v1" || mac_pub || phone_pub
-key    = HKDF-SHA256(shared, salt, info, 32)
+ee   = X25519(eph_self, eph_peer)          // 前向保密
+ss   = X25519(static_self, static_peer)    // 认证：只有两端静态私钥的持有者算得出
+key  = HKDF-SHA256(ikm = ee || ss,
+                   salt = phone_nonce || mac_nonce,
+                   info = "wireline-relay v2" || mac_static || phone_static || mac_eph || phone_eph, 32)
 ```
-两端的随机 nonce 让每条连接的密钥不同，旧连接的密文不能重放到新连接。
+- 前向保密：临时私钥只活在一次握手里；事后泄露静态私钥也解不开录下的旧流量（缺 `ee`）。
+- 认证：用静态 DH 做隐式认证，而不是签名——两端静态密钥都是 X25519，二维码格式不变。冒充任一方都需要它的静态私钥；第一条能解开的加密消息即为密钥确认。
+- transcript（四把公钥 + 两个 nonce）进 HKDF 的 info/salt，中继改任何一个值，双方密钥就对不上。
 
-数据帧：`d = b64( counter(8 字节大端) || AES-GCM(ciphertext||tag) )`，IV = `dir(1) || 000000 || counter(8)`，`dir` Mac→手机为 1、手机→Mac 为 2，AAD = `"wireline-relay v1"`。发送方 counter 从 1 递增，接收方要求严格递增，否则丢弃并断开——防重放、防重排、两方向 IV 不撞。
+数据帧：`d = b64( counter(8 字节大端) || AES-GCM(ciphertext||tag) )`，IV = `dir(1) || 000000 || counter(8)`，`dir` Mac→手机为 1、手机→Mac 为 2，AAD = `"wireline-relay v2"`。发送方 counter 从 1 递增，接收方要求严格递增，否则丢弃并断开——防重放、防重排、两方向 IV 不撞。
 
-已知取舍：两端都用长期静态密钥（Mac 私钥在 Keychain，手机私钥在 localStorage），**没有前向保密**；泄露 Mac 私钥 + 抓到历史流量可解密。可加一对临时 X25519 混入 HKDF 解决，见「待拍板」。
+已知取舍：静态 DH 认证不防 KCI（手机静态私钥泄露后，攻击者可对这台手机冒充 Mac）；手机私钥不可导出，降低了这个风险。
 
 ## 内层消息（加密后的 JSON）
 

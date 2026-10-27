@@ -40,17 +40,23 @@ const join = await mac.next();
 assert.equal(join.t, 'join');
 const peer = join.peer;
 
-const phoneNonce = R.nonce();
-phone.send(json({ d: R.payload.handshake({ t: 'hello', v: 1, pub: R.b64(phoneKeys.publicRaw), nonce: R.b64(phoneNonce) }) }));
+const phoneNonce = R.nonce(), phoneEph = await R.generateKeys();
+phone.send(json({ d: R.payload.handshake({ t: 'hello', v: R.VERSION, pub: R.b64(phoneKeys.publicRaw),
+                                           epub: R.b64(phoneEph.publicRaw), nonce: R.b64(phoneNonce) }) }));
 const hello = await mac.next();
 assert.equal(hello.from, peer);
 const h = R.payload.parse(hello.d).handshake;
-const macNonce = R.nonce();
-macCh = R.channel(await R.sessionKey(macKeys.privateJwk, R.unb64(h.pub), macKeys.publicRaw, R.unb64(h.pub), R.unb64(h.nonce), macNonce), 'mac');
-mac.send(json({ to: peer, d: R.payload.handshake({ t: 'welcome', nonce: R.b64(macNonce) }) }));
+assert.equal(h.v, 2);
+const macNonce = R.nonce(), macEph = await R.generateKeys();
+const macT = { macStatic: macKeys.publicRaw, phoneStatic: R.unb64(h.pub), macEph: macEph.publicRaw, phoneEph: R.unb64(h.epub),
+               phoneNonce: R.unb64(h.nonce), macNonce };
+macCh = R.channel(await R.sessionKey(macKeys.privateKey, macEph.privateKey, macT, 'mac'), 'mac');
+mac.send(json({ to: peer, d: R.payload.handshake({ t: 'welcome', epub: R.b64(macEph.publicRaw), nonce: R.b64(macNonce) }) }));
 
 const welcome = R.payload.parse((await phone.next()).d).handshake;
-const phoneCh = R.channel(await R.sessionKey(phoneKeys.privateJwk, macKeys.publicRaw, macKeys.publicRaw, phoneKeys.publicRaw, phoneNonce, R.unb64(welcome.nonce)), 'phone');
+const phoneT = { macStatic: macKeys.publicRaw, phoneStatic: phoneKeys.publicRaw, macEph: R.unb64(welcome.epub),
+                 phoneEph: phoneEph.publicRaw, phoneNonce, macNonce: R.unb64(welcome.nonce) };
+const phoneCh = R.channel(await R.sessionKey(phoneKeys.privateKey, phoneEph.privateKey, phoneT, 'phone'), 'phone');
 const phoneSend = async (msg) => phone.send(json({ d: R.payload.sealed(await phoneCh.seal(R.enc.encode(json(msg)))) }));
 const macRecv = async () => { const e = await mac.next(); sniffed.push(e.d); return JSON.parse(R.dec.decode(await macCh.open(R.payload.parse(e.d).sealed))); };
 const phoneRecv = async () => { const e = await phone.next(); sniffed.push(e.d); return JSON.parse(R.dec.decode(await phoneCh.open(R.payload.parse(e.d).sealed))); };

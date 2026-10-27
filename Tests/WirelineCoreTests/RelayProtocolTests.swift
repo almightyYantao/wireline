@@ -3,24 +3,50 @@ import CryptoKit
 @testable import WirelineCore
 
 final class RelayProtocolTests: XCTestCase {
-    private let mac = Curve25519.KeyAgreement.PrivateKey()
-    private let phone = Curve25519.KeyAgreement.PrivateKey()
+    private typealias Key = Curve25519.KeyAgreement.PrivateKey
+    private let mac = Key(), phone = Key()
 
-    private func keys(phoneNonce: Data = Data(repeating: 1, count: 16), macNonce: Data = Data(repeating: 2, count: 16))
-        throws -> (SymmetricKey, SymmetricKey) {
-        let m = mac.publicKey.rawRepresentation, p = phone.publicKey.rawRepresentation
-        let k1 = try RelayCrypto.sessionKey(privateKey: mac, peerPublicKey: p, macPublicKey: m, phonePublicKey: p,
-                                            phoneNonce: phoneNonce, macNonce: macNonce)
-        let k2 = try RelayCrypto.sessionKey(privateKey: phone, peerPublicKey: m, macPublicKey: m, phonePublicKey: p,
-                                            phoneNonce: phoneNonce, macNonce: macNonce)
-        return (k1, k2)
+    private func transcript(_ me: Key, _ pe: Key, macStatic: Key? = nil, phoneStatic: Key? = nil,
+                            macNonce: Data = Data(repeating: 2, count: 16)) -> RelayTranscript {
+        RelayTranscript(macStatic: (macStatic ?? mac).publicKey.rawRepresentation,
+                        phoneStatic: (phoneStatic ?? phone).publicKey.rawRepresentation,
+                        macEphemeral: me.publicKey.rawRepresentation, phoneEphemeral: pe.publicKey.rawRepresentation,
+                        phoneNonce: Data(repeating: 1, count: 16), macNonce: macNonce)
+    }
+
+    private func raw(_ k: SymmetricKey) -> Data { k.withUnsafeBytes { Data($0) } }
+
+    private func keys() throws -> (SymmetricKey, SymmetricKey) {
+        let me = Key(), pe = Key(), t = transcript(me, pe)
+        return (try RelayCrypto.sessionKey(staticKey: mac, ephemeralKey: me, transcript: t, side: .mac),
+                try RelayCrypto.sessionKey(staticKey: phone, ephemeralKey: pe, transcript: t, side: .phone))
     }
 
     func testBothSidesDeriveTheSameKey() throws {
         let (a, b) = try keys()
-        XCTAssertEqual(a.withUnsafeBytes { Data($0) }, b.withUnsafeBytes { Data($0) })
-        let (c, _) = try keys(macNonce: Data(repeating: 3, count: 16))
-        XCTAssertNotEqual(a.withUnsafeBytes { Data($0) }, c.withUnsafeBytes { Data($0) })
+        XCTAssertEqual(raw(a), raw(b))
+        let (c, _) = try keys()
+        XCTAssertNotEqual(raw(a), raw(c), "fresh ephemerals, fresh key")
+    }
+
+    /// Someone without the phone's static key (e.g. the relay, holding only
+    /// public values) can't land on the Mac's key even with its own ephemeral.
+    func testStaticKeysAuthenticate() throws {
+        let me = Key(), pe = Key(), impostor = Key()
+        let t = transcript(me, pe, phoneStatic: phone)
+        let macKey = try RelayCrypto.sessionKey(staticKey: mac, ephemeralKey: me, transcript: t, side: .mac)
+        let fake = try RelayCrypto.sessionKey(staticKey: impostor, ephemeralKey: pe, transcript: t, side: .phone)
+        XCTAssertNotEqual(raw(macKey), raw(fake))
+    }
+
+    func testHelloParts() {
+        let h = RelayHandshake.hello(publicKey: Data(repeating: 1, count: 32), ephemeralKey: Data(repeating: 2, count: 32),
+                                     nonce: Data(repeating: 3, count: 16))
+        XCTAssertEqual(h.helloParts?.epub, Data(repeating: 2, count: 32))
+        var v1 = h; v1.v = 1
+        XCTAssertNil(v1.helloParts, "v1 has no forward secrecy: refused")
+        var short = h; short.epub = Data(repeating: 2, count: 8).base64EncodedString()
+        XCTAssertNil(short.helloParts)
     }
 
     func testSealOpenBothDirections() throws {
@@ -50,19 +76,21 @@ final class RelayProtocolTests: XCTestCase {
 
     /// Cross-checked against WebCrypto (relay/web/index.html) with these fixed inputs.
     func testKnownAnswerMatchesWebCrypto() throws {
-        let macPriv = try Curve25519.KeyAgreement.PrivateKey(rawRepresentation: Data(repeating: 0x11, count: 32))
-        let phonePriv = try Curve25519.KeyAgreement.PrivateKey(rawRepresentation: Data(repeating: 0x22, count: 32))
-        let m = macPriv.publicKey.rawRepresentation, p = phonePriv.publicKey.rawRepresentation
-        let key = try RelayCrypto.sessionKey(privateKey: macPriv, peerPublicKey: p, macPublicKey: m, phonePublicKey: p,
-                                             phoneNonce: Data(repeating: 0xaa, count: 16), macNonce: Data(repeating: 0xbb, count: 16))
+        func k(_ b: UInt8) throws -> Key { try Key(rawRepresentation: Data(repeating: b, count: 32)) }
+        let ms = try k(0x11), ps = try k(0x22), me = try k(0x33), pe = try k(0x44)
+        let t = RelayTranscript(macStatic: ms.publicKey.rawRepresentation, phoneStatic: ps.publicKey.rawRepresentation,
+                                macEphemeral: me.publicKey.rawRepresentation, phoneEphemeral: pe.publicKey.rawRepresentation,
+                                phoneNonce: Data(repeating: 0xaa, count: 16), macNonce: Data(repeating: 0xbb, count: 16))
+        let key = try RelayCrypto.sessionKey(staticKey: ms, ephemeralKey: me, transcript: t, side: .mac)
         var ch = RelayChannel(key: key, side: .mac)
         let frame = try ch.seal(Data("hello phone".utf8))
         XCTAssertEqual(frame.base64EncodedString(), Self.webCryptoFrame)
     }
-    static let webCryptoFrame = "AAAAAAAAAAGnGFpm0IMIK5guc7gR9N3uvLJN56OxpkOLXyo="  // node relay/test/vector.mjs
+    static let webCryptoFrame = "AAAAAAAAAAFH5jaDM/UfRgDhKYA5wdmVyZCpF531GaP+zIk="  // node relay/test/vector.mjs
 
     func testPayloadAndMessageRoundTrip() throws {
-        let hello = RelayPayload.handshake(.hello(publicKey: Data(repeating: 7, count: 32), nonce: Data(repeating: 8, count: 16)))
+        let hello = RelayPayload.handshake(.hello(publicKey: Data(repeating: 7, count: 32), ephemeralKey: Data(repeating: 6, count: 32),
+                                                  nonce: Data(repeating: 8, count: 16)))
         XCTAssertEqual(try RelayPayload(encoded: hello.encoded), hello)
         let sealed = RelayPayload.sealed(Data([9, 9]))
         XCTAssertEqual(try RelayPayload(encoded: sealed.encoded), sealed)
