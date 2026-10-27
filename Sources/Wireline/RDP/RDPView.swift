@@ -30,6 +30,10 @@ final class RDPView: NSView, @preconcurrency NSTextInputClient, NSMenuItemValida
     var onGeometryChange: (() -> Void)?
     /// About to paste on the remote side: make sure it has the Mac clipboard.
     var onWillPaste: (() -> Void)?
+    /// ⌘W (customizable): close this session, not the window.
+    var onCloseRequested: (() -> Void)?
+    /// This session is the active pane (answers ⌘W when focus is elsewhere).
+    var isActivePane: (() -> Bool)?
     /// Paused while an overlay (host drawer, AI panel) covers the pane.
     var allowPointer = true
 
@@ -485,6 +489,17 @@ final class RDPView: NSView, @preconcurrency NSTextInputClient, NSMenuItemValida
     }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        // ⌘W closes this session (like a terminal pane), never the window —
+        // also while disconnected or while focus sits on the progress card.
+        if event.type == .keyDown, KeyBindingStore.shared.shortcut(for: .closeShell).matches(event) {
+            let focused = window?.firstResponder
+            let mine = focused === self
+                || (!(focused is any TerminalEngine) && !(focused is RDPView) && (isActivePane?() ?? true))
+            if mine, let onCloseRequested {
+                onCloseRequested()
+                return true
+            }
+        }
         guard event.type == .keyDown, window?.firstResponder === self, connection != nil else {
             return super.performKeyEquivalent(with: event)
         }

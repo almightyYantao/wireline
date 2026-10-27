@@ -446,33 +446,94 @@ struct SessionTabBar: View {
     /// The active tab's raised pill is one shape that slides between tabs.
     @Namespace private var pill
     @State private var zoomGuardID = UUID()
+    @State private var tabsWidth: CGFloat = 0
+    @State private var visibleWidth: CGFloat = 0
+    @State private var scrollX: CGFloat = 0
+    private let stripSpace = "wireline.tabStrip"
+
+    /// Fades whichever edge has tabs scrolled past it.
+    private var edgeFade: some View {
+        let overflow = tabsWidth > visibleWidth + 1
+        let fadeL = overflow && scrollX > 1
+        let fadeR = overflow && scrollX < tabsWidth - visibleWidth - 1
+        return HStack(spacing: 0) {
+            LinearGradient(colors: [.black.opacity(fadeL ? 0 : 1), .black], startPoint: .leading, endPoint: .trailing)
+                .frame(width: 28)
+            Color.black
+            LinearGradient(colors: [.black, .black.opacity(fadeR ? 0 : 1)], startPoint: .leading, endPoint: .trailing)
+                .frame(width: 28)
+        }
+    }
 
     var body: some View {
         HStack(spacing: 10) {
             if let s = sessions.activeSession { ActiveSessionBadge(session: s) }
-        ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
-                // One long capsule track holding every tab (segmented-control
-                // style); the active tab is a raised pill inside it.
-                HStack(spacing: 0) {
-                    let tabs = sessions.tabs
-                    ForEach(Array(tabs.enumerated()), id: \.element.id) { index, tab in
-                        let active = sessions.activeTabID == tab.id
-                        let prevActive = index > 0 && sessions.activeTabID == tabs[index - 1].id
-                        SessionTab(index: index + 1, tab: tab, isActive: active,
-                                   pill: pill, showSeparator: index > 0 && !active && !prevActive)
+                // One capsule track holding every tab (segmented-control style);
+                // the active tab is a raised pill inside it. Too many tabs: the
+                // capsule stays put at the room it has and the tabs scroll
+                // inside it, fading at the clipped edge(s).
+                ScrollViewReader { proxy in
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 0) {
+                            let tabs = sessions.tabs
+                            ForEach(Array(tabs.enumerated()), id: \.element.id) { index, tab in
+                                let active = sessions.activeTabID == tab.id
+                                let prevActive = index > 0 && sessions.activeTabID == tabs[index - 1].id
+                                SessionTab(index: index + 1, tab: tab, isActive: active,
+                                           pill: pill, showSeparator: index > 0 && !active && !prevActive)
+                                    .id(tab.id)
+                            }
+                        }
+                        .padding(2)
+                        .background(TabStripScrollLock())
+                        .background(GeometryReader { g in
+                            Color.clear
+                                .onAppear { tabsWidth = g.size.width }
+                                .onChange(of: g.size.width) { _, w in tabsWidth = w }
+                        })
+                        .background(GeometryReader { g in
+                            Color.clear
+                                .onAppear { scrollX = -g.frame(in: .named(stripSpace)).minX }
+                                .onChange(of: g.frame(in: .named(stripSpace)).minX) { _, x in scrollX = -x }
+                        })
+                        .animation(Motion.resolved(Motion.slide), value: sessions.activeTabID)
+                    }
+                    .coordinateSpace(name: stripSpace)
+                    .frame(maxWidth: tabsWidth > 0 ? tabsWidth : nil)
+                    .background(GeometryReader { g in
+                        Color.clear
+                            .onAppear { visibleWidth = g.size.width }
+                            .onChange(of: g.size.width) { _, w in visibleWidth = w }
+                    })
+                    .mask(edgeFade)
+                    .onChange(of: sessions.activeTabID) { _, id in
+                        guard let id else { return }
+                        withAnimation(Motion.resolved(Motion.slide)) { proxy.scrollTo(id) }
+                    }
+                    // At launch (and when the strip narrows) the current tab is
+                    // shown too, not just whatever fits from the left. After
+                    // layout: the tabs' widths aren't known before.
+                    .onAppear {
+                        DispatchQueue.main.async {
+                            if let id = sessions.activeTabID { proxy.scrollTo(id) }
+                        }
+                    }
+                    .onChange(of: visibleWidth) { _, _ in
+                        if let id = sessions.activeTabID { proxy.scrollTo(id) }
                     }
                 }
-                .wlCapsuleTrack(padding: 2, opaque: true)
+                .clipShape(Capsule(style: .continuous))
+                .wlCapsuleTrack(padding: 0, opaque: true)
                 // Double-clicking a tab renames it; keep the window's
-                // double-click-to-zoom off this area.
+                // double-click-to-zoom off this area (the visible capsule only).
                 .background(GeometryReader { g in
                     Color.clear
                         .onAppear { TitleBarZoomGuard.shared.rects[zoomGuardID] = g.frame(in: .global) }
                         .onChange(of: g.frame(in: .global)) { _, f in TitleBarZoomGuard.shared.rects[zoomGuardID] = f }
                         .onDisappear { TitleBarZoomGuard.shared.rects[zoomGuardID] = nil }
                 })
-                .animation(Motion.resolved(Motion.slide), value: sessions.activeTabID)
+                .layoutPriority(1)
                 Button {
                     openLocalShell(sessions: sessions, openWindow: openWindow)
                 } label: {
@@ -481,16 +542,59 @@ struct SessionTabBar: View {
                 .buttonStyle(.wlIcon)
                 .blocksWindowDrag()
                 .padding(.horizontal, 6)
+                .fixedSize()
                 .help(loc("新建本地终端", "New local terminal"))
-                Spacer()
+                Spacer(minLength: 0)
             }
-        }
         }
         .frame(maxHeight: .infinity)
         // Transparent so the wallpaper / panel translucency reaches the very top,
         // matching the rest of the panel instead of an opaque tab strip. Only
         // the tabs and buttons block window dragging; empty space moves it.
         .background(.clear)
+    }
+}
+
+/// The tab strip scrolls sideways only. Its NSScrollView still lets a swipe
+/// move the content a few points vertically (seen: clip origin y 0 ↔ 3, with
+/// zero insets and content no taller than the strip), nudging the whole row.
+/// Pin the vertical offset at 0.
+/// Placed inside the scroll content, so `enclosingScrollView` is the strip's.
+private struct TabStripScrollLock: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView { Probe() }
+    func updateNSView(_ nsView: NSView, context: Context) {}
+
+    private final class Probe: NSView {
+        private weak var locked: NSScrollView?
+        nonisolated(unsafe) private var observer: NSObjectProtocol?
+
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            DispatchQueue.main.async { [weak self] in self?.lock() }
+        }
+
+        private func lock() {
+            guard let scroll = enclosingScrollView, scroll !== locked else { return }
+            locked = scroll
+            scroll.automaticallyAdjustsContentInsets = false
+            scroll.contentInsets = NSEdgeInsetsZero
+            scroll.verticalScrollElasticity = .none
+            let clip = scroll.contentView
+            clip.postsBoundsChangedNotifications = true
+            if let observer { NotificationCenter.default.removeObserver(observer) }
+            observer = NotificationCenter.default.addObserver(forName: NSView.boundsDidChangeNotification,
+                                                              object: clip, queue: .main) { [weak clip] _ in
+                MainActor.assumeIsolated {
+                    guard let clip, clip.bounds.origin.y != 0 else { return }
+                    clip.setBoundsOrigin(NSPoint(x: clip.bounds.origin.x, y: 0))
+                }
+            }
+            clip.setBoundsOrigin(NSPoint(x: clip.bounds.origin.x, y: 0))
+        }
+
+        deinit { if let observer { NotificationCenter.default.removeObserver(observer) } }
     }
 }
 
@@ -560,6 +664,7 @@ struct SessionTab: View {
     var showSeparator = false
     @State private var hover = false
     @State private var closeHover = false
+    @State private var dropTargeted = false
     @State private var isEditing = false
     @State private var draft = ""
     @FocusState private var focused: Bool
@@ -681,7 +786,15 @@ struct SessionTab: View {
         .blocksWindowDrag()
         // Drag this tab onto another tab's pane to merge them into a split.
         .onDrag { NSItemProvider(object: tab.id.uuidString as NSString) }
-        .wlHover($hover) { TitleBarZoomGuard.shared.pointerInNoZoomZone = $0 }
+        // …or onto another tab right here in the bar: it joins that tab, split right.
+        .dropDestination(for: String.self) { items, _ in
+            guard let dragged = items.first.flatMap(UUID.init(uuidString:)), dragged != tab.id,
+                  let leaf = tab.anyLeafID else { return false }
+            wlAnimateTerminalLayout { sessions.mergeTab(dragged, ontoLeaf: leaf, edge: .trailing) }
+            return true
+        } isTargeted: { dropTargeted = $0 }
+        .overlay(Capsule().fill(WL.teal.opacity(dropTargeted ? 0.18 : 0)).allowsHitTesting(false))
+        .wlHover($hover) { TitleBarZoomGuard.shared.setTabHover(tab.id, $0) }
         .help("⌘\(index) · " + tooltip)
         .contextMenu {
             Button(loc("重命名…", "Rename…")) { beginEdit() }

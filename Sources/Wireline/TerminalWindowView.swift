@@ -410,20 +410,30 @@ extension View {
 @MainActor
 final class TerminalOcclusion {
     static let shared = TerminalOcclusion()
-    private var active: Set<UUID> = []
+    /// Each overlay's frame, in SwiftUI global (window, top-left) coordinates.
+    private var rects: [UUID: CGRect] = [:]
 
     func set(_ id: UUID, _ r: CGRect?) {
-        let was = !active.isEmpty
-        if r != nil { active.insert(id) } else { active.remove(id) }
-        if was != !active.isEmpty { apply(paused: !active.isEmpty) }
+        guard rects[id] != r else { return }
+        rects[id] = r
+        apply()
     }
 
-    private func apply(paused: Bool) {
+    /// Pause only the terminals an overlay actually covers — a card left up in
+    /// some other pane or tab mustn't take the mouse from every terminal.
+    private func apply() {
         for w in NSApp.windows {
             guard let root = w.contentView else { continue }
             var stack: [NSView] = [root]
             while let v = stack.popLast() {
-                if let t = v as? any TerminalEngine { t.allowMouseReporting = !paused }
+                if let t = v as? any TerminalEngine {
+                    let f = v.convert(v.bounds, to: root)
+                    let frame = root.isFlipped ? f : CGRect(x: f.minX, y: root.bounds.height - f.maxY,
+                                                            width: f.width, height: f.height)
+                    let covered = v.window != nil && !v.isHiddenOrHasHiddenAncestor
+                        && rects.values.contains { $0.intersects(frame) }
+                    if t.allowMouseReporting == covered { t.allowMouseReporting = !covered }
+                }
                 stack.append(contentsOf: v.subviews)
             }
         }
