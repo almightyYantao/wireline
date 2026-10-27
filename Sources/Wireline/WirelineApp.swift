@@ -22,6 +22,9 @@ struct WirelineApp: App {
         // Listen for MCP clients as early as possible: `wireline-mcp` may have
         // launched us and is waiting. Tools answer once the stores are attached.
         MCPServerHost.shared.start()
+        AgentHookServer.shared.start()
+        // Before launch finishes, so a click that launched us is routed too.
+        NotificationRouter.shared.install()
     }
 
     var body: some Scene {

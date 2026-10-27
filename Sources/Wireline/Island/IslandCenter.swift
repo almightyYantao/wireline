@@ -72,6 +72,8 @@ final class IslandCenter {
             for s in sessions?.sessions ?? [] {
                 let state = agents[s.id]?.tracker.state
                 if s.agentState != state { s.agentState = state }
+                let kind = agents[s.id]?.agent
+                if s.agentKind != kind { s.agentKind = kind }
             }
         }
     }
@@ -298,6 +300,17 @@ final class IslandCenter {
         }
     }
 
+    /// An exact state from the agent's own hooks (`AgentHookServer`). Hooks
+    /// only come from Claude Code, so a pane we hadn't recognised yet is one.
+    func agentHook(_ sid: UUID, _ event: AgentHooks.Event) {
+        guard sessions?.session(sid) != nil else { return }
+        var w = agents[sid] ?? AgentWatch(agent: .claude, tracker: CodingAgentTracker(now: Date()), remote: false)
+        let change = w.tracker.hook(event, at: Date())
+        agents[sid] = w
+        publishAgent(sid, change: change)
+        reschedule()
+    }
+
     func sessionOutput(_ s: TerminalSession) {
         guard var w = agents[s.id] else { return }
         let change = w.tracker.output(at: Date())
@@ -393,12 +406,28 @@ final class IslandCenter {
                           sessionID: sid, persistent: true, at: Date()))
         let viewing = isViewing(sid)
         if viewing { board.dismiss(id) }
+        notify(w.agent, s, change: change, viewing: viewing)
         // Only a real turn: a pause mid-task also reads as "finished".
         if case .finished(let ran)? = change, !viewing, ran >= 10 {
             now = Date()
             board.finish(id, success: true, detail: detail,
                          pulse: "✓ " + w.agent.displayName + " · " + islandDuration(ran), at: now)
             reschedule()
+        }
+    }
+
+    /// A system notification when an agent wants you, or finishes a real turn
+    /// while Wireline is in the background. Clicking it opens the pane.
+    private func notify(_ agent: CodingAgent, _ s: TerminalSession, change: CodingAgentTracker.Change?, viewing: Bool) {
+        guard !viewing else { return }
+        let title = "\(agent.displayName) · \(Self.place(of: s))"
+        switch change {
+        case .needsYou(let m)?:
+            Notifier.post(title: title, body: m ?? loc.t("等你回复", "Waiting for you"), session: s.id)
+        case .finished(let ran)? where ran >= 10 && !NSApp.isActive:
+            Notifier.post(title: title, body: loc.t("完成 · ", "Done · ") + islandDuration(ran), session: s.id)
+        default:
+            break
         }
     }
 

@@ -69,6 +69,8 @@ final class TerminalSession: Identifiable {
     /// agent sitting at its prompt isn't "running" even though its process is
     /// in the foreground.
     var agentState: CodingAgentTracker.State?
+    /// Which agent that is.
+    var agentKind: CodingAgent?
 
     /// Coarse connection lifecycle for the animated status indicator: dialing
     /// (`connecting`) → server responding (`connected`) → process gone
@@ -453,7 +455,7 @@ final class TerminalSession: Identifiable {
             do {
                 terminalView.send(txt: ImagePaste.typed(try ImagePaste.saveLocal(png)))
             } catch {
-                Notifier.post(title: t("图片粘贴失败", "Image paste failed"), body: error.localizedDescription)
+                Notifier.post(title: t("图片粘贴失败", "Image paste failed"), body: error.localizedDescription, session: id)
             }
             return true
         case .ssh:
@@ -464,7 +466,7 @@ final class TerminalSession: Identifiable {
                     try await FileBrowserModel.put(png, at: remote, host: host, store: store)
                     self?.terminalView.send(txt: ImagePaste.typed(remote))
                 } catch {
-                    Notifier.post(title: t("图片上传失败", "Image upload failed"), body: error.localizedDescription)
+                    Notifier.post(title: t("图片上传失败", "Image upload failed"), body: error.localizedDescription, session: self?.id)
                 }
             }
             return true
@@ -546,7 +548,7 @@ final class TerminalSession: Identifiable {
         let loc = Localizer.shared
         var body = loc.t("耗时 \(Int(elapsed)) 秒", "took \(Int(elapsed))s")
         if let exitCode, exitCode != 0 { body += loc.t(" · 退出码 \(exitCode)", " · exit \(exitCode)") }
-        Notifier.post(title: loc.t("命令完成 · \(title)", "Command finished · \(title)"), body: body)
+        Notifier.post(title: loc.t("命令完成 · \(title)", "Command finished · \(title)"), body: body, session: id)
     }
 
     /// Apply a busy-state change: update the badge and, when a run finishes in a
@@ -561,7 +563,7 @@ final class TerminalSession: Identifiable {
         let loc = Localizer.shared
         Notifier.post(title: loc.t("运行完成 · \(title)", "Finished · \(title)"),
                       body: loc.t("该标签的任务已结束（耗时 \(Int(elapsed)) 秒）",
-                                  "This tab's task is done (\(Int(elapsed))s)"))
+                                  "This tab's task is done (\(Int(elapsed))s)"), session: id)
     }
 
     // MARK: - Foreground-process polling (local shells)
@@ -722,6 +724,8 @@ final class TerminalSession: Identifiable {
                 env.append("ZDOTDIR=\(shim.path)")
                 env.append("WIRELINE_USER_ZDOTDIR=\(userZDOTDIR)")
             }
+            // Lets Claude Code hooks in this shell report to this pane.
+            env += AgentHookServer.shared.environment(for: id)
             // Launch as a login shell (leading '-') so ~/.zprofile & ~/.zshrc load,
             // which is what gives the user their familiar prompt, theme, and colors.
             io.start(

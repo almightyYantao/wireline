@@ -1,16 +1,20 @@
-import Foundation
+import AppKit
 import UserNotifications
 
-/// Posts local notifications when a monitored host changes reachability.
+/// Posts local notifications. One about a pane carries its session id, so
+/// clicking it brings that pane forward.
 enum Notifier {
+    static let sessionKey = "sessionID"
+
     static func requestAuthorization() {
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
     }
 
-    static func post(title: String, body: String) {
+    static func post(title: String, body: String, session: UUID? = nil) {
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body
+        if let session { content.userInfo = [sessionKey: session.uuidString] }
         let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
         UNUserNotificationCenter.current().add(request)
     }
@@ -34,5 +38,36 @@ enum Notifier {
 
     static func cancel(id: String) {
         UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [id])
+    }
+}
+
+/// Clicks on Wireline's notifications: jump to the pane that sent one (if
+/// it's still open), else just bring the main window forward.
+final class NotificationRouter: NSObject, UNUserNotificationCenterDelegate, Sendable {
+    static let shared = NotificationRouter()
+
+    func install() { UNUserNotificationCenter.current().delegate = self }
+
+    func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
+                                withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        completionHandler([.banner, .list, .sound])
+    }
+
+    func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
+                                withCompletionHandler completionHandler: @escaping () -> Void) {
+        let id = (response.notification.request.content.userInfo[Notifier.sessionKey] as? String)
+            .flatMap(UUID.init(uuidString:))
+        completionHandler()
+        DispatchQueue.main.async { MainActor.assumeIsolated { Self.open(id) } }
+    }
+
+    @MainActor
+    private static func open(_ id: UUID?) {
+        NSApp.activate(ignoringOtherApps: true)
+        NSApp.windows.first { $0.canBecomeMain && $0.level == .normal && $0.title == "Wireline" }?
+            .makeKeyAndOrderFront(nil)
+        guard let id, let sessions = IslandCenter.shared.sessions, sessions.session(id) != nil else { return }
+        sessions.focusSession(id)
+        DispatchQueue.main.async { sessions.focusActiveTerminal() }
     }
 }

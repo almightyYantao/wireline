@@ -210,6 +210,8 @@ struct SettingsView: View {
                             .wlConfigLocked("notify-on-command-finish-after")
                     }
                     WLFormDivider()
+                    ClaudeHooksRow()
+                    WLFormDivider()
                     WLFormRow(loc("否则打开于", "Otherwise open in")) {
                         WLMenuPicker(selection: $store.terminalApp,
                                      options: TerminalApp.allCases.map { WLOption($0, $0.displayName) })

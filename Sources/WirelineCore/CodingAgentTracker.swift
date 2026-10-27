@@ -32,6 +32,22 @@ public enum CodingAgent: String, CaseIterable, Sendable {
         case .qwen: "Qwen Code"
         }
     }
+
+    /// Two letters for a tab badge.
+    public var abbreviation: String {
+        switch self {
+        case .claude: "CC"
+        case .codex: "CX"
+        case .gemini: "GM"
+        case .aider: "AI"
+        case .opencode: "OC"
+        case .cursor: "CU"
+        case .amp: "AM"
+        case .goose: "GS"
+        case .crush: "CR"
+        case .qwen: "QW"
+        }
+    }
 }
 
 /// Guesses what a coding agent in a terminal pane is doing from the outside —
@@ -82,8 +98,19 @@ public struct CodingAgentTracker: Sendable, Equatable {
     private var lastOutput: Date?
     private var lastInput: Date?
     private var burstStart: Date?
+    /// The agent reports its own state through hooks: stop guessing.
+    public private(set) var hookDriven = false
 
     public init(now: Date) { stateSince = now }
+
+    /// An exact state report from the agent's hooks. From then on it wins
+    /// over every heuristic.
+    @discardableResult
+    public mutating func hook(_ event: AgentHooks.Event, at t: Date) -> Change? {
+        hookDriven = true
+        if case .notification(let m) = event, case .needsYou(let old) = state, old == m { return nil }
+        return set(event.state, at: t)
+    }
 
     /// A chunk of output from the agent.
     @discardableResult
@@ -94,7 +121,7 @@ public struct CodingAgentTracker: Sendable, Equatable {
             burstStart = t
         }
         lastOutput = t
-        guard state != .working, let burstStart else { return nil }
+        guard !hookDriven, state != .working, let burstStart else { return nil }
         if case .needsYou = state { return nil }      // only typing clears a request
         let typing = lastInput.map { t.timeIntervalSince($0) < Self.echoWindow } ?? false
         guard !typing, t.timeIntervalSince(burstStart) >= Self.burstToWork else { return nil }
@@ -104,6 +131,12 @@ public struct CodingAgentTracker: Sendable, Equatable {
     /// The user typed into the pane.
     public mutating func input(at t: Date) {
         lastInput = t
+        if hookDriven {
+            // Answering a permission prompt resumes the turn; a finished turn
+            // stays done until the next prompt is submitted.
+            if case .needsYou = state { _ = set(.working, at: t) }
+            return
+        }
         if case .needsYou = state { _ = set(.idle, at: t) }
         if state == .done { _ = set(.idle, at: t) }
     }
@@ -111,6 +144,7 @@ public struct CodingAgentTracker: Sendable, Equatable {
     /// A bell or a desktop notification.
     @discardableResult
     public mutating func attention(_ message: String?, at t: Date) -> Change? {
+        guard !hookDriven else { return nil }     // the Notification hook says it exactly
         if case .needsYou(let m) = state, m == message { return nil }
         return set(.needsYou(message), at: t)
     }
@@ -118,6 +152,7 @@ public struct CodingAgentTracker: Sendable, Equatable {
     /// A window title the agent set (OSC 0 / 2).
     @discardableResult
     public mutating func title(_ title: String, at t: Date) -> Change? {
+        guard !hookDriven else { return nil }
         switch Self.titleHint(title) {
         case .working?:
             if case .needsYou = state { return nil }
@@ -132,7 +167,7 @@ public struct CodingAgentTracker: Sendable, Equatable {
     /// Time passing: ends a working turn whose output went quiet.
     @discardableResult
     public mutating func tick(at t: Date) -> Change? {
-        guard state == .working, let last = lastOutput ?? workStartedAt,
+        guard !hookDriven, state == .working, let last = lastOutput ?? workStartedAt,
               t.timeIntervalSince(last) >= Self.quietAfter else { return nil }
         // The turn ran until its last output, not until we noticed the quiet.
         return set(.done, at: t, workEnded: last)
@@ -140,7 +175,7 @@ public struct CodingAgentTracker: Sendable, Equatable {
 
     /// When `tick` could next change something, for scheduling.
     public var nextTick: Date? {
-        guard state == .working, let last = lastOutput ?? workStartedAt else { return nil }
+        guard !hookDriven, state == .working, let last = lastOutput ?? workStartedAt else { return nil }
         return last.addingTimeInterval(Self.quietAfter)
     }
 
