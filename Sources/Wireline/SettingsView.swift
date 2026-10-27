@@ -230,6 +230,8 @@ struct SettingsView: View {
                             .wlConfigLocked("notify-on-command-finish-after")
                     }
                     WLFormDivider()
+                    NotificationCardRows()
+                    WLFormDivider()
                     ClaudeHooksRow()
                     WLFormDivider()
                     WLFormRow(loc("否则打开于", "Otherwise open in")) {
@@ -723,5 +725,32 @@ struct SettingsView: View {
             + FontCatalog.shared.monoFamilies().map {
                 WLOption(String?.some($0.name), $0.hasIcons ? $0.name + loc("  · 含图标", "  · icons") : $0.name)
             }
+    }
+}
+
+/// Notification card linger time and background behaviour.
+private struct NotificationCardRows: View {
+    @Bindable private var cards = CardSettings.shared
+    private func loc(_ zh: String, _ en: String) -> String { Localizer.shared.t(zh, en) }
+
+    var body: some View {
+        WLFormRow(loc("通知停留时长", "Notification duration"),
+                  detail: loc("Wireline 在前台时，通知以卡片显示在刘海岛下方（岛关闭时在主窗口右上角）；鼠标悬停时暂停计时",
+                              "While Wireline is in front, notifications show as cards under the notch island (top-right of the main window when the island is off); hovering pauses the timer")) {
+            WLMenuPicker(selection: $cards.linger, options: [
+                WLOption(CardLinger.standard, loc("默认（约 5 秒）", "Default (~5s)")),
+                WLOption(CardLinger.s5, loc("5 秒", "5s")),
+                WLOption(CardLinger.s10, loc("10 秒", "10s")),
+                WLOption(CardLinger.s30, loc("30 秒", "30s")),
+                WLOption(CardLinger.s90, loc("90 秒", "90s")),
+                WLOption(CardLinger.untilClosed, loc("直到关闭", "Until closed")),
+            ], minWidth: 150)
+        }
+        WLFormDivider()
+        Toggle(isOn: $cards.cardsInBackground) {
+            Text(loc("后台时也显示通知卡片", "Show cards while in the background too"))
+                .font(WL.body).foregroundStyle(WL.textPrimary)
+        }
+        .toggleStyle(.wlSwitch).frame(minHeight: 38)
     }
 }

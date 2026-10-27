@@ -10,7 +10,15 @@ enum Notifier {
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
     }
 
+    /// Wireline in front: its own card. In the background: a system notification
+    /// (plus a card if the user asked for that).
     static func post(title: String, body: String, session: UUID? = nil) {
+        DispatchQueue.main.async {
+            MainActor.assumeIsolated { CardCenter.shared.route(title: title, body: body, session: session) }
+        }
+    }
+
+    static func postSystem(title: String, body: String, session: UUID?) {
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body
@@ -50,7 +58,15 @@ final class NotificationRouter: NSObject, UNUserNotificationCenterDelegate, Send
 
     func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
                                 withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
-        completionHandler([.banner, .list, .sound])
+        // Our own posts only reach here when sent in the background; scheduled
+        // ones (to-dos) can fire in front, so they get a card instead of a banner.
+        let c = notification.request.content
+        let id = (c.userInfo[Notifier.sessionKey] as? String).flatMap(UUID.init(uuidString:))
+        let (title, body) = (c.title, c.body)
+        DispatchQueue.main.async {
+            MainActor.assumeIsolated { CardCenter.shared.show(title: title, body: body, session: id) }
+        }
+        completionHandler([.list, .sound])
     }
 
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
@@ -62,7 +78,7 @@ final class NotificationRouter: NSObject, UNUserNotificationCenterDelegate, Send
     }
 
     @MainActor
-    private static func open(_ id: UUID?) {
+    static func open(_ id: UUID?) {
         NSApp.activate(ignoringOtherApps: true)
         NSApp.windows.first { $0.canBecomeMain && $0.level == .normal && $0.title == "Wireline" }?
             .makeKeyAndOrderFront(nil)
