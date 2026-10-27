@@ -18,6 +18,7 @@ struct HostEditorView: View {
     @State private var proxyJump = ""
     @State private var group = ""
     @State private var descriptionText = ""
+    @State private var newTag = ""
     @State private var autoSudo = false
     @State private var launchArgs = ""
     @State private var availableKeys: [String] = []
@@ -57,6 +58,8 @@ struct HostEditorView: View {
                 row(loc("分组", "Group")) { input(loc("如 Hong Kong", "e.g. Hong Kong"), $group) }
                 WLFormDivider()
                 row(loc("描述", "Description")) { input("", $descriptionText) }
+                WLFormDivider()
+                row(loc("标签", "Tags")) { tagEditor }
             }
             if isRDP {
                 rdpSections
@@ -229,6 +232,36 @@ struct HostEditorView: View {
         }
     }
 
+    /// Chips for the `#tags` in the description; edits go back into it.
+    private var tagEditor: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 4) {
+                ForEach(HostTags.parse(descriptionText), id: \.self) { tag in
+                    HStack(spacing: 3) {
+                        Text("#" + tag).font(WL.small).foregroundStyle(WL.textPrimary)
+                        Button { descriptionText = HostTags.removing(tag, from: descriptionText) } label: {
+                            Image(systemName: "xmark").font(.system(size: 8, weight: .bold)).foregroundStyle(WL.textDim)
+                        }
+                        .buttonStyle(.plain)
+                        .help(loc("移除标签", "Remove tag"))
+                    }
+                    .padding(.horizontal, 7).padding(.vertical, 3)
+                    .background(WL.fieldFill, in: Capsule(style: .continuous))
+                }
+                TextField("", text: $newTag, prompt: Text(loc("添加标签 ↩", "Add tag ↩")).foregroundStyle(WL.textDim))
+                    .textFieldStyle(.plain).font(WL.small).frame(minWidth: 70)
+                    .onSubmit(commitTag)
+                    .onChange(of: newTag) { if newTag.contains(where: { $0 == " " || $0 == "," }) { commitTag() } }
+            }
+            .padding(.vertical, 2)
+        }
+    }
+
+    private func commitTag() {
+        descriptionText = HostTags.adding(newTag, to: descriptionText)
+        newTag = ""
+    }
+
     private func input(_ prompt: String, _ text: Binding<String>) -> some View {
         TextField("", text: text, prompt: Text(prompt).foregroundStyle(WL.textDim))
             .wlField(font: WL.body)
@@ -270,6 +303,7 @@ struct HostEditorView: View {
     }
 
     private func save() {
+        if !newTag.isEmpty { commitTag() }
         var host = context.host ?? Host(alias: "")
         host.alias = alias.trimmingCharacters(in: .whitespaces)
         host.hostname = hostname.isEmpty ? nil : hostname

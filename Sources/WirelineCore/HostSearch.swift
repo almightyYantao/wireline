@@ -2,14 +2,40 @@ import Foundation
 
 extension Host {
     /// Tags are `#words` inside the description, e.g. "primary db #prod #mysql".
-    public var tags: [String] {
-        guard let text = descriptionText, text.contains("#") else { return [] }
+    public var tags: [String] { HostTags.parse(descriptionText ?? "") }
+}
+
+/// Editing the `#tags` kept in a host's description text.
+public enum HostTags {
+    public static func parse(_ text: String) -> [String] {
+        guard text.contains("#") else { return [] }
         var out: [String] = []
         for word in text.split(whereSeparator: { $0.isWhitespace || $0 == "," }) where word.hasPrefix("#") {
             let tag = word.dropFirst().trimmingCharacters(in: .punctuationCharacters.subtracting(["-", "_", "."]))
             if !tag.isEmpty, !out.contains(tag) { out.append(tag) }
         }
         return out
+    }
+
+    /// A typed tag as stored: no leading `#`, spaces or commas. Nil if empty.
+    public static func normalize(_ raw: String) -> String? {
+        let word = raw.trimmingCharacters(in: .whitespaces).drop { $0 == "#" }
+            .split(whereSeparator: { $0.isWhitespace || $0 == "," }).first.map(String.init) ?? ""
+        return parse("#" + word).first
+    }
+
+    /// `text` with `#tag` appended, unless it's already there.
+    public static func adding(_ raw: String, to text: String) -> String {
+        guard let tag = normalize(raw), !parse(text).contains(tag) else { return text }
+        let base = text.trimmingCharacters(in: .whitespaces)
+        return base.isEmpty ? "#" + tag : base + " #" + tag
+    }
+
+    /// `text` without the words carrying `#tag`; the other words stay in order.
+    public static func removing(_ tag: String, from text: String) -> String {
+        text.split(separator: " ", omittingEmptySubsequences: true)
+            .filter { !($0.hasPrefix("#") && parse(String($0)) == [tag]) }
+            .joined(separator: " ")
     }
 }
 

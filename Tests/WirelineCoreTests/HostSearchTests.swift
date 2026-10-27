@@ -16,6 +16,18 @@ final class HostSearchTests: XCTestCase {
         XCTAssertEqual(Host(alias: "x", descriptionText: "no tags").tags, [])
     }
 
+    func testTagEditingRewritesDescription() {
+        XCTAssertEqual(HostTags.adding("prod", to: ""), "#prod")
+        XCTAssertEqual(HostTags.adding(" #db ", to: "mysql primary"), "mysql primary #db")
+        XCTAssertEqual(HostTags.adding("db", to: "mysql #db"), "mysql #db")
+        XCTAssertEqual(HostTags.adding("#", to: "x"), "x")
+        XCTAssertEqual(HostTags.normalize("##a b"), "a")
+        XCTAssertEqual(HostTags.removing("web", from: "nginx #web #edge, front"), "nginx #edge, front")
+        XCTAssertEqual(HostTags.removing("edge", from: "nginx #edge, front"), "nginx front")
+        XCTAssertEqual(HostTags.removing("we", from: "#web"), "#web")
+        XCTAssertEqual(HostTags.parse(HostTags.adding("k8s", to: "nginx #web")), ["web", "k8s"])
+    }
+
     func testRankingAliasPrefixThenContainsThenAddress() {
         XCTAssertEqual(aliases("web"), ["web-prod", "myweb", "staging"])
     }
