@@ -46,22 +46,31 @@ public enum AgentHooks {
     public struct Message: Equatable, Sendable {
         public var sessionID: UUID
         public var event: Event
+        public var agent: CodingAgent
+        /// The agent's own session id (Codex thread id, …), when it sends one.
+        public var agentSessionID: String?
+
+        public init(sessionID: UUID, event: Event, agent: CodingAgent = .claude, agentSessionID: String? = nil) {
+            self.sessionID = sessionID
+            self.event = event
+            self.agent = agent
+            self.agentSessionID = agentSessionID
+        }
     }
 
-    /// `<uuid> <event>` optionally followed by the hook's JSON payload (whose
+    /// `<uuid> <event>` (`<agent>:<event>` for agents other than Claude Code)
+    /// optionally followed by the hook's JSON payload (whose
     /// `message` becomes a notification's text).
     public static func parse(_ line: String) -> Message? {
         let parts = line.trimmingCharacters(in: .whitespacesAndNewlines)
             .split(separator: " ", maxSplits: 2, omittingEmptySubsequences: true)
         guard parts.count >= 2, let id = UUID(uuidString: String(parts[0])) else { return nil }
-        var message: String?
-        if parts.count == 3, let data = parts[2].data(using: .utf8),
-           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           let m = obj["message"] as? String, !m.isEmpty {
-            message = m
+        var json: [String: Any]?
+        if parts.count == 3, let data = parts[2].data(using: .utf8) {
+            json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
         }
-        guard let event = Event(name: String(parts[1]), message: message) else { return nil }
-        return Message(sessionID: id, event: event)
+        guard let (agent, event) = decode(event: String(parts[1]), json: json) else { return nil }
+        return Message(sessionID: id, event: event, agent: agent, agentSessionID: agentSessionID(json))
     }
 
     // MARK: - ~/.claude/settings.json
