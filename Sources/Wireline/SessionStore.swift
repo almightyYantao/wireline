@@ -65,6 +65,9 @@ final class TerminalSession: Identifiable {
     var isBusy = false
     /// The last OSC 133;D exit code, for the island's ✓ / ✕ when busy ends.
     private var lastExitCode: Int?
+    private var busyGeneration = 0
+    /// How long a run lasts before the island shows it.
+    static let islandBusyDelay: TimeInterval = 3
     /// Name of the program in the foreground of a local shell (`vim`, `node`,
     /// `claude`), nil at the prompt. Picks the pane / tab icon.
     var foregroundName: String?
@@ -598,9 +601,17 @@ final class TerminalSession: Identifiable {
     private func applyBusy(_ busy: Bool, elapsed: TimeInterval) {
         guard busy != isBusy else { return }
         isBusy = busy
+        busyGeneration += 1
         if busy {
             lastExitCode = nil
-            IslandCenter.shared.busyChanged(self, busy: true, elapsed: 0, exitCode: nil)
+            // Only runs that last show on the island; short ones would just flicker.
+            let generation = busyGeneration
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.islandBusyDelay) { [weak self] in
+                MainActor.assumeIsolated {
+                    guard let self, self.isBusy, self.busyGeneration == generation else { return }
+                    IslandCenter.shared.busyChanged(self, busy: true, elapsed: 0, exitCode: nil)
+                }
+            }
         } else {
             // Polling can see a local job end just before the shell's 133;D
             // brings its exit code: give that a moment.
