@@ -390,13 +390,13 @@ final class IslandCenter {
         }
     }
 
-    /// The session's `isBusy` — what the tab's running badge shows — changed.
-    /// A running row while it's busy, a ✓ / ✕ pulse when a long one ends, so
-    /// the island and the tab never disagree. Agent panes have their own row.
+    /// The session's `isBusy` changed. A running row exactly while
+    /// `showsRunning` says so — the rule the tab badge reads too — and a ✓ / ✕
+    /// pulse when a long one ends. Agent panes have their own row.
     func busyChanged(_ s: TerminalSession, busy: Bool, elapsed: TimeInterval, exitCode: Int?) {
         let id = "cmd:\(s.id)"
-        guard agents[s.id] == nil else { remove(id); return }
-        if busy {
+        guard s.agentState == nil else { remove(id); return }
+        if busy, s.showsRunning {
             upsert(IslandItem(id: id, source: .command, title: s.title, detail: loc.t("运行中…", "Running…"),
                               tone: .working, sessionID: s.id, at: Date()))
             return

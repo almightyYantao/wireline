@@ -168,7 +168,7 @@ final class AgentPTY: PTYBackend {
             switch job {
             case .none: foreground = .none
             case .child: foreground = .child
-            case .job(let name): foreground = .job(pgid: -1, name: name)
+            case .job(let name): foreground = .job(pgid: -1, name: name.map { ForegroundProcess.identify(reportedName: $0) })
             }
         case .control(.exited(_, let code)):
             guard isRunning else { return }

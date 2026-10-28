@@ -61,8 +61,9 @@ final class TerminalSession: Identifiable {
 
     /// Whether a command / process is currently running in this session (the shell
     /// prompt has gone away). Drives the "running…" badge shown on a backgrounded
-    /// tab. Updated from the terminal view's prompt heuristic.
-    var isBusy = false
+    /// tab and the island's running row. Only `applyBusy` writes it, so the
+    /// tab badge and the island always follow the same state.
+    private(set) var isBusy = false
     /// The last OSC 133;D exit code, for the island's ✓ / ✕ when busy ends.
     private var lastExitCode: Int?
     private var busyGeneration = 0
@@ -618,9 +619,11 @@ final class TerminalSession: Identifiable {
         } else {
             // Polling can see a local job end just before the shell's 133;D
             // brings its exit code: give that a moment.
+            let generation = busyGeneration
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
                 MainActor.assumeIsolated {
-                    guard let self, !self.isBusy else { return }
+                    // A newer run started meanwhile: its own end clears the row.
+                    guard let self, !self.isBusy, self.busyGeneration == generation else { return }
                     IslandCenter.shared.busyChanged(self, busy: false, elapsed: elapsed, exitCode: self.lastExitCode)
                 }
             }
@@ -761,7 +764,7 @@ final class TerminalSession: Identifiable {
         // and mark ourselves dialing again.
         io.resetForReconnect()
         isRunning = true
-        isBusy = false
+        applyBusy(false, elapsed: 0)
         connectionState = .connecting
 
         // The old child may have died inside a full-screen program: undo the
@@ -881,6 +884,14 @@ final class TerminalSession: Identifiable {
             .filter { !$0.contains("已恢复上次会话") }
             .joined(separator: "\r\n")
             .trimmingCharacters(in: .newlines)
+    }
+
+    /// Whether to show this pane as running — the tab badge and the island
+    /// both read this. A coding agent counts only while it works; at its own
+    /// prompt it's waiting, not running.
+    var showsRunning: Bool {
+        if let a = agentState { return a == .working }
+        return isBusy
     }
 
     /// Something is running here that closing would kill: a command (the tab's

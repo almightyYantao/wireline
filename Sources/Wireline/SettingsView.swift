@@ -37,11 +37,7 @@ struct SettingsView: View {
         return VStack(spacing: 0) {
             cardHeader
             WLFormDivider()
-            Group {
-                if tab == 0 { general }
-                else if tab == 1 { ShortcutSettingsView() }
-                else { aiSettings }
-            }
+            Group { page }
             .id(tab)
             .transition(.opacity.animation(Motion.fade))
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -64,30 +60,53 @@ struct SettingsView: View {
     }
 
     private var cardHeader: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "gearshape")
-                .font(.system(size: 14, weight: .semibold)).foregroundStyle(WL.green)
-                .frame(width: 34, height: 34)
-                .background(WL.green.opacity(0.12), in: RoundedRectangle(cornerRadius: WL.radius(10), style: .continuous))
-            VStack(alignment: .leading, spacing: 1) {
-                Text(loc("设置", "Settings")).font(WL.mono(14, .semibold)).foregroundStyle(WL.textPrimary)
-                Text(loc("改动立即生效", "Changes apply right away")).font(WL.caption).foregroundStyle(WL.textDim)
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 12) {
+                // Close on the left, where a Mac window has it.
+                Button { dismiss() } label: {
+                    Image(systemName: "xmark").font(.system(size: 10, weight: .bold))
+                        .frame(width: 24, height: 24)
+                        .background(WL.textPrimary.opacity(0.07), in: Circle())
+                }
+                .buttonStyle(.wlPlain).foregroundStyle(WL.textDim)
+                .help(loc("关闭 (Esc)", "Close (Esc)"))
+                Image(systemName: "gearshape")
+                    .font(.system(size: 14, weight: .semibold)).foregroundStyle(WL.green)
+                    .frame(width: 34, height: 34)
+                    .background(WL.green.opacity(0.12), in: RoundedRectangle(cornerRadius: WL.radius(10), style: .continuous))
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(loc("设置", "Settings")).font(WL.mono(14, .semibold)).foregroundStyle(WL.textPrimary)
+                    Text(loc("改动立即生效", "Changes apply right away")).font(WL.caption).foregroundStyle(WL.textDim)
+                }
+                Spacer(minLength: 0)
             }
-            Spacer(minLength: 12)
-            WLSegmented(selection: $tab, options: [
-                WLOption(0, loc("常规", "General"), symbol: "gearshape"),
-                WLOption(1, loc("快捷键", "Shortcuts"), symbol: "keyboard"),
-                WLOption(2, "AI", symbol: "sparkles"),
-            ], fill: false)
-            Button { dismiss() } label: {
-                Image(systemName: "xmark").font(.system(size: 10, weight: .bold))
-                    .frame(width: 24, height: 24)
-                    .background(WL.textPrimary.opacity(0.07), in: Circle())
-            }
-            .buttonStyle(.wlPlain).foregroundStyle(WL.textDim)
-            .help(loc("关闭 (Esc)", "Close (Esc)"))
+            tabPicker
         }
         .padding(.horizontal, 18).padding(.vertical, 14)
+    }
+
+    private var tabPicker: some View {
+        WLSegmented(selection: $tab, options: [
+            WLOption(0, loc("常规", "General"), symbol: "gearshape"),
+            WLOption(3, loc("外观", "Appearance"), symbol: "paintpalette"),
+            WLOption(4, loc("终端", "Terminal"), symbol: "terminal"),
+            WLOption(5, loc("通知", "Notifications"), symbol: "bell"),
+            WLOption(6, loc("连接", "Connections"), symbol: "network"),
+            WLOption(1, loc("快捷键", "Shortcuts"), symbol: "keyboard"),
+            WLOption(2, "AI", symbol: "sparkles"),
+        ], fill: false)
+    }
+
+    @ViewBuilder private var page: some View {
+        switch tab {
+        case 1: ShortcutSettingsView()
+        case 2: aiSettings
+        case 3: appearance
+        case 4: terminal
+        case 5: notifications
+        case 6: connections
+        default: general
+        }
     }
 
     private var window: some View {
@@ -101,11 +120,7 @@ struct SettingsView: View {
             VStack(spacing: 0) {
                 header
                 WLFormDivider()
-                Group {
-                    if tab == 0 { general }
-                    else if tab == 1 { ShortcutSettingsView() }
-                    else { aiSettings }
-                }
+                Group { page }
                 .id(tab)
                 .transition(.opacity.animation(Motion.fade))
             }
@@ -129,11 +144,7 @@ struct SettingsView: View {
         HStack(spacing: 14) {
             Text(loc("设置", "Settings")).font(WL.mono(13, .semibold)).foregroundStyle(WL.textPrimary)
             Spacer()
-            WLSegmented(selection: $tab, options: [
-                WLOption(0, loc("常规", "General"), symbol: "gearshape"),
-                WLOption(1, loc("快捷键", "Shortcuts"), symbol: "keyboard"),
-                WLOption(2, "AI", symbol: "sparkles"),
-            ], fill: false)
+            tabPicker
         }
         // Sits in the title-bar band, level with the traffic lights.
         .padding(.leading, 84).padding(.trailing, 16)
@@ -145,7 +156,6 @@ struct SettingsView: View {
         @Bindable var store = store
         @Bindable var todos = todos
         @Bindable var loc = loc
-        @Bindable var island = IslandSettings.shared
         return ScrollView {
             VStack(alignment: .leading, spacing: 22) {
                 section(loc("语言", "Language")) {
@@ -156,100 +166,39 @@ struct SettingsView: View {
                     }
                 }
 
-                section(loc("终端", "Terminal"),
-                        footer: loc("内置会话在应用内真实 PTY 中运行，启动登录 shell，prompt/主题/配色与平时终端一致。",
-                                    "Built-in sessions run in a real PTY, launching your login shell so prompt, theme, and colors match your normal terminal.")) {
-                    Toggle(isOn: $store.useBuiltInTerminal) { rowLabel(loc("使用内置终端", "Use built-in terminal")) }
-                        .toggleStyle(.wlSwitch).frame(minHeight: 38).wlConfigLocked("builtin-terminal")
-                    WLFormDivider()
-                    WLFormRow(loc("终端内核", "Terminal engine"),
-                              detail: loc("对新开的标签和分屏生效；SwiftTerm 为备用内核", "Applies to new tabs and splits; SwiftTerm is the fallback")) {
-                        WLSegmented(selection: $store.terminalEngine, options: [
-                            WLOption(TerminalEngineKind.swiftterm, "SwiftTerm"),
-                            WLOption(TerminalEngineKind.ghostty, "libghostty"),
-                        ], fill: false)
-                        .wlConfigLocked("terminal-engine")
-                    }
-                    WLFormDivider()
-                    Toggle(isOn: $store.terminalGPU) {
-                        WLFormRow(loc("GPU 渲染", "GPU rendering"),
-                                  detail: loc("用 Metal 绘制终端，大量输出时更流畅、更省 CPU", "Draw terminals with Metal — smoother, lighter on the CPU under heavy output")) { EmptyView() }
-                    }
-                    .toggleStyle(.wlSwitch).wlConfigLocked("gpu-rendering")
-                    WLFormDivider()
-                    Toggle(isOn: $smartCompletion) {
-                        WLFormRow(loc("智能补全", "Smart completion"),
-                                  detail: loc("本地终端输入时提示 git 分支、npm 脚本、make 目标、SSH 主机、路径和历史命令。↑↓ 选择，Tab / → 接受，Esc 关闭",
-                                              "Suggest git branches, npm scripts, make targets, SSH hosts, paths and history as you type in local shells. ↑↓ to pick, Tab / → to accept, Esc to dismiss")) { EmptyView() }
-                    }
-                    .toggleStyle(.wlSwitch)
-                    WLFormDivider()
-                    Toggle(isOn: $store.inheritWorkingDirectory) { rowLabel(loc("新标签继承当前目录", "New tabs inherit the directory")) }
-                        .toggleStyle(.wlSwitch).frame(minHeight: 38).wlConfigLocked("window-inherit-working-directory")
-                    WLFormDivider()
-                    Toggle(isOn: $store.sessionAgentEnabled) {
-                        WLFormRow(loc("会话常驻（实验）", "Keep sessions running (experimental)"),
-                                  detail: loc("新开的 SSH 和本地终端交给后台的 wireline-agent：⌘Q 退出后进程照常运行，再打开 Wireline 原样接上。⌥⌘Q 退出并结束所有会话。只对 libghostty 内核生效。",
-                                              "New SSH and local sessions run in the background wireline-agent: they keep going after ⌘Q and come back as they were. ⌥⌘Q quits and ends them. libghostty engine only.")) { EmptyView() }
-                    }
-                    .toggleStyle(.wlSwitch).wlConfigLocked("session-agent")
-                    if store.sessionAgentEnabled {
-                        WLFormDivider()
-                        WLFormRow(loc("Wireline 关闭时保留", "Keep while Wireline is closed"),
-                                  detail: loc("超过这个时长没人接入，会话会被结束", "A session nobody has attached to for this long is ended")) {
-                            WLSegmented(selection: $store.sessionAgentKeepAlive, options: [
-                                WLOption(0.0, loc("一直", "Always")),
-                                WLOption(3600.0, loc("1 小时", "1 h")),
-                                WLOption(8 * 3600.0, loc("8 小时", "8 h")),
-                                WLOption(24 * 3600.0, loc("24 小时", "24 h")),
-                            ], fill: false)
-                            .wlConfigLocked("session-agent-keep-alive")
-                        }
-                    }
-                    WLFormDivider()
-                    Toggle(isOn: $store.confirmCloseRunning) {
-                        WLFormRow(loc("关闭前确认", "Confirm before closing"),
-                                  detail: loc("标签或分屏里还有命令、Claude Code 等在运行时，关闭前先问一下", "Ask before closing a tab or pane that's still running a command or a coding agent")) { EmptyView() }
-                    }
-                    .toggleStyle(.wlSwitch).wlConfigLocked("confirm-close-surface")
-                    WLFormDivider()
-                    WLFormRow(loc("多行粘贴确认", "Confirm multi-line paste"),
-                              detail: loc("粘贴含换行的文本前先预览；Claude Code 等开启了 bracketed paste 的程序不会把换行当回车",
-                                          "Preview text with newlines before pasting; programs with bracketed paste on (Claude Code …) don't treat newlines as Return")) {
-                        WLSegmented(selection: $pasteConfirm, options: [
-                            WLOption(PasteConfirmPolicy.always.rawValue, loc("总是", "Always")),
-                            WLOption(PasteConfirmPolicy.unlessBracketed.rawValue, loc("仅非 bracketed", "Unless bracketed")),
-                            WLOption(PasteConfirmPolicy.never.rawValue, loc("从不", "Never")),
-                        ], fill: false)
-                        .onChange(of: pasteConfirm) { NotificationCenter.default.post(name: .pasteConfirmPolicyChanged, object: nil) }
-                    }
-                    WLFormDivider()
-                    WLFormRow(loc("命令完成提醒", "Command-finished alert"),
-                              detail: loc("Wireline 不在前台时，耗时超过这个时长的命令结束会发通知", "When Wireline is in the background, notify for commands that ran at least this long")) {
-                        WLStepper(value: $store.notifyCommandAfter, range: 1...600, step: 5,
-                                  format: { loc("\(Int($0)) 秒", "\(Int($0))s") })
-                            .wlConfigLocked("notify-on-command-finish-after")
-                    }
-                    WLFormDivider()
-                    NotificationCardRows()
-                    WLFormDivider()
-                    AgentHooksList()
-                    WLFormDivider()
-                    Toggle(isOn: $resumeCodingAgents) {
-                        WLFormRow(loc("恢复 AI 会话", "Resume coding-agent sessions"),
-                                  detail: loc("重开 Wireline、重开关闭的标签或打开工作区时，原来跑着 Claude Code / Codex 但进程已退出的本地窗格会执行 claude --resume / codex resume 接着上次的对话。还在常驻进程里运行的会话直接接回，不会重复恢复。",
-                                              "When Wireline relaunches, a closed tab is reopened or a workspace opens, a local pane that was running Claude Code / Codex whose process is gone runs claude --resume / codex resume to continue it. Sessions still running in the session agent are reattached instead.")) { EmptyView() }
-                    }
-                    .toggleStyle(.wlSwitch)
-                    WLFormDivider()
-                    WLFormRow(loc("否则打开于", "Otherwise open in")) {
-                        WLMenuPicker(selection: $store.terminalApp,
-                                     options: TerminalApp.allCases.map { WLOption($0, $0.displayName) })
-                            .disabled(store.useBuiltInTerminal)
-                            .wlConfigLocked("external-terminal")
-                    }
+                section(loc("待办", "To-Do"),
+                        footer: loc("开启后在菜单栏显示待办图标（含未完成计数），并启用「待办清单」菜单与快捷键；关闭则完全隐藏，不占用菜单栏。",
+                                    "Adds a menu-bar icon with an open-item count and enables the To-Do menu and shortcut; off hides it entirely, freeing the menu bar.")) {
+                    Toggle(isOn: $todos.enabled) { rowLabel(loc("启用待办清单", "Enable to-do list")) }
+                        .toggleStyle(.wlSwitch).frame(minHeight: 38)
                 }
 
+                section(loc("更新", "Updates"),
+                        footer: loc("通过 Sparkle 检查签名后的更新（appcast 托管在项目站点，无服务端）。",
+                                    "Signed updates via Sparkle (appcast hosted on the project site, no backend).")) {
+                    WLFormRow(loc("当前版本", "Version"),
+                              detail: "v" + (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?")) {
+                        Button(loc("检查更新", "Check for Updates")) { Updater.shared.checkForUpdates() }
+                            .buttonStyle(.wlSecondary)
+                    }
+                    WLFormDivider()
+                    Toggle(isOn: Binding(get: { Updater.shared.automaticChecks },
+                                         set: { Updater.shared.automaticChecks = $0 })) {
+                        rowLabel(loc("自动检查更新", "Check for updates automatically"))
+                    }.toggleStyle(.wlSwitch).frame(minHeight: 38)
+                }
+
+                configFileSection
+
+            }
+            .padding(22)
+        }
+    }
+
+    private var appearance: some View {
+        @Bindable var store = store
+        return ScrollView {
+            VStack(alignment: .leading, spacing: 22) {
                 section(loc("主题", "Theme"),
                         footer: loc("主题不止配色——形状、密度、字体、壁纸都能自定义，可保存多套。编辑器里能导出自包含的 .wltheme 主题包（内嵌壁纸），发给别人直接导入即用。",
                                     "A theme is more than colors — shape, density, font and wallpaper too. Save multiple; the editor exports a self-contained .wltheme pack (wallpaper embedded) others can import directly.")) {
@@ -354,6 +303,97 @@ struct SettingsView: View {
                         .wlConfigLocked("background-image")
                     }
                 }
+            }
+            .padding(22)
+        }
+    }
+
+    private var terminal: some View {
+        @Bindable var store = store
+        return ScrollView {
+            VStack(alignment: .leading, spacing: 22) {
+                section(loc("终端", "Terminal"),
+                        footer: loc("内置会话在应用内真实 PTY 中运行，启动登录 shell，prompt/主题/配色与平时终端一致。",
+                                    "Built-in sessions run in a real PTY, launching your login shell so prompt, theme, and colors match your normal terminal.")) {
+                    Toggle(isOn: $store.useBuiltInTerminal) { rowLabel(loc("使用内置终端", "Use built-in terminal")) }
+                        .toggleStyle(.wlSwitch).frame(minHeight: 38).wlConfigLocked("builtin-terminal")
+                    WLFormDivider()
+                    WLFormRow(loc("终端内核", "Terminal engine"),
+                              detail: loc("对新开的标签和分屏生效；SwiftTerm 为备用内核", "Applies to new tabs and splits; SwiftTerm is the fallback")) {
+                        WLSegmented(selection: $store.terminalEngine, options: [
+                            WLOption(TerminalEngineKind.swiftterm, "SwiftTerm"),
+                            WLOption(TerminalEngineKind.ghostty, "libghostty"),
+                        ], fill: false)
+                        .wlConfigLocked("terminal-engine")
+                    }
+                    WLFormDivider()
+                    Toggle(isOn: $store.terminalGPU) {
+                        WLFormRow(loc("GPU 渲染", "GPU rendering"),
+                                  detail: loc("用 Metal 绘制终端，大量输出时更流畅、更省 CPU", "Draw terminals with Metal — smoother, lighter on the CPU under heavy output")) { EmptyView() }
+                    }
+                    .toggleStyle(.wlSwitch).wlConfigLocked("gpu-rendering")
+                    WLFormDivider()
+                    Toggle(isOn: $smartCompletion) {
+                        WLFormRow(loc("智能补全", "Smart completion"),
+                                  detail: loc("本地终端输入时提示 git 分支、npm 脚本、make 目标、SSH 主机、路径和历史命令。↑↓ 选择，Tab / → 接受，Esc 关闭",
+                                              "Suggest git branches, npm scripts, make targets, SSH hosts, paths and history as you type in local shells. ↑↓ to pick, Tab / → to accept, Esc to dismiss")) { EmptyView() }
+                    }
+                    .toggleStyle(.wlSwitch)
+                    WLFormDivider()
+                    Toggle(isOn: $store.inheritWorkingDirectory) { rowLabel(loc("新标签继承当前目录", "New tabs inherit the directory")) }
+                        .toggleStyle(.wlSwitch).frame(minHeight: 38).wlConfigLocked("window-inherit-working-directory")
+                    WLFormDivider()
+                    Toggle(isOn: $store.sessionAgentEnabled) {
+                        WLFormRow(loc("会话常驻（实验）", "Keep sessions running (experimental)"),
+                                  detail: loc("新开的 SSH 和本地终端交给后台的 wireline-agent：⌘Q 退出后进程照常运行，再打开 Wireline 原样接上。⌥⌘Q 退出并结束所有会话。只对 libghostty 内核生效。",
+                                              "New SSH and local sessions run in the background wireline-agent: they keep going after ⌘Q and come back as they were. ⌥⌘Q quits and ends them. libghostty engine only.")) { EmptyView() }
+                    }
+                    .toggleStyle(.wlSwitch).wlConfigLocked("session-agent")
+                    if store.sessionAgentEnabled {
+                        WLFormDivider()
+                        WLFormRow(loc("Wireline 关闭时保留", "Keep while Wireline is closed"),
+                                  detail: loc("超过这个时长没人接入，会话会被结束", "A session nobody has attached to for this long is ended")) {
+                            WLSegmented(selection: $store.sessionAgentKeepAlive, options: [
+                                WLOption(0.0, loc("一直", "Always")),
+                                WLOption(3600.0, loc("1 小时", "1 h")),
+                                WLOption(8 * 3600.0, loc("8 小时", "8 h")),
+                                WLOption(24 * 3600.0, loc("24 小时", "24 h")),
+                            ], fill: false)
+                            .wlConfigLocked("session-agent-keep-alive")
+                        }
+                    }
+                    WLFormDivider()
+                    Toggle(isOn: $store.confirmCloseRunning) {
+                        WLFormRow(loc("关闭前确认", "Confirm before closing"),
+                                  detail: loc("标签或分屏里还有命令、Claude Code 等在运行时，关闭前先问一下", "Ask before closing a tab or pane that's still running a command or a coding agent")) { EmptyView() }
+                    }
+                    .toggleStyle(.wlSwitch).wlConfigLocked("confirm-close-surface")
+                    WLFormDivider()
+                    WLFormRow(loc("多行粘贴确认", "Confirm multi-line paste"),
+                              detail: loc("粘贴含换行的文本前先预览；Claude Code 等开启了 bracketed paste 的程序不会把换行当回车",
+                                          "Preview text with newlines before pasting; programs with bracketed paste on (Claude Code …) don't treat newlines as Return")) {
+                        WLSegmented(selection: $pasteConfirm, options: [
+                            WLOption(PasteConfirmPolicy.always.rawValue, loc("总是", "Always")),
+                            WLOption(PasteConfirmPolicy.unlessBracketed.rawValue, loc("仅非 bracketed", "Unless bracketed")),
+                            WLOption(PasteConfirmPolicy.never.rawValue, loc("从不", "Never")),
+                        ], fill: false)
+                        .onChange(of: pasteConfirm) { NotificationCenter.default.post(name: .pasteConfirmPolicyChanged, object: nil) }
+                    }
+                    WLFormDivider()
+                    Toggle(isOn: $resumeCodingAgents) {
+                        WLFormRow(loc("恢复 AI 会话", "Resume coding-agent sessions"),
+                                  detail: loc("重开 Wireline、重开关闭的标签或打开工作区时，原来跑着 Claude Code / Codex 但进程已退出的本地窗格会执行 claude --resume / codex resume 接着上次的对话。还在常驻进程里运行的会话直接接回，不会重复恢复。",
+                                              "When Wireline relaunches, a closed tab is reopened or a workspace opens, a local pane that was running Claude Code / Codex whose process is gone runs claude --resume / codex resume to continue it. Sessions still running in the session agent are reattached instead.")) { EmptyView() }
+                    }
+                    .toggleStyle(.wlSwitch)
+                    WLFormDivider()
+                    WLFormRow(loc("否则打开于", "Otherwise open in")) {
+                        WLMenuPicker(selection: $store.terminalApp,
+                                     options: TerminalApp.allCases.map { WLOption($0, $0.displayName) })
+                            .disabled(store.useBuiltInTerminal)
+                            .wlConfigLocked("external-terminal")
+                    }
+                }
 
                 section(loc("快捷终端", "Quick Terminal"),
                         footer: loc("在任意 App 里按 \(KeyBindingStore.shared.shortcut(for: .toggleQuickTerminal).display) 从屏幕顶部呼出一个本地终端，再按一次收起。快捷键可在「快捷键」里修改。",
@@ -371,7 +411,54 @@ struct SettingsView: View {
                     Toggle(isOn: $store.quickTerminalAutohide) { rowLabel(loc("失去焦点时自动收起", "Hide when it loses focus")) }
                         .toggleStyle(.wlSwitch).frame(minHeight: 38).wlConfigLocked("quick-terminal-autohide")
                 }
+            }
+            .padding(22)
+        }
+    }
 
+    private var notifications: some View {
+        @Bindable var store = store
+        @Bindable var island = IslandSettings.shared
+        return ScrollView {
+            VStack(alignment: .leading, spacing: 22) {
+                section(loc("刘海岛", "Notch Island"),
+                        footer: loc("在屏幕顶部刘海处显示 AI 与终端里编码 Agent（Claude Code、Codex…）的实时状态。平时藏在刘海里，有任务在跑或等你确认时才露出来；随时可以点刘海展开。高危命令和工具调用可以直接在岛上允许或拒绝；点一行回到对应终端。没有刘海的屏幕显示在菜单栏下方。",
+                                    "Live status of the AI and of coding agents in your panes (Claude Code, Codex…) around the notch. It stays tucked in the notch until something runs or needs your OK; click the notch to open it any time. Allow or deny risky commands and tool calls right there; click a row to jump to its terminal. Screens without a notch get a pill under the menu bar.")) {
+                    Toggle(isOn: $island.enabled) { rowLabel(loc("刘海岛", "Notch island")) }
+                        .toggleStyle(.wlSwitch).frame(minHeight: 38).wlConfigLocked("notch-island")
+                    if island.enabled {
+                        WLFormDivider()
+                        Toggle(isOn: Binding(get: { !island.alwaysShow }, set: { island.alwaysShow = !$0 })) {
+                            rowLabel(loc("仅在有任务运行时显示", "Only show while something runs"))
+                        }
+                        .toggleStyle(.wlSwitch).frame(minHeight: 38).wlConfigLocked("notch-island-always")
+                        .transition(.wlDisclose)
+                    }
+                }
+                .animation(Motion.disclose, value: island.enabled)
+
+                section(loc("通知", "Notifications")) {
+                    WLFormRow(loc("命令完成提醒", "Command-finished alert"),
+                              detail: loc("Wireline 不在前台时，耗时超过这个时长的命令结束会发通知", "When Wireline is in the background, notify for commands that ran at least this long")) {
+                        WLStepper(value: $store.notifyCommandAfter, range: 1...600, step: 5,
+                                  format: { loc("\(Int($0)) 秒", "\(Int($0))s") })
+                            .wlConfigLocked("notify-on-command-finish-after")
+                    }
+                    WLFormDivider()
+                    NotificationCardRows()
+                    WLFormDivider()
+                    AgentHooksList()
+                }
+
+            }
+            .padding(22)
+        }
+    }
+
+    private var connections: some View {
+        @Bindable var store = store
+        return ScrollView {
+            VStack(alignment: .leading, spacing: 22) {
                 section(loc("远程桌面", "Remote Desktop"),
                         footer: loc("Windows 主机在新建主机时选「远程桌面 (RDP)」。更改在下次连接时生效。",
                                     "Add Windows machines as Remote Desktop (RDP) hosts. Changes apply to the next connection.")) {
@@ -411,46 +498,6 @@ struct SettingsView: View {
                     }
                 }
                 .animation(Motion.disclose, value: store.backgroundMonitor)
-
-                section(loc("刘海岛", "Notch Island"),
-                        footer: loc("在屏幕顶部刘海处显示 AI 与终端里编码 Agent（Claude Code、Codex…）的实时状态。平时藏在刘海里，有任务在跑或等你确认时才露出来；随时可以点刘海展开。高危命令和工具调用可以直接在岛上允许或拒绝；点一行回到对应终端。没有刘海的屏幕显示在菜单栏下方。",
-                                    "Live status of the AI and of coding agents in your panes (Claude Code, Codex…) around the notch. It stays tucked in the notch until something runs or needs your OK; click the notch to open it any time. Allow or deny risky commands and tool calls right there; click a row to jump to its terminal. Screens without a notch get a pill under the menu bar.")) {
-                    Toggle(isOn: $island.enabled) { rowLabel(loc("刘海岛", "Notch island")) }
-                        .toggleStyle(.wlSwitch).frame(minHeight: 38).wlConfigLocked("notch-island")
-                    if island.enabled {
-                        WLFormDivider()
-                        Toggle(isOn: Binding(get: { !island.alwaysShow }, set: { island.alwaysShow = !$0 })) {
-                            rowLabel(loc("仅在有任务运行时显示", "Only show while something runs"))
-                        }
-                        .toggleStyle(.wlSwitch).frame(minHeight: 38).wlConfigLocked("notch-island-always")
-                        .transition(.wlDisclose)
-                    }
-                }
-                .animation(Motion.disclose, value: island.enabled)
-
-                section(loc("待办", "To-Do"),
-                        footer: loc("开启后在菜单栏显示待办图标（含未完成计数），并启用「待办清单」菜单与快捷键；关闭则完全隐藏，不占用菜单栏。",
-                                    "Adds a menu-bar icon with an open-item count and enables the To-Do menu and shortcut; off hides it entirely, freeing the menu bar.")) {
-                    Toggle(isOn: $todos.enabled) { rowLabel(loc("启用待办清单", "Enable to-do list")) }
-                        .toggleStyle(.wlSwitch).frame(minHeight: 38)
-                }
-
-                section(loc("更新", "Updates"),
-                        footer: loc("通过 Sparkle 检查签名后的更新（appcast 托管在项目站点，无服务端）。",
-                                    "Signed updates via Sparkle (appcast hosted on the project site, no backend).")) {
-                    WLFormRow(loc("当前版本", "Version"),
-                              detail: "v" + (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?")) {
-                        Button(loc("检查更新", "Check for Updates")) { Updater.shared.checkForUpdates() }
-                            .buttonStyle(.wlSecondary)
-                    }
-                    WLFormDivider()
-                    Toggle(isOn: Binding(get: { Updater.shared.automaticChecks },
-                                         set: { Updater.shared.automaticChecks = $0 })) {
-                        rowLabel(loc("自动检查更新", "Check for updates automatically"))
-                    }.toggleStyle(.wlSwitch).frame(minHeight: 38)
-                }
-
-                configFileSection
 
                 section(loc("SSH 配置", "SSH Config"),
                         footer: loc("Wireline 直接读写这份标准 OpenSSH 配置；卸载后它在命令行下依然完全可用。",

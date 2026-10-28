@@ -9,8 +9,8 @@ import Foundation
 /// npm-installed CLIs run as `node …/bin/codex`, and Python reports
 /// `python3.10`. So look at the executable path and, for interpreters, the
 /// script they run.
-enum ForegroundProcess {
-    static func identify(_ pid: pid_t) -> String? {
+public enum ForegroundProcess {
+    public static func identify(_ pid: pid_t) -> String? {
         var nameBuf = [CChar](repeating: 0, count: 64)
         let name = proc_name(pid, &nameBuf, UInt32(nameBuf.count)) > 0 ? String(cString: nameBuf) : nil
         var pathBuf = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))
@@ -27,7 +27,24 @@ enum ForegroundProcess {
     private static let interpreters: Set<String> = ["node", "bun", "deno", "python", "ruby", "perl"]
 
     /// `python3.10` → `python`, `Python` → `python`, `node22` → `node`.
-    static func normalize(_ raw: String) -> String {
+    /// A bare program name as an older session agent reports it — for Claude
+    /// Code that's its version (`2.1.312`). Find a process by that name and
+    /// identify it from its path.
+    public static func identify(reportedName name: String) -> String {
+        guard !name.isEmpty, name.allSatisfy({ $0.isNumber || $0 == "." }) else { return name }
+        let count = proc_listallpids(nil, 0)
+        guard count > 0 else { return name }
+        var pids = [pid_t](repeating: 0, count: Int(count) * 2)
+        let n = proc_listallpids(&pids, Int32(pids.count * MemoryLayout<pid_t>.size))
+        var buf = [CChar](repeating: 0, count: 64)
+        for pid in pids.prefix(Int(max(n, 0))) where pid > 0 {
+            guard proc_name(pid, &buf, UInt32(buf.count)) > 0, String(cString: buf) == name else { continue }
+            if let found = identify(pid) { return found }
+        }
+        return name
+    }
+
+    public static func normalize(_ raw: String) -> String {
         var s = raw.lowercased()
         while let last = s.last, last.isNumber || last == "." { s.removeLast() }
         return s.isEmpty ? raw.lowercased() : s
@@ -35,7 +52,7 @@ enum ForegroundProcess {
 
     /// The executable's name, skipping version-number components
     /// (`…/claude/versions/2.1.306` → `claude`).
-    static func nameFromPath(_ path: String) -> String? {
+    public static func nameFromPath(_ path: String) -> String? {
         let parts = path.split(separator: "/").map(String.init)
         for part in parts.reversed() {
             let isVersion = part.allSatisfy { $0.isNumber || $0 == "." }

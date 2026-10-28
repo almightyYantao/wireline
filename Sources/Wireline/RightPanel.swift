@@ -678,15 +678,10 @@ struct SessionTab: View {
         tab.sessionIDs.compactMap { sessions.session($0).map { $0.currentDirectory ?? $0.title } }
             .joined(separator: " | ")
     }
-    /// True when this (non-active) tab has a command still running — shows a
-    /// "running…" badge so you know it's working while you're on another tab.
+    /// True when this tab has something running — the same rule as the
+    /// island's running row (`TerminalSession.showsRunning`).
     private var running: Bool {
-        tab.sessionIDs.contains { id in
-            guard let s = sessions.session(id) else { return false }
-            // A coding agent counts as running only while it works, like the island.
-            if let a = s.agentState { return a == .working }
-            return s.isBusy
-        }
+        tab.sessionIDs.contains { sessions.session($0)?.showsRunning == true }
     }
     /// A coding agent in this tab is waiting for you (a permission prompt, a question).
     private var waiting: Bool {
@@ -745,7 +740,7 @@ struct SessionTab: View {
                 AgentStatusBadge(agent: kind, state: state)
             } else if !isActive && waiting {
                 WaitingBadge()
-            } else if !isActive && running {
+            } else if running {
                 RunningBadge()
             } else if !isActive && unread {
                 UnreadDot()

@@ -126,7 +126,7 @@ final class AgentSession {
         switch process.foregroundJob() {
         case .none: fg = .none
         case .child: fg = .child
-        case .job(let pgid, let name): fg = .job(name: ForegroundName.identify(pgid) ?? name)
+        case .job(let pgid, let name): fg = .job(name: ForegroundProcess.identify(pgid) ?? name)
         }
         guard fg != lastForeground else { return }
         lastForeground = fg
@@ -193,16 +193,5 @@ final class AgentSession {
         let h = hex.hasPrefix("#") ? String(hex.dropFirst()) : hex
         guard h.count == 6, let v = UInt32(h, radix: 16) else { return nil }
         return (UInt8(v >> 16 & 0xff), UInt8(v >> 8 & 0xff), UInt8(v & 0xff))
-    }
-}
-
-/// A job's program name: `claude`, `node`… (the app's `ForegroundProcess` does
-/// the same for in-process PTYs).
-enum ForegroundName {
-    static func identify(_ pgid: pid_t) -> String? {
-        var buf = [CChar](repeating: 0, count: Int(MAXPATHLEN))
-        guard proc_pidpath(pgid, &buf, UInt32(buf.count)) > 0 else { return nil }
-        let path = String(decoding: buf.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
-        return (path as NSString).lastPathComponent
     }
 }
