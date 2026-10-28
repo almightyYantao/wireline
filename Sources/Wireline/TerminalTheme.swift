@@ -104,6 +104,28 @@ struct TerminalTheme: Codable, Sendable, Equatable {
     ]
 }
 
+// MARK: - macOS Native
+
+extension TerminalTheme {
+    /// Apple's system palette (window background, label color, NSColor.system*)
+    /// for one appearance. `accent` is the user's system accent color; nil falls
+    /// back to system blue.
+    static func macOSNative(dark: Bool, accent: [Double]?) -> TerminalTheme {
+        if dark {
+            return TerminalTheme(name: "macOS Native (Dark)", ansi: [
+                0x3a3a3c, 0xff453a, 0x32d74b, 0xffd60a, 0x0a84ff, 0xbf5af2, 0x64d2ff, 0xd1d1d6,
+                0x636366, 0xff6961, 0x5de072, 0xffe04d, 0x409cff, 0xda8fff, 0x8fe0ff, 0xf2f2f7,
+            ].map(hex), background: hex(0x1e1e1e), foreground: hex(0xdfdfdf),
+                cursor: accent ?? hex(0x0a84ff))
+        }
+        return TerminalTheme(name: "macOS Native (Light)", ansi: [
+            0x1d1d1f, 0xd70015, 0x248a3d, 0xa05a00, 0x0040dd, 0x8944ab, 0x0071a4, 0xaeaeb2,
+            0x636366, 0xff3b30, 0x28cd41, 0xc93400, 0x007aff, 0xaf52de, 0x0095cc, 0xe5e5ea,
+        ].map(hex), background: hex(0xffffff), foreground: hex(0x1d1d1f),
+            cursor: accent ?? hex(0x007aff))
+    }
+}
+
 // MARK: - Design-style skins
 
 extension TerminalTheme {

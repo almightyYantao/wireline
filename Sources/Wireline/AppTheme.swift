@@ -14,6 +14,10 @@ struct AppTheme: Codable, Identifiable, Equatable {
 
     /// Built-in themes are read-only; custom ones can be edited/deleted.
     var isBuiltIn: Bool = false
+    /// Track the system: light / dark appearance and the accent color are read
+    /// live from macOS, overriding `colors` (see `resolvedForSystem`). Optional so
+    /// theme JSON written before this field still decodes.
+    var followsSystem: Bool? = nil
 
     // MARK: - Shape / density
 
@@ -104,9 +108,41 @@ extension AppTheme {
         isBuiltIn: true
     )
 
-    /// Built-ins = the default + every bundled terminal color scheme (stock
-    /// shape/typography, pure recolors) + the design-style skins.
-    static var builtIns: [AppTheme] { colorSchemes + styled }
+    /// Native macOS look: system font, system light / dark, system accent color.
+    /// Its colors are resolved live, so the stored `colors` are just a fallback.
+    static let macOSNative = AppTheme(
+        name: "macOS 原生 / macOS Native",
+        colors: .macOSNative(dark: true, accent: nil),
+        shape: .init(radiusScale: 1.15, borderWidth: 0.5, density: .normal),
+        type: .init(design: .standard),
+        isBuiltIn: true,
+        followsSystem: true
+    )
+
+    /// Built-ins = the default + macOS Native + every bundled terminal color
+    /// scheme (stock shape/typography, pure recolors) + the design-style skins.
+    static var builtIns: [AppTheme] {
+        let schemes = colorSchemes
+        return [schemes[0], macOSNative] + schemes.dropFirst() + styled
+    }
+
+    /// For a system-following theme, swap in colors for the current macOS
+    /// appearance and accent color; other themes come back unchanged.
+    func resolvedForSystem() -> AppTheme {
+        guard followsSystem == true else { return self }
+        var t = self
+        let dark = UserDefaults.standard.string(forKey: "AppleInterfaceStyle") == "Dark"
+        let name = dark ? NSAppearance.Name.darkAqua : .aqua
+        var accent: [Double]?
+        NSAppearance(named: name)?.performAsCurrentDrawingAppearance {
+            if let c = NSColor.controlAccentColor.usingColorSpace(.sRGB) {
+                accent = [Double(c.redComponent), Double(c.greenComponent), Double(c.blueComponent)]
+            }
+        }
+        t.colors = .macOSNative(dark: dark, accent: accent)
+        t.colors.name = name == .darkAqua ? "\(self.name) (Dark)" : "\(self.name) (Light)"
+        return t
+    }
 
     /// The default + bundled terminal color schemes.
     static var colorSchemes: [AppTheme] {

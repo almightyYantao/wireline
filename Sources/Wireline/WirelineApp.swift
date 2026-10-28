@@ -54,6 +54,11 @@ struct WirelineApp: App {
                         forName: Notification.Name("AppleInterfaceThemeChangedNotification"),
                         object: nil, queue: .main
                     ) { [store] _ in MainActor.assumeIsolated { store.applyAppearanceTheme() } }
+                    // System accent color changes recolor the macOS Native theme.
+                    DistributedNotificationCenter.default().addObserver(
+                        forName: Notification.Name("AppleColorPreferencesChangedNotification"),
+                        object: nil, queue: .main
+                    ) { [store] _ in MainActor.assumeIsolated { store.applyAppearanceTheme() } }
                     // Scan installed fonts off the main thread so Settings opens instantly.
                     FontCatalog.shared.warm()
                     // Let the backup layer see the to-do list without coupling

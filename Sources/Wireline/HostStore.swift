@@ -143,6 +143,8 @@ final class HostStore {
 
     /// Pick the light / dark theme for the current system appearance.
     func applyAppearanceTheme() {
+        // A system-following theme re-resolves its colors on every switch.
+        if activeTheme.followsSystem == true { applyActiveTheme() }
         guard let light = themeForLight, let dark = themeForDark else { return }
         let systemDark = UserDefaults.standard.string(forKey: "AppleInterfaceStyle") == "Dark"
         let want = systemDark ? dark : light
@@ -184,7 +186,7 @@ final class HostStore {
     var allThemes: [AppTheme] { AppTheme.builtIns + customThemes }
     /// The currently selected theme (falls back to the Wireline default).
     var activeTheme: AppTheme {
-        allThemes.first { $0.name == selectedThemeName } ?? .wirelineDefault
+        (allThemes.first { $0.name == selectedThemeName } ?? .wirelineDefault).resolvedForSystem()
     }
 
     /// Push the active theme into the running UI: the terminal color path stays
