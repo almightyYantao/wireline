@@ -17,28 +17,67 @@ public enum AgentHooks {
     public enum Event: Equatable, Sendable {
         /// You sent a prompt: it's working.
         case promptSubmitted
+        /// The same, with the prompt's text (Claude Code's `prompt`).
+        case prompted(String)
+        /// It's about to run a tool (`PreToolUse`); the tool's name.
+        case toolStarted(String)
+        /// A tool finished (`PostToolUse` / `PostToolUseFailure`).
+        case toolFinished(String, failed: Bool)
+        /// It's asking to run something (`PermissionRequest`).
+        case permission(String?)
         /// It wants a permission or has been idle waiting for you.
         case notification(String?)
+        case subagentStarted
+        case subagentStopped
         /// Its turn ended.
         case stop
+        /// Its turn ended on an error (`StopFailure`: API error, rate limit…).
+        case stopFailed(String?)
+        case sessionStarted
+        case sessionEnded
 
         /// The Claude Code hook events Wireline installs, by name.
-        public static let hookNames = ["UserPromptSubmit", "Notification", "Stop"]
+        public static let hookNames = ["SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse", "PostToolUse",
+                                       "PostToolUseFailure", "PermissionRequest", "Notification",
+                                       "SubagentStart", "SubagentStop", "Stop", "StopFailure"]
 
         public init?(name: String, message: String? = nil) {
+            self.init(name: name, fields: { $0 == "message" ? message : nil })
+        }
+
+        /// From a hook name and a way to read the payload's string fields.
+        init?(name: String, fields: (String) -> String?) {
+            func text(_ key: String) -> String? { fields(key).flatMap { $0.isEmpty ? nil : $0 } }
+            let tool = text("tool_name") ?? ""
             switch name {
-            case "UserPromptSubmit": self = .promptSubmitted
-            case "Notification": self = .notification(message)
+            case "UserPromptSubmit": self = text("prompt").map { .prompted($0) } ?? .promptSubmitted
+            case "PreToolUse": self = .toolStarted(tool)
+            case "PostToolUse": self = .toolFinished(tool, failed: false)
+            case "PostToolUseFailure": self = .toolFinished(tool, failed: true)
+            case "PermissionRequest": self = .permission(tool.isEmpty ? nil : tool)
+            case "Notification":
+                // The idle reminder repeats "your turn", which Stop already said.
+                if text("notification_type") == "idle_prompt" { return nil }
+                self = .notification(text("message"))
+            case "SubagentStart": self = .subagentStarted
+            case "SubagentStop": self = .subagentStopped
             case "Stop": self = .stop
+            case "StopFailure": self = .stopFailed(text("error") ?? text("message"))
+            case "SessionStart": self = .sessionStarted
+            case "SessionEnd": self = .sessionEnded
             default: return nil
             }
         }
 
-        public var state: CodingAgentTracker.State {
+        /// The state it puts the agent in; nil leaves the state alone.
+        public var state: CodingAgentTracker.State? {
             switch self {
-            case .promptSubmitted: .working
+            case .promptSubmitted, .prompted, .toolStarted, .toolFinished: .working
+            case .permission: .needsYou(nil)
             case .notification(let m): .needsYou(m)
-            case .stop: .done
+            case .stop, .stopFailed: .done
+            case .sessionStarted, .sessionEnded: .idle
+            case .subagentStarted, .subagentStopped: nil
             }
         }
     }
@@ -93,21 +132,17 @@ public enum AgentHooks {
     public static func parseOSC(_ payload: String) -> Event? {
         let parts = payload.split(separator: ";", maxSplits: 1, omittingEmptySubsequences: false)
         guard let name = parts.first else { return nil }
-        var message: String?
-        if parts.count == 2, let data = Data(base64Encoded: String(parts[1]), options: .ignoreUnknownCharacters) {
-            message = Self.message(in: data)
-        }
-        return Event(name: String(name), message: message)
+        var data = Data()
+        if parts.count == 2, let d = Data(base64Encoded: String(parts[1]), options: .ignoreUnknownCharacters) { data = d }
+        let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        return Event(name: String(name), fields: { key in obj.map { $0[key] as? String } ?? Self.string(key, in: data) })
     }
 
-    /// `message` of a hook JSON payload; a cut-off payload still yields it
-    /// when the field comes before the cut.
-    static func message(in data: Data) -> String? {
-        if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-            return (obj["message"] as? String).flatMap { $0.isEmpty ? nil : $0 }
-        }
+    /// A string field of a hook JSON payload cut off by the size limit: still
+    /// there when it came before the cut.
+    static func string(_ key: String, in data: Data) -> String? {
         let text = String(decoding: data, as: UTF8.self)
-        guard let r = text.range(of: "\"message\""),
+        guard let r = text.range(of: "\"\(key)\""),
               let open = text[r.upperBound...].firstIndex(of: "\"") else { return nil }
         var out = "", escape = false
         for ch in text[text.index(after: open)...] {

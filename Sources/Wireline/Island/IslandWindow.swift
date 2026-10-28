@@ -240,7 +240,9 @@ final class IslandController {
         guard IslandSettings.shared.enabled, let g = geometry else { return false }
         switch center.mode {
         case .hidden: return false
-        case .dormant: return g.hasNotch          // an invisible, hoverable notch
+        // An invisible, hoverable notch — or, without one, a hoverable strip
+        // where the pill would be.
+        case .dormant: return true
         default: return true
         }
     }
@@ -282,6 +284,10 @@ final class IslandController {
                           width: size.width, height: size.height)
         switch center.mode {
         case .hidden: return nil
+        case .dormant where !g.hasNotch:
+            // Only the pill's top edge, so the hidden pill doesn't take clicks
+            // meant for the windows under it; hovering there brings it out.
+            return CGRect(x: rect.minX, y: rect.maxY - 6, width: rect.width, height: 10)
         case .dormant, .collapsed, .pulse: return rect.insetBy(dx: -6, dy: -4)
         case .expanded: return rect
         }

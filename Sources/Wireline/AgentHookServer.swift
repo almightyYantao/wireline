@@ -33,6 +33,7 @@ final class AgentHookServer {
         acceptSource = src
         src.resume()
         listening = true
+        Self.upgradeClaudeHooks()
     }
 
     private func acceptAll() {
@@ -95,6 +96,14 @@ final class AgentHookServer {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         if let old { try old.write(to: url.appendingPathExtension("wireline-backup"), options: .atomic) }
         try new.write(to: url, options: .atomic)
+    }
+
+    /// An install from an older Wireline has only some of the events: add
+    /// the rest. Nothing happens unless you installed them before.
+    static func upgradeClaudeHooks() {
+        let data = try? Data(contentsOf: claudeSettingsURL)
+        guard AgentHooks.hasAny(settingsJSON: data), !AgentHooks.isInstalled(settingsJSON: data) else { return }
+        try? installClaudeHooks()
     }
 
     /// SSH: merge the in-band (OSC) hooks into the host's ~/.claude/settings.json

@@ -21,6 +21,16 @@ private enum IslandInk {
     static let purple = Color(nsColor: NSColor(srgbRed: 0.75, green: 0.35, blue: 0.95, alpha: 1))
 }
 
+/// Springier than the app's dialogs: the island should feel like it's
+/// bouncing out of the notch.
+enum IslandMotion {
+    static let open: Animation = .spring(response: 0.42, dampingFraction: 0.8)
+    static let close: Animation = .spring(response: 0.3, dampingFraction: 0.9)
+    /// The list mounts once the shape has mostly grown, so rows don't
+    /// squeeze in with it.
+    static let contentDelay: Double = 0.14
+}
+
 /// The notch's outline: concave shoulders where it meets the screen's top
 /// edge (`flare`), rounded bottom corners. Without a notch, `top` rounds the
 /// upper corners instead. All three animate, so one shape morphs between
@@ -108,7 +118,7 @@ struct IslandRootView: View {
         .environment(\.colorScheme, .dark)
         .onChange(of: center.mode) { old, new in
             let grows = Self.rank(new) > Self.rank(old)
-            withAnimation(Motion.resolved(grows ? Motion.expand : Motion.popIn)) { shown = new }
+            withAnimation(Motion.resolved(grows ? IslandMotion.open : IslandMotion.close)) { shown = new }
         }
     }
 
@@ -166,13 +176,15 @@ private struct IslandContent: View {
                     .frame(width: IslandLayout.ear)
                 centerStrip
                     .frame(width: layout.core.width)
-                IslandStatusView(status: center.board.status(at: center.now))
+                IslandEarStatus(items: center.board.ordered, status: center.board.status(at: center.now))
                     .frame(width: IslandLayout.ear)
             }
             .frame(height: layout.core.height)
             .opacity(ears ? 1 : 0)
             .contentShape(Rectangle())
-            .onTapGesture { if mode == .expanded { center.toggleOpen() } }
+            // This row's tap wins over the shape's, so it opens as well as
+            // folds: without a notch it's all there is of the closed pill.
+            .onTapGesture { center.toggleOpen() }
 
             if mode == .collapsed, layout.hasNotch, let text = center.collapsedCaption {
                 Text(text)
@@ -199,7 +211,8 @@ private struct IslandContent: View {
                     }
                 }
                 .frame(width: IslandLayout.cardWidth)
-                .transition(.asymmetric(insertion: .opacity.animation(Motion.resolved(Motion.popIn).delay(0.06)),
+                .transition(.asymmetric(insertion: .opacity.combined(with: .offset(y: -6))
+                                            .animation(Motion.resolved(Motion.popIn).delay(IslandMotion.contentDelay)),
                                         removal: .opacity.animation(Motion.popOut)))
             }
         }
@@ -295,6 +308,7 @@ private struct IslandRow: View {
                         .foregroundStyle(item.tone == .failure ? IslandInk.red
                                          : item.tone == .attention ? IslandInk.orange : IslandInk.secondary)
                         .lineLimit(item.tone == .attention ? 2 : 1)
+                    if let a = item.agent { agentLines(a) }
                 }
                 Spacer(minLength: 6)
                 trailing
@@ -313,6 +327,34 @@ private struct IslandRow: View {
         .onTapGesture { if interactive, item.confirmation == nil { center.jump(item) } }
         .wlHover($hover)
         .help(item.sessionID != nil ? loc.t("跳到这个终端", "Jump to this terminal") : "")
+    }
+
+    /// The prompt it's working on, then tools and subagents.
+    @ViewBuilder private func agentLines(_ a: IslandAgentInfo) -> some View {
+        if let p = a.prompt {
+            Text("“" + p.replacingOccurrences(of: "\n", with: " ") + "”")
+                .font(.system(size: 11)).italic()
+                .foregroundStyle(IslandInk.faint)
+                .lineLimit(1).truncationMode(.tail)
+        }
+        if a.toolCount > 0 || a.subagents > 0 {
+            HStack(spacing: 8) {
+                if a.toolCount > 0 {
+                    Label(loc.t("\(a.toolCount) 次工具", "\(a.toolCount) tools"), systemImage: "wrench.and.screwdriver")
+                }
+                if a.subagents > 0 {
+                    HStack(spacing: 3) {
+                        Label(loc.t("\(a.subagents) 个子 Agent", "\(a.subagents) subagents"), systemImage: "person.2")
+                        if let since = a.subagentsSince {
+                            Text(since, style: .timer).monospacedDigit()
+                        }
+                    }
+                }
+            }
+            .labelStyle(IslandMetaLabel())
+            .font(.system(size: 10, weight: .medium))
+            .foregroundStyle(IslandInk.faint)
+        }
     }
 
     @ViewBuilder private var trailing: some View {
@@ -372,6 +414,12 @@ private struct IslandRow: View {
     private func decide(_ d: IslandDecision) {
         guard interactive else { return }
         wlAnimate(Motion.state) { center.decide(item.id, d) }
+    }
+}
+
+private struct IslandMetaLabel: LabelStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 3) { configuration.icon.imageScale(.small); configuration.title }
     }
 }
 
@@ -481,6 +529,56 @@ struct IslandStatusView: View {
             .font(.system(size: 10, weight: .semibold).monospacedDigit())
             .foregroundStyle(IslandInk.secondary)
             .contentTransition(.numericText())
+    }
+}
+
+/// The right ear. Several things going on: one dot each, coloured by how it's
+/// doing (running / needs you / done), so you see every pane at a glance.
+private struct IslandEarStatus: View {
+    let items: [IslandItem]
+    let status: IslandStatus
+    static let maxDots = 6
+
+    var body: some View {
+        let live = items.filter { $0.tone != .idle }
+        if live.count < 2 {
+            IslandStatusView(status: status)
+        } else {
+            let shown = Array(live.prefix(Self.maxDots))
+            HStack(spacing: 3) {
+                LazyVGrid(columns: Array(repeating: GridItem(.fixed(6), spacing: 3), count: min(3, shown.count)),
+                          spacing: 3) {
+                    ForEach(shown) { item in
+                        Circle().fill(Self.color(item.tone)).frame(width: 6, height: 6)
+                            .modifier(PulseIf(on: item.tone == .attention))
+                    }
+                }
+                .fixedSize()
+                if live.count > Self.maxDots {
+                    Text("×\(live.count)")
+                        .font(.system(size: 9, weight: .semibold).monospacedDigit())
+                        .foregroundStyle(IslandInk.secondary)
+                }
+            }
+            .animation(Motion.resolved(Motion.state), value: live.map(\.tone))
+        }
+    }
+
+    static func color(_ tone: IslandTone) -> Color {
+        switch tone {
+        case .working: IslandInk.primary.opacity(0.85)
+        case .attention: IslandInk.orange
+        case .success: IslandInk.green
+        case .failure: IslandInk.red
+        case .idle: IslandInk.faint
+        }
+    }
+
+    private struct PulseIf: ViewModifier {
+        let on: Bool
+        func body(content: Content) -> some View {
+            if on { content.wlPulse(period: 0.8, low: 0.45) } else { content }
+        }
     }
 }
 

@@ -57,6 +57,20 @@ public struct IslandConfirmation: Equatable, Sendable {
     }
 }
 
+/// What a coding agent's hooks told us, for its card.
+public struct IslandAgentInfo: Equatable, Sendable {
+    /// The prompt that started this turn.
+    public var prompt: String?
+    /// Tool calls this turn.
+    public var toolCount: Int
+    /// Subagents running, and since when.
+    public var subagents: Int
+    public var subagentsSince: Date?
+    public init(prompt: String? = nil, toolCount: Int = 0, subagents: Int = 0, subagentsSince: Date? = nil) {
+        self.prompt = prompt; self.toolCount = toolCount; self.subagents = subagents; self.subagentsSince = subagentsSince
+    }
+}
+
 /// One row on the island.
 public struct IslandItem: Identifiable, Equatable, Sendable {
     public var id: String
@@ -78,6 +92,8 @@ public struct IslandItem: Identifiable, Equatable, Sendable {
     public var finishedAt: Date?
     /// When it last started wanting the user.
     public var attentionAt: Date?
+    /// A coding agent's prompt, tool count and subagents.
+    public var agent: IslandAgentInfo?
 
     public init(id: String, source: IslandSource, title: String, detail: String, tone: IslandTone,
                 progress: IslandProgress? = nil, confirmation: IslandConfirmation? = nil,

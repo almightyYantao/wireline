@@ -7,12 +7,18 @@ final class AgentHooksTests: XCTestCase {
 
     func testParse() {
         XCTAssertEqual(AgentHooks.parse("\(id) UserPromptSubmit {\"prompt\":\"hi\"}"),
-                       .init(sessionID: id, event: .promptSubmitted))
+                       .init(sessionID: id, event: .prompted("hi")))
+        XCTAssertEqual(AgentHooks.parse("\(id) UserPromptSubmit"), .init(sessionID: id, event: .promptSubmitted))
+        XCTAssertEqual(AgentHooks.parse("\(id) PreToolUse {\"tool_name\":\"Bash\"}"),
+                       .init(sessionID: id, event: .toolStarted("Bash")))
+        XCTAssertEqual(AgentHooks.parse("\(id) PermissionRequest {\"tool_name\":\"Edit\"}"),
+                       .init(sessionID: id, event: .permission("Edit")))
+        XCTAssertNil(AgentHooks.parse("\(id) Notification {\"notification_type\":\"idle_prompt\"}"))
         XCTAssertEqual(AgentHooks.parse("\(id) Stop \n"), .init(sessionID: id, event: .stop))
         XCTAssertEqual(AgentHooks.parse("\(id) Notification {\"message\":\"Claude needs your permission to use Bash\"}"),
                        .init(sessionID: id, event: .notification("Claude needs your permission to use Bash")))
         XCTAssertEqual(AgentHooks.parse("\(id) Notification not-json"), .init(sessionID: id, event: .notification(nil)))
-        XCTAssertNil(AgentHooks.parse("\(id) PreToolUse {}"))
+        XCTAssertNil(AgentHooks.parse("\(id) Bogus {}"))
         XCTAssertNil(AgentHooks.parse("nope Stop"))
         XCTAssertNil(AgentHooks.parse(""))
     }
@@ -21,6 +27,29 @@ final class AgentHooksTests: XCTestCase {
         XCTAssertEqual(AgentHooks.Event.promptSubmitted.state, .working)
         XCTAssertEqual(AgentHooks.Event.notification("x").state, .needsYou("x"))
         XCTAssertEqual(AgentHooks.Event.stop.state, .done)
+    }
+
+    func testRichHooks() {
+        var t = CodingAgentTracker(now: t0)
+        t.hook(.prompted("fix it"), at: t0)
+        t.hook(.toolStarted("Bash"), at: t0)
+        XCTAssertEqual(t.currentTool, "Bash")
+        XCTAssertEqual(t.hook(.permission("Bash"), at: t0), .needsYou(nil))
+        XCTAssertNil(t.hook(.notification("Claude needs your permission"), at: t0))
+        XCTAssertEqual(t.hook(.toolFinished("Bash", failed: false), at: t0), .startedWorking)
+        XCTAssertNil(t.permissionTool)
+        // The main agent's Stop while a subagent runs isn't the end.
+        t.hook(.subagentStarted, at: t0)
+        XCTAssertNil(t.hook(.stop, at: t0))
+        XCTAssertEqual(t.state, .working)
+        t.hook(.subagentStopped, at: t0)
+        XCTAssertEqual(t.hook(.stop, at: t0.addingTimeInterval(20)), .finished(20))
+        XCTAssertEqual(t.lastPrompt, "fix it")
+        XCTAssertEqual(t.toolCount, 1)
+        t.hook(.promptSubmitted, at: t0)
+        t.hook(.stopFailed("rate limited"), at: t0)
+        XCTAssertEqual(t.state, .done)
+        XCTAssertEqual(t.lastError, "rate limited")
     }
 
     func testHooksBeatHeuristics() {
@@ -66,7 +95,7 @@ final class AgentHooksTests: XCTestCase {
         let out = json(first)
         XCTAssertEqual(out["model"] as? String, "opus")
         let hooks = try XCTUnwrap(out["hooks"] as? [String: Any])
-        XCTAssertEqual((hooks["PreToolUse"] as? [Any])?.count, 1)
+        XCTAssertEqual((hooks["PreToolUse"] as? [Any])?.count, 2)   // the user's lint, then ours
         let stop = try XCTUnwrap(hooks["Stop"] as? [[String: Any]])
         XCTAssertEqual(stop.count, 2)
         XCTAssertEqual(((stop[0]["hooks"] as? [[String: Any]])?.first?["command"] as? String), "say done")

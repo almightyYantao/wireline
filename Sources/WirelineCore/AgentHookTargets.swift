@@ -42,8 +42,12 @@ public struct AgentHookTarget: Sendable {
     }
 
     public static let all: [AgentHookTarget] = [
+        // Claude Code's events decode richer than a kind (`AgentHooks.Event`).
         .init(agent: .claude, path: ".claude/settings.json", format: .groupedJSON,
-              events: [("UserPromptSubmit", .working), ("Notification", .needsYou), ("Stop", .done)], complete: true),
+              events: AgentHooks.Event.hookNames.map { name in
+                  (name, ["Notification", "PermissionRequest"].contains(name) ? .needsYou
+                         : ["Stop", "StopFailure", "SessionStart", "SessionEnd"].contains(name) ? .done : .working)
+              }, complete: true),
         .init(agent: .codex, path: ".codex/hooks.json", format: .groupedJSON,
               events: [("UserPromptSubmit", .working), ("PermissionRequest", .needsYou), ("Stop", .done)], complete: true),
         .init(agent: .gemini, path: ".gemini/settings.json", format: .groupedJSON,
@@ -241,7 +245,7 @@ extension AgentHooks {
     static func decode(event token: String, json: [String: Any]?) -> (CodingAgent, Event)? {
         let message = (json?["message"] as? String).flatMap { $0.isEmpty ? nil : $0 }
         guard let colon = token.firstIndex(of: ":") else {
-            return Event(name: token, message: message).map { (.claude, $0) }
+            return Event(name: token, fields: { json?[$0] as? String }).map { (.claude, $0) }
         }
         guard let agent = CodingAgent(rawValue: String(token[..<colon])),
               let target = AgentHookTarget.target(for: agent),

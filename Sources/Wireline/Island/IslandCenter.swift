@@ -23,11 +23,28 @@ final class IslandSettings {
         didSet { d.set(alwaysShow, forKey: "notchIslandAlways"); IslandController.shared.refresh() }
     }
 
+    /// System sound when an agent wants you or finishes ("" = silent).
+    var attentionSound: String {
+        didSet { d.set(attentionSound, forKey: "notchIslandSound") }
+    }
+    var doneSound: String {
+        didSet { d.set(doneSound, forKey: "notchIslandDoneSound") }
+    }
+    /// The sounds in /System/Library/Sounds.
+    static let systemSounds = ["Glass", "Ping", "Pop", "Purr", "Tink", "Submarine", "Funk", "Hero", "Morse", "Bottle", "Frog", "Basso", "Blow", "Sosumi"]
+
+    func play(_ name: String) {
+        guard !name.isEmpty else { return }
+        NSSound(named: NSSound.Name(name))?.play()
+    }
+
     @ObservationIgnored private let d = UserDefaults.standard
 
     private init() {
         enabled = d.object(forKey: "notchIsland") as? Bool ?? true
         alwaysShow = d.object(forKey: "notchIslandAlways") as? Bool ?? false
+        attentionSound = d.string(forKey: "notchIslandSound") ?? "Glass"
+        doneSound = d.string(forKey: "notchIslandDoneSound") ?? ""
     }
 }
 
@@ -422,23 +439,47 @@ final class IslandCenter {
         remove("cmd:\(sid)")
         let title = "\(w.agent.displayName) · \(Self.place(of: s))"
         let source = IslandSource.codingAgent(w.agent.rawValue)
+        let t = w.tracker
         let tone: IslandTone, detail: String
-        switch w.tracker.state {
+        switch t.state {
         case .idle: tone = .idle; detail = loc.t("等你输入", "Waiting for a prompt")
-        case .working: tone = .working; detail = loc.t("工作中…", "Working…")
-        case .needsYou(let m): tone = .attention; detail = m ?? loc.t("等你回复", "Waiting for you")
-        case .done: tone = .success; detail = loc.t("完成，等你下一步", "Done — your turn")
+        case .working:
+            tone = .working
+            detail = t.currentTool.map { loc.t("运行 \($0)…", "Running \($0)…") } ?? loc.t("工作中…", "Working…")
+        case .needsYou(let m):
+            tone = .attention
+            detail = t.permissionTool.map { loc.t("等你允许 · \($0)", "Allow \($0)?") } ?? m ?? loc.t("等你回复", "Waiting for you")
+        case .done:
+            if let e = t.lastError {
+                tone = .failure
+                detail = loc.t("出错停止", "Stopped on an error") + (e.isEmpty ? "" : " · " + e)
+            } else {
+                tone = .success; detail = loc.t("完成，等你下一步", "Done — your turn")
+            }
         }
-        upsert(IslandItem(id: id, source: source, title: title, detail: detail, tone: tone,
-                          sessionID: sid, persistent: true, at: Date()))
+        var item = IslandItem(id: id, source: source, title: title, detail: detail, tone: tone,
+                              sessionID: sid, persistent: true, at: Date())
+        if t.toolHooks || t.lastPrompt != nil {
+            item.agent = IslandAgentInfo(prompt: t.lastPrompt, toolCount: t.toolCount,
+                                         subagents: t.subagents, subagentsSince: t.subagentsSince)
+        }
+        upsert(item)
         let viewing = isViewing(sid)
         if viewing { board.dismiss(id) }
         notify(w.agent, s, change: change, viewing: viewing)
+        if !viewing || !NSApp.isActive {
+            switch change {
+            case .needsYou?: IslandSettings.shared.play(IslandSettings.shared.attentionSound)
+            case .finished(let ran)? where ran >= 10: IslandSettings.shared.play(IslandSettings.shared.doneSound)
+            default: break
+            }
+        }
         // Only a real turn: a pause mid-task also reads as "finished".
         if case .finished(let ran)? = change, !viewing, ran >= 10 {
             now = Date()
-            board.finish(id, success: true, detail: detail,
-                         pulse: "✓ " + w.agent.displayName + " · " + islandDuration(ran), at: now)
+            let ok = tone != .failure
+            board.finish(id, success: ok, detail: detail,
+                         pulse: (ok ? "✓ " : "✕ ") + w.agent.displayName + " · " + islandDuration(ran), at: now)
             reschedule()
         }
     }

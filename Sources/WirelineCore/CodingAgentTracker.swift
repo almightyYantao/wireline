@@ -100,6 +100,23 @@ public struct CodingAgentTracker: Sendable, Equatable {
     private var burstStart: Date?
     /// The agent reports its own state through hooks: stop guessing.
     public private(set) var hookDriven = false
+    /// Its hooks report tool calls too (newer installs).
+    public private(set) var toolHooks = false
+
+    // What the hooks say beyond the state, for the island's card.
+    /// The prompt that started the current / last turn.
+    public private(set) var lastPrompt: String?
+    /// The tool running right now.
+    public private(set) var currentTool: String?
+    /// The tool it's asking permission to run.
+    public private(set) var permissionTool: String?
+    /// Tool calls in the current turn.
+    public private(set) var toolCount = 0
+    /// Subagents running, and since when the first of them.
+    public private(set) var subagents = 0
+    public private(set) var subagentsSince: Date?
+    /// Why the last turn stopped on an error.
+    public private(set) var lastError: String?
 
     public init(now: Date) { stateSince = now }
 
@@ -109,8 +126,48 @@ public struct CodingAgentTracker: Sendable, Equatable {
     @discardableResult
     public mutating func hook(_ event: AgentHooks.Event, at t: Date, exclusive: Bool = true) -> Change? {
         if exclusive { hookDriven = true }
-        if case .notification(let m) = event, case .needsYou(let old) = state, old == m { return nil }
-        return set(event.state, at: t)
+        switch event {
+        case .prompted(let p):
+            lastPrompt = p
+            fallthrough
+        case .promptSubmitted:
+            toolCount = 0; lastError = nil; currentTool = nil; permissionTool = nil
+        case .toolStarted(let tool):
+            toolHooks = true
+            // A permission prompt answered "allow": the tool runs now.
+            permissionTool = nil
+            currentTool = tool.isEmpty ? nil : tool
+            toolCount += 1
+        case .toolFinished:
+            toolHooks = true
+            currentTool = nil; permissionTool = nil
+        case .permission(let tool):
+            toolHooks = true
+            permissionTool = tool
+        case .notification(let m):
+            // Its permission request already said so.
+            if permissionTool != nil, case .needsYou = state { return nil }
+            if case .needsYou(let old) = state, old == m { return nil }
+        case .subagentStarted:
+            if subagents == 0 { subagentsSince = t }
+            subagents += 1
+            return nil
+        case .subagentStopped:
+            subagents = max(0, subagents - 1)
+            if subagents == 0 { subagentsSince = nil }
+            return nil
+        case .stop:
+            currentTool = nil; permissionTool = nil
+            // The main agent waits on its subagents; it isn't done yet.
+            if subagents > 0 { return nil }
+        case .stopFailed(let m):
+            currentTool = nil; permissionTool = nil; subagents = 0; subagentsSince = nil
+            lastError = m ?? ""
+        case .sessionStarted, .sessionEnded:
+            currentTool = nil; permissionTool = nil; subagents = 0; subagentsSince = nil
+        }
+        guard let new = event.state else { return nil }
+        return set(new, at: t)
     }
 
     /// A chunk of output from the agent.
@@ -134,8 +191,9 @@ public struct CodingAgentTracker: Sendable, Equatable {
         lastInput = t
         if hookDriven {
             // Answering a permission prompt resumes the turn; a finished turn
-            // stays done until the next prompt is submitted.
-            if case .needsYou = state { _ = set(.working, at: t) }
+            // stays done until the next prompt is submitted. (Esc on a
+            // permission prompt sends no hook at all, so typing is the signal.)
+            if case .needsYou = state { permissionTool = nil; _ = set(.working, at: t) }
             return
         }
         if case .needsYou = state { _ = set(.idle, at: t) }

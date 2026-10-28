@@ -55,7 +55,9 @@ final class RemoteAssistTests: XCTestCase {
                        .notification("Claude needs your permission"))
         XCTAssertEqual(AgentHooks.parseOSC("Stop;"), .stop)
         XCTAssertEqual(AgentHooks.parseOSC("UserPromptSubmit"), .promptSubmitted)
-        XCTAssertNil(AgentHooks.parseOSC("PreToolUse;"))
+        XCTAssertEqual(AgentHooks.parseOSC("PreToolUse;"), .toolStarted(""))
+        let tool = Data(#"{"session_id":"x","tool_name":"Read","tool_input":{"file_path":"/very/lo"#.utf8)
+        XCTAssertEqual(AgentHooks.parseOSC("PreToolUse;" + tool.base64EncodedString()), .toolStarted("Read"))
         // Cut off by the size limit, but the message came first.
         let cut = Data(#"{"session_id":"x","message":"wait \"here\"","transcript_path":"/very/lo"#.utf8)
         XCTAssertEqual(AgentHooks.parseOSC("Notification;" + cut.base64EncodedString()), .notification("wait \"here\""))

@@ -433,6 +433,18 @@ struct SettingsView: View {
                         }
                         .toggleStyle(.wlSwitch).frame(minHeight: 38).wlConfigLocked("notch-island-always")
                         .transition(.wlDisclose)
+                        WLFormDivider()
+                        WLFormRow(loc("等你时提示音", "Sound when it needs you")) {
+                            WLMenuPicker(selection: $island.attentionSound, options: soundOptions, minWidth: 120)
+                                .onChange(of: island.attentionSound) { _, n in island.play(n) }
+                        }
+                        .transition(.wlDisclose)
+                        WLFormDivider()
+                        WLFormRow(loc("完成时提示音", "Sound when it's done")) {
+                            WLMenuPicker(selection: $island.doneSound, options: soundOptions, minWidth: 120)
+                                .onChange(of: island.doneSound) { _, n in island.play(n) }
+                        }
+                        .transition(.wlDisclose)
                     }
                 }
                 .animation(Motion.disclose, value: island.enabled)
@@ -545,6 +557,10 @@ struct SettingsView: View {
                 .padding(.vertical, 10)
             }
         }
+    }
+
+    private var soundOptions: [WLOption<String>] {
+        [WLOption("", loc("无", "None"))] + IslandSettings.systemSounds.map { WLOption($0, $0) }
     }
 
     private func rowLabel(_ text: String) -> some View {
