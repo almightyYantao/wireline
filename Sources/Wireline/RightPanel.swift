@@ -567,6 +567,10 @@ private struct TabStripScrollLock: NSViewRepresentable {
     private final class Probe: NSView {
         private weak var locked: NSScrollView?
         nonisolated(unsafe) private var observer: NSObjectProtocol?
+        /// Re-entrancy guard: when the clip view constrains y back to non-zero
+        /// (e.g. during a resize/tile), resetting it posts another bounds change
+        /// synchronously and recursed until the stack overflowed.
+        private var pinning = false
 
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
@@ -585,9 +589,11 @@ private struct TabStripScrollLock: NSViewRepresentable {
             clip.postsBoundsChangedNotifications = true
             if let observer { NotificationCenter.default.removeObserver(observer) }
             observer = NotificationCenter.default.addObserver(forName: NSView.boundsDidChangeNotification,
-                                                              object: clip, queue: .main) { [weak clip] _ in
+                                                              object: clip, queue: .main) { [weak self, weak clip] _ in
                 MainActor.assumeIsolated {
-                    guard let clip, clip.bounds.origin.y != 0 else { return }
+                    guard let self, let clip, !self.pinning, clip.bounds.origin.y != 0 else { return }
+                    self.pinning = true
+                    defer { self.pinning = false }
                     clip.setBoundsOrigin(NSPoint(x: clip.bounds.origin.x, y: 0))
                 }
             }
