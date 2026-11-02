@@ -3,13 +3,13 @@
     <channel>
         <title>Wireline</title>
         <item>
-            <title>1.4.4</title>
-            <pubDate>Fri, 30 Oct 2026 09:32:49 +0800</pubDate>
-            <sparkle:version>29</sparkle:version>
-            <sparkle:shortVersionString>1.4.4</sparkle:shortVersionString>
+            <title>1.4.5</title>
+            <pubDate>Mon, 02 Nov 2026 17:23:00 +0800</pubDate>
+            <sparkle:version>30</sparkle:version>
+            <sparkle:shortVersionString>1.4.5</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <enclosure url="https://github.com/almightyYantao/wireline/releases/download/v1.4.4/Wireline-1.4.4.zip" length="23605808" type="application/octet-stream" sparkle:edSignature="+44TQHLVnEBR7/Hh7uxm8SVORborF6nq0I/Fpc5gUKjH62CCo3uPkSA5zKHcmkzHBrfj2mfTn9hBI/5LPW/aAw=="/>
+            <enclosure url="https://github.com/almightyYantao/wireline/releases/download/v1.4.5/Wireline-1.4.5.zip" length="23605927" type="application/octet-stream" sparkle:edSignature="04jcH2usgL7ErPqPCfgDm5JJ0hrjf+q5RGlcoxMdl/DNAjKNNFpe8mEszhmemDrShZt221VhUjgyzv/OmftwCA=="/>
         </item>
     </channel>
 </rss>
