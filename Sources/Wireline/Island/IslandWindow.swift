@@ -240,9 +240,11 @@ final class IslandController {
         guard IslandSettings.shared.enabled, let g = geometry else { return false }
         switch center.mode {
         case .hidden: return false
-        // An invisible, hoverable notch — or, without one, a hoverable strip
-        // where the pill would be.
-        case .dormant: return true
+        // Dormant draws nothing. Ordered out rather than left transparent on
+        // screen: third-party screenshot tools list every on-screen window and
+        // ignore sharingType, so they kept selecting it. Hover is still
+        // detected by the global mouse monitor against hotRect().
+        case .dormant: return false
         default: return true
         }
     }
@@ -278,7 +280,9 @@ final class IslandController {
     /// The black shape's rect on screen, slightly inflated so the bare notch
     /// is easy to hit.
     private func hotRect() -> CGRect? {
-        guard let panel, panel.isVisible, let g = geometry else { return nil }
+        // Dormant keeps the panel ordered out but still answers hover.
+        guard let panel, panel.isVisible || center.mode == .dormant, IslandSettings.shared.enabled,
+              let g = geometry else { return nil }
         let size = layout.size(center.mode, list: listHeight)
         let rect = CGRect(x: g.anchor.midX - size.width / 2, y: panel.frame.maxY - size.height,
                           width: size.width, height: size.height)
